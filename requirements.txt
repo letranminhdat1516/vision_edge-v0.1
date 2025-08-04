@@ -1,47 +1,44 @@
+# =====================================================
+# VISION EDGE HEALTHCARE - PYTHON REQUIREMENTS  
+# PostgreSQL + Redis + FastAPI WebSocket Stack
+# =====================================================
+
+# FastAPI and WebSocket
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==11.0.3
+
+# Database drivers
+asyncpg==0.29.0          # PostgreSQL async driver
+redis[hiredis]==5.0.1    # Redis async client with performance boost
+
+# Data validation and serialization
+pydantic==2.5.0
+
+# HTTP client (for testing)
+httpx==0.25.2
+requests==2.31.0
+
+# JSON handling
+orjson==3.9.10           # Fast JSON serialization
+
 # Core dependencies
 opencv-python>=4.8.0
-opencv-contrib-python>=4.8.0
 numpy>=1.26.0
 Pillow>=10.0.0
 
-# Deep Learning & Computer Vision
-ultralytics>=8.0.0
-torch>=2.0.0
-torchvision>=0.15.0
-tensorflow>=2.13.0
+# Date/Time utilities
+python-dateutil==2.8.2
 
-# Video processing
-python-ffmpeg>=2.0.4
-imageio==2.31.1
-scikit-image>=0.20.0
-
-# RTSP & Camera handling
-imutils==0.5.4
-
-# WebSocket & Real-time communication
-websockets==11.0.3
-python-socketio==5.8.0
-asyncio-mqtt>=0.16.0
-
-# Database & Supabase
-supabase==1.0.4
-psycopg2-binary==2.9.7
-sqlalchemy==2.0.19
-
-# HTTP & API
-requests==2.31.0
-aiohttp==3.8.5
-fastapi==0.103.0
-uvicorn==0.23.2
-
-# Configuration & Environment
+# Environment variables
 python-dotenv==1.0.0
-pyyaml==6.0.1
-configparser==6.0.0
 
-# Logging & Monitoring
-loguru==0.7.0
-prometheus-client==0.17.1
+# Security
+cryptography>=41.0.0
+
+# Development tools (optional for production)
+pytest>=7.4.0
+pytest-asyncio==0.21.1
 
 # Utilities
 click==8.1.6
@@ -49,11 +46,6 @@ tqdm==4.65.0
 colorama==0.4.6
 python-dateutil==2.8.2
 sshkeyboard>=2.3.1
-
-# Testing
-pytest==7.4.0
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
 
 # Development
 black==23.7.0
