@@ -1,6 +1,6 @@
 """
-VISION EDGE HEALTHCARE - FASTAPI WEBSOCKET SERVER
-Real-time streaming with PostgreSQL + Redis architecture
+VISION EDGE HEALTHCARE - POST-SURGERY PATIENT MONITORING
+Real-time detection system for seizures and falls with WebSocket streaming
 """
 
 import asyncio
@@ -13,7 +13,7 @@ import asyncpg
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
@@ -28,7 +28,7 @@ DATABASE_CONFIG = {
     "port": 5432,
     "database": "vision_edge_healthcare",
     "user": "postgres", 
-    "password": "your_password"
+    "password": "vision_edge_2025"
 }
 
 # Redis configuration
@@ -44,19 +44,40 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # =====================================================
-# DATA MODELS
+# POST-SURGERY MONITORING DATA MODELS
 # =====================================================
 
-class DetectionEvent(BaseModel):
-    user_id: str
-    session_id: str
-    image_url: str
-    status: str  # Normal, Warning, Danger
+class PatientDetectionEvent(BaseModel):
+    """Main event model for post-surgery patient monitoring"""
+    userId: str = Field(..., description="Patient unique identifier")
+    sessionId: str = Field(..., description="Monitoring session ID")
+    imageUrl: str = Field(..., description="Captured image URL at event time")
+    status: str = Field(..., description="Alert level: normal, warning, danger", pattern="^(normal|warning|danger)$")
+    action: str = Field(..., description="Patient action detected by AI")
+    location: str = Field(..., description="Specific location where event occurred")
+    time: datetime = Field(default_factory=datetime.now, description="Exact timestamp of event")
+
+class PatientMonitoringSession(BaseModel):
+    """Monitoring session for post-surgery patients"""
+    userId: str
+    sessionId: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    location: str
+    startTime: datetime = Field(default_factory=datetime.now)
+    isActive: bool = True
+
+class FamilyAlert(BaseModel):
+    """Alert sent to family members when warning/danger detected"""
+    alertId: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    userId: str
+    patientName: str
+    alertLevel: str  # warning, danger
+    message: str
+    imageUrl: str
+    sessionId: str
     action: str
-    location: Dict[str, Any]
+    alertLocation: str  # Renamed to avoid conflict
     timestamp: datetime = Field(default_factory=datetime.now)
-    confidence_score: Optional[float] = None
-    ai_metadata: Optional[Dict[str, Any]] = None
+    notified: bool = False
 
 class AIAnalysisResult(BaseModel):
     total_detection_sessions: int
@@ -161,6 +182,16 @@ class RedisManager:
         """Get cache data"""
         result = await self.redis_client.get(key)
         return json.loads(result) if result else None
+    
+    async def cache_delete(self, key: str):
+        """Delete cache key"""
+        if self.redis_client:
+            await self.redis_client.delete(key)
+    
+    async def publish(self, channel: str, message: str):
+        """Publish message to Redis pub/sub"""
+        if self.redis_client:
+            await self.redis_client.publish(channel, message)
 
 # =====================================================
 # WEBSOCKET CONNECTION MANAGER
@@ -179,7 +210,7 @@ class ConnectionManager:
             self.active_connections[user_id] = []
         
         self.active_connections[user_id].append(websocket)
-        self.user_sessions[id(websocket)] = user_id
+        self.user_sessions[str(id(websocket))] = user_id
         
         logger.info(f"👤 User {user_id} connected via WebSocket")
     
@@ -419,7 +450,7 @@ async def root():
     }
 
 @app.post("/api/detection-events")
-async def create_detection_event(event: DetectionEvent):
+async def create_detection_event(event: PatientDetectionEvent):
     """Create new detection event (from AI Analyst module)"""
     try:
         # Insert into PostgreSQL
@@ -428,19 +459,20 @@ async def create_detection_event(event: DetectionEvent):
         # Publish to Redis for real-time streaming
         event_data = {
             "event_id": str(event_id),
-            "user_id": event.user_id,
-            "session_id": event.session_id,
+            "user_id": event.userId,
+            "session_id": event.sessionId,
             "status": event.status,
             "action": event.action,
             "location": event.location,
-            "timestamp": event.timestamp.isoformat(),
+            "timestamp": event.time.isoformat(),
             "event_type": "detection_event"
         }
         
         await redis_manager.publish_event("detection_events", event_data)
         
         # Clear cached AI summary for this user
-        await redis_manager.redis_client.delete(f"ai_summary:{event.user_id}")
+        if redis_manager.redis_client:
+            await redis_manager.redis_client.delete(f"ai_summary:{event.userId}")
         
         return {
             "event_id": str(event_id),
@@ -533,7 +565,8 @@ async def health_check():
         # Check Redis
         redis_status = "ok"
         try:
-            await redis_manager.redis_client.ping()
+            if redis_manager.redis_client:
+                await redis_manager.redis_client.ping()
         except:
             redis_status = "error"
         
@@ -554,6 +587,367 @@ async def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+# =====================================================
+# POST-SURGERY PATIENT MONITORING ENDPOINTS
+# =====================================================
+
+@app.post("/api/patient/detection-event")
+async def create_patient_detection_event(event: PatientDetectionEvent):
+    """Create a new patient detection event with automatic alert handling"""
+    try:
+        # Store detection event in database  
+        location_json = json.dumps({"name": event.location})
+        ai_metadata_json = json.dumps({"timestamp": event.time.isoformat()})
+        
+        await db_manager.execute_query("""
+            INSERT INTO detection_events (user_id, session_id, image_url, status, action, location, ai_metadata, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, event.userId, event.sessionId, event.imageUrl, event.status, 
+            event.action, location_json, ai_metadata_json, event.time)
+        
+        # Handle warning/danger alerts
+        if event.status in ["warning", "danger"]:
+            alert = await create_family_alert(event)
+            
+            # Send real-time alert via WebSocket
+            alert_message = {
+                "type": "patient_alert",
+                "data": {
+                    "userId": event.userId,
+                    "sessionId": event.sessionId,
+                    "status": event.status,
+                    "action": event.action,
+                    "imageUrl": event.imageUrl,
+                    "location": event.location,
+                    "timestamp": event.time.isoformat(),
+                    "alertId": alert["alertId"]
+                }
+            }
+            
+            # Broadcast to user and family
+            await connection_manager.send_personal_message(alert_message, event.userId)
+            
+            # Publish to Redis for family notifications
+            await redis_manager.publish("patient_alerts", json.dumps(alert_message))
+        
+        # Update session activity
+        await update_patient_session_activity(event.sessionId, event.status)
+        
+        # Send real-time event update
+        real_time_event = {
+            "type": "detection_event",
+            "data": {
+                "userId": event.userId,
+                "sessionId": event.sessionId,
+                "status": event.status,
+                "action": event.action,
+                "location": event.location,
+                "timestamp": event.time.isoformat()
+            }
+        }
+        
+        await connection_manager.send_personal_message(real_time_event, event.userId)
+        
+        return {
+            "success": True,
+            "message": "Detection event processed successfully",
+            "eventId": event.sessionId,
+            "alertTriggered": event.status in ["warning", "danger"],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing patient detection event: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/patient/session/start")
+async def start_patient_monitoring_session(session: PatientMonitoringSession):
+    """Start a new patient monitoring session"""
+    try:
+        # Create new session in database
+        await db_manager.execute_query("""
+            INSERT INTO active_sessions (user_id, session_id, status, metadata)
+            VALUES ($1, $2, 'active', $3)
+        """, session.userId, session.sessionId, 
+            json.dumps({"type": "patient_monitoring", "location": session.location}))
+        
+        # Initialize session in Redis
+        session_data = {
+            "userId": session.userId,
+            "sessionId": session.sessionId,
+            "location": session.location,
+            "startTime": session.startTime.isoformat(),
+            "isActive": session.isActive,
+            "detectionCount": 0,
+            "alertCount": 0
+        }
+        
+        await redis_manager.cache_set(
+            f"patient_session:{session.sessionId}", 
+            session_data, 
+            expire=86400  # 24 hours
+        )
+        
+        # Notify WebSocket clients
+        session_message = {
+            "type": "session_started",
+            "data": session_data
+        }
+        
+        await connection_manager.send_personal_message(session_message, session.userId)
+        
+        logger.info(f"✅ Patient monitoring session started: {session.sessionId} for user {session.userId}")
+        
+        return {
+            "success": True,
+            "sessionId": session.sessionId,
+            "message": "Patient monitoring session started successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting patient session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/patient/session/{session_id}/stop")
+async def stop_patient_monitoring_session(session_id: str, user_id: str):
+    """Stop a patient monitoring session"""
+    try:
+        # Update session status in database
+        await db_manager.execute_query("""
+            UPDATE active_sessions 
+            SET status = 'completed', updated_at = $1 
+            WHERE session_id = $2 AND user_id = $3
+        """, datetime.now(), session_id, user_id)
+        
+        # Get session summary from Redis
+        session_data = await redis_manager.cache_get(f"patient_session:{session_id}")
+        
+        # Clear session from Redis
+        await redis_manager.cache_delete(f"patient_session:{session_id}")
+        
+        # Notify WebSocket clients
+        session_message = {
+            "type": "session_stopped",
+            "data": {
+                "sessionId": session_id,
+                "userId": user_id,
+                "summary": session_data,
+                "endTime": datetime.now().isoformat()
+            }
+        }
+        
+        await connection_manager.send_personal_message(session_message, user_id)
+        
+        logger.info(f"✅ Patient monitoring session stopped: {session_id}")
+        
+        return {
+            "success": True,
+            "sessionId": session_id,
+            "summary": session_data,
+            "message": "Patient monitoring session stopped successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error stopping patient session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/patient/{user_id}/sessions")
+async def get_patient_sessions(user_id: str, limit: int = 20, status: str = "all"):
+    """Get patient monitoring sessions"""
+    try:
+        # Build query based on status filter
+        if status == "active":
+            query = """
+                SELECT * FROM active_sessions 
+                WHERE user_id = $1 AND status = 'active'
+                ORDER BY started_at DESC LIMIT $2
+            """
+            results = await db_manager.execute_query(query, user_id, limit)
+        elif status == "completed":
+            query = """
+                SELECT * FROM active_sessions 
+                WHERE user_id = $1 AND status = 'completed'
+                ORDER BY started_at DESC LIMIT $2
+            """
+            results = await db_manager.execute_query(query, user_id, limit)
+        else:
+            query = """
+                SELECT * FROM active_sessions 
+                WHERE user_id = $1
+                ORDER BY started_at DESC LIMIT $2
+            """
+            results = await db_manager.execute_query(query, user_id, limit)
+        
+        sessions = [
+            {
+                "sessionId": row["session_id"],
+                "userId": row["user_id"],
+                "deviceId": row["device_id"],
+                "status": row["status"],
+                "startTime": row["started_at"].isoformat(),
+                "lastActivity": row["last_activity"].isoformat() if row["last_activity"] else None,
+                "metadata": row["metadata"]
+            }
+            for row in results
+        ]
+        
+        return {
+            "success": True,
+            "sessions": sessions,
+            "count": len(sessions),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting patient sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/patient/{user_id}/alerts")
+async def get_patient_alerts(user_id: str, limit: int = 50, severity: str = "all"):
+    """Get patient alerts and family notifications"""
+    try:
+        # Get alerts from database
+        if severity == "all":
+            query = """
+                SELECT * FROM alerts 
+                WHERE user_id = $1
+                ORDER BY created_at DESC LIMIT $2
+            """
+            results = await db_manager.execute_query(query, user_id, limit)
+        else:
+            query = """
+                SELECT * FROM alerts 
+                WHERE user_id = $1 AND severity = $2
+                ORDER BY created_at DESC LIMIT $3
+            """
+            results = await db_manager.execute_query(query, user_id, severity, limit)
+        
+        alerts = [
+            {
+                "alertId": str(row["id"]),
+                "userId": row["user_id"],
+                "alertType": row["alert_type"],
+                "severity": row["severity"],
+                "message": row["message"],
+                "metadata": row["metadata"],
+                "timestamp": row["created_at"].isoformat(),
+                "resolved": row.get("resolved", False)
+            }
+            for row in results
+        ]
+        
+        return {
+            "success": True,
+            "alerts": alerts,
+            "count": len(alerts),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting patient alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =====================================================
+# POST-SURGERY MONITORING HELPER FUNCTIONS
+# =====================================================
+
+async def create_family_alert(event: PatientDetectionEvent) -> Dict[str, Any]:
+    """Create and send family alert for warning/danger events"""
+    try:
+        # Create alert message
+        alert_message = get_alert_message(event.status, event.action)
+        
+        alert = FamilyAlert(
+            userId=event.userId,
+            patientName=f"Patient {event.userId}",  # In real app, get from user table
+            alertLevel=event.status,
+            message=alert_message,
+            imageUrl=event.imageUrl,
+            sessionId=event.sessionId,
+            action=event.action,
+            alertLocation=event.location,
+            notified=False
+        )
+        
+        # Store alert in database
+        metadata_json = json.dumps({
+            "sessionId": event.sessionId,
+            "action": event.action,
+            "location": event.location,
+            "imageUrl": event.imageUrl,
+            "alertId": alert.alertId
+        })
+        
+        await db_manager.execute_query("""
+            INSERT INTO alerts (user_id, alert_type, severity, message, metadata, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        """, event.userId, "patient_monitoring", event.status, alert_message,
+            metadata_json, alert.timestamp)
+        
+        logger.info(f"🚨 Family alert created: {alert.alertId} for user {event.userId}")
+        
+        return {
+            "alertId": alert.alertId,
+            "userId": alert.userId,
+            "alertLevel": alert.alertLevel,
+            "message": alert.message,
+            "timestamp": alert.timestamp.isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error creating family alert: {e}")
+        raise
+
+async def update_patient_session_activity(session_id: str, status: str):
+    """Update patient session with latest activity"""
+    try:
+        # Get current session data from Redis
+        session_data = await redis_manager.cache_get(f"patient_session:{session_id}")
+        
+        if session_data:
+            # Update counters
+            session_data["detectionCount"] = session_data.get("detectionCount", 0) + 1
+            
+            if status in ["warning", "danger"]:
+                session_data["alertCount"] = session_data.get("alertCount", 0) + 1
+            
+            session_data["lastActivity"] = datetime.now().isoformat()
+            session_data["lastStatus"] = status
+            
+            # Update Redis cache
+            await redis_manager.cache_set(
+                f"patient_session:{session_id}", 
+                session_data, 
+                expire=86400
+            )
+            
+            logger.info(f"📊 Session activity updated: {session_id} - Status: {status}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating session activity: {e}")
+
+def get_alert_message(status: str, action: str) -> str:
+    """Generate alert message based on status and action"""
+    if status == "danger":
+        if "fall" in action.lower():
+            return "🚨 URGENT: Patient fall detected! Immediate attention required."
+        elif "seizure" in action.lower():
+            return "🚨 URGENT: Seizure activity detected! Medical assistance needed."
+        else:
+            return f"🚨 URGENT: Critical situation detected - {action}. Please check immediately."
+    
+    elif status == "warning":
+        if "unusual" in action.lower():
+            return f"⚠️ WARNING: Unusual patient activity detected - {action}. Please monitor."
+        elif "movement" in action.lower():
+            return f"⚠️ WARNING: Unexpected movement pattern - {action}. Check if assistance needed."
+        else:
+            return f"⚠️ WARNING: {action} detected. Please verify patient condition."
+    
+    return f"ℹ️ Patient activity update: {action}"
 
 # =====================================================
 # DATABASE HELPER FUNCTIONS
@@ -633,19 +1027,19 @@ async def get_daily_activity_from_db(user_id: str, days: int = 7):
         logger.error(f"❌ Error getting daily activity: {e}")
         return []
 
-async def insert_detection_event_to_db(event: DetectionEvent):
+async def insert_detection_event_to_db(event: PatientDetectionEvent):
     """Insert detection event to database"""
     try:
         results = await db_manager.execute_function(
             "insert_detection_event",
-            event.user_id,
-            event.session_id,
-            event.image_url,
+            event.userId,
+            event.sessionId,
+            event.imageUrl,
             event.status,
             event.action,
-            json.dumps(event.location),
-            event.confidence_score,
-            json.dumps(event.ai_metadata) if event.ai_metadata else None
+            json.dumps({"location": event.location}),
+            getattr(event, 'confidence_score', None),
+            json.dumps(getattr(event, 'ai_metadata', {})) if hasattr(event, 'ai_metadata') else None
         )
         
         return results[0]["insert_detection_event"] if results else None

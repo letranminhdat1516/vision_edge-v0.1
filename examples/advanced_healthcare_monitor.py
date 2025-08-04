@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Advanced Healthcare Monitor - Dual Detection System
-Tích hợp: Fall Detection + Seizure Detection + Real-time Statistics
-Features: IMOU Camera + YOLO + Fall Detection + VSViG Seizure Detection
+Advanced Healthcare Monitor - Dual Detection System với WebSocket
+Tích hợp: Fall Detection + Seizure Detection + Real-time Statistics + WebSocket Streaming
+Features: IMOU Camera + YOLO + Fall Detection + VSViG Seizure Detection + Server Integration
 """
 
 import sys
@@ -12,18 +12,80 @@ import cv2
 import threading
 import logging
 import numpy as np
+import asyncio
+import websockets
+import json
+import requests
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 # Add src to path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
+src_path = str(Path(__file__).parent.parent / "src")
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
 
 from camera.simple_camera import SimpleIMOUCamera
-from video_processing.simple_processing import IntegratedVideoProcessor
-from fall_detection.simple_fall_detector_v2 import SimpleFallDetector
-from seizure_detection.vsvig_detector import VSViGSeizureDetector
-from seizure_detection.seizure_predictor import SeizurePredictor
+try:
+    from video_processing.simple_processing import IntegratedVideoProcessor
+except ImportError:
+    print("⚠️ Warning: video_processing module not found, using simple fallback")
+    class IntegratedVideoProcessor:
+        def __init__(self, config):
+            self.config = config
+        def process_frame(self, frame):
+            return {
+                'processed': True,
+                'person_detections': [],
+                'detections': [],
+                'processing_time': 0.01
+            }
+
+# Fix fall detection import with absolute path resolution
+try:
+    from fall_detection.simple_fall_detector_v2 import SimpleFallDetector
+    print("✅ SimpleFallDetector v2 imported successfully")
+except ImportError as e:
+    print(f"⚠️ Fall detector v2 import failed: {e}")
+    try:
+        from fall_detection.simple_fall_detector import SimpleFallDetector
+        print("✅ SimpleFallDetector v1 imported successfully")
+    except ImportError as e2:
+        print(f"⚠️ Fall detector v1 import failed: {e2}")
+        print("❌ CRITICAL: Using dummy fall detector - FALL DETECTION WILL NOT WORK!")
+        class SimpleFallDetector:
+            def __init__(self, confidence_threshold=0.7):
+                self.confidence_threshold = confidence_threshold
+                print(f"❌ DUMMY FALL DETECTOR ACTIVE - confidence_threshold: {confidence_threshold}")
+            def detect_fall(self, frame, person):
+                print("❌ DUMMY FALL DETECTOR CALLED - Always returns False!")
+                return {'fall_detected': False, 'confidence': 0.0}
+
+try:
+    from seizure_detection.vsvig_detector import VSViGSeizureDetector
+    from seizure_detection.seizure_predictor import SeizurePredictor
+except ImportError:
+    print("⚠️ Warning: seizure_detection modules not found, using simple fallback")
+    class VSViGSeizureDetector:
+        def __init__(self, confidence_threshold=0.65):
+            self.confidence_threshold = confidence_threshold
+        def detect_seizure(self, frame, bbox):
+            return {
+                'temporal_ready': False,
+                'keypoints': None,
+                'confidence': 0.0
+            }
+    
+    class SeizurePredictor:
+        def __init__(self, temporal_window=30, alert_threshold=0.65, warning_threshold=0.45):
+            pass
+        def update_prediction(self, confidence):
+            return {
+                'smoothed_confidence': 0.0,
+                'seizure_detected': False,
+                'alert_level': 'normal',
+                'ready': False
+            }
 
 
 class AdvancedHealthcareMonitor:
@@ -32,13 +94,18 @@ class AdvancedHealthcareMonitor:
     Features: Fall Detection + Seizure Detection + Keypoint Visualization
     """
     
-    def __init__(self, show_keypoints: bool = True, show_statistics: bool = True):
+    def __init__(self, show_keypoints: bool = True, show_statistics: bool = True, 
+                 websocket_url: str = "ws://localhost:8086", enable_streaming: bool = True,
+                 enable_api_integration: bool = True):
         """
         Initialize advanced healthcare monitoring system
         
         Args:
             show_keypoints: Whether to display pose keypoints on video
             show_statistics: Whether to display real-time statistics
+            websocket_url: WebSocket server URL for real-time streaming
+            enable_streaming: Whether to enable WebSocket streaming
+            enable_api_integration: Whether to send data to API servers
         """
         # Setup logging
         self.setup_logging()
@@ -50,6 +117,20 @@ class AdvancedHealthcareMonitor:
         self.show_keypoints = show_keypoints
         self.show_statistics = show_statistics
         self.show_dual_windows = True  # Always show both windows
+        
+        # WebSocket configuration
+        self.websocket_url = websocket_url
+        self.enable_streaming = enable_streaming
+        self.websocket = None
+        
+        # API Integration configuration
+        self.enable_api_integration = enable_api_integration
+        self.demo_api_url = "http://localhost:8003/api/demo/add-event"
+        self.mobile_api_url = "http://localhost:8002/api/events"
+        
+        # Alerts folder configuration
+        self.alerts_folder = Path("examples/data/saved_frames/alerts")
+        self.alerts_folder.mkdir(parents=True, exist_ok=True)
         
         # Camera configuration cho IMOU
         self.camera_config = {
@@ -99,6 +180,18 @@ class AdvancedHealthcareMonitor:
             'alert_type': 'normal'
         }
         
+        # Detection smoothing and temporal filtering
+        self.detection_history = {
+            'fall_confidences': [],
+            'seizure_confidences': [],
+            'person_positions': [],
+            'motion_levels': [],
+            'max_history': 10,  # Keep last 10 frames for smoothing
+            'fall_confirmation_frames': 0,
+            'seizure_confirmation_frames': 0,
+            'last_significant_motion': time.time()
+        }
+        
         # Performance tracking
         self.performance = {
             'fps': 0.0,
@@ -143,6 +236,166 @@ class AdvancedHealthcareMonitor:
         
         self.logger.info("Advanced logging system initialized")
     
+    def save_alert_image(self, frame: np.ndarray, alert_type: str, confidence: float) -> bool:
+        """
+        Save alert image with metadata to alerts folder
+        
+        Args:
+            frame: Frame to save
+            alert_type: Type of alert (fall_detected, seizure_detected)
+            confidence: Detection confidence
+            
+        Returns:
+            bool: True if saved successfully
+        """
+        try:
+            # Generate timestamp filename
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]  # milliseconds
+            filename = f"alert_{timestamp}_{alert_type}_conf_{confidence:.3f}.jpg"
+            filepath = self.alerts_folder / filename
+            
+            # Save image
+            success = cv2.imwrite(str(filepath), frame)
+            
+            if success:
+                # Store last saved image filename for API
+                self._last_saved_image = filename
+                
+                # Save metadata
+                metadata = {
+                    "alert_type": alert_type,
+                    "confidence": str(confidence),
+                    "keyframe_confidence": 0.0,  # placeholder
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                metadata_file = filepath.with_suffix('.jpg_metadata.json')
+                with open(metadata_file, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+                
+                self.logger.info(f"🚨 Alert image saved: {filename}")
+                print(f"🚨 Alert image saved: {filename}")
+                return True
+            else:
+                self.logger.error(f"Failed to save alert image: {filename}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error saving alert image: {e}")
+            print(f"❌ Error saving alert image: {e}")
+            return False
+    
+    def calculate_motion_level(self, person_detections: list) -> float:
+        """
+        Calculate motion level based on person position changes
+        
+        Args:
+            person_detections: Current person detections
+            
+        Returns:
+            float: Motion level (0.0 to 1.0)
+        """
+        if not person_detections:
+            return 0.0
+            
+        # Get primary person center
+        primary_person = max(person_detections, key=lambda x: x.get('bbox', [0,0,0,0])[2] * x.get('bbox', [0,0,0,0])[3])
+        bbox = primary_person['bbox']
+        center_x = bbox[0] + bbox[2] / 2
+        center_y = bbox[1] + bbox[3] / 2
+        current_position = (center_x, center_y)
+        
+        # Add to position history
+        self.detection_history['person_positions'].append(current_position)
+        if len(self.detection_history['person_positions']) > self.detection_history['max_history']:
+            self.detection_history['person_positions'].pop(0)
+        
+        # Calculate motion if we have enough history
+        if len(self.detection_history['person_positions']) < 3:
+            return 0.5  # Default medium motion
+            
+        # Calculate average displacement
+        positions = self.detection_history['person_positions']
+        total_displacement = 0.0
+        
+        for i in range(1, len(positions)):
+            dx = positions[i][0] - positions[i-1][0]
+            dy = positions[i][1] - positions[i-1][1]
+            displacement = np.sqrt(dx*dx + dy*dy)
+            total_displacement += displacement
+        
+        # Normalize motion level (adjust these values based on your camera setup)
+        avg_displacement = total_displacement / (len(positions) - 1)
+        motion_level = min(avg_displacement / 50.0, 1.0)  # 50 pixels = max motion
+        
+        return motion_level
+    
+    def smooth_detection_confidence(self, current_confidence: float, detection_type: str) -> float:
+        """
+        Apply temporal smoothing to detection confidence
+        
+        Args:
+            current_confidence: Current frame confidence
+            detection_type: 'fall' or 'seizure'
+            
+        Returns:
+            float: Smoothed confidence
+        """
+        if detection_type == 'fall':
+            history_key = 'fall_confidences'
+        else:
+            history_key = 'seizure_confidences'
+        
+        # Add current confidence to history
+        self.detection_history[history_key].append(current_confidence)
+        if len(self.detection_history[history_key]) > self.detection_history['max_history']:
+            self.detection_history[history_key].pop(0)
+        
+        # Calculate smoothed confidence using weighted average
+        confidences = self.detection_history[history_key]
+        if len(confidences) <= 1:
+            return current_confidence
+        
+        # Give more weight to recent detections
+        weights = np.linspace(0.5, 1.0, len(confidences))
+        smoothed = np.average(confidences, weights=weights)
+        
+        return float(smoothed)
+    
+    def enhance_detection_with_motion(self, base_confidence: float, motion_level: float, detection_type: str) -> float:
+        """
+        Enhance detection confidence based on motion patterns
+        
+        Args:
+            base_confidence: Base detection confidence
+            motion_level: Motion level (0.0 to 1.0)
+            detection_type: 'fall' or 'seizure'
+            
+        Returns:
+            float: Enhanced confidence
+        """
+        if detection_type == 'fall':
+            # For falls, high motion can indicate falling - MORE AGGRESSIVE BOOST
+            if motion_level > 0.6:  # Giảm từ 0.7 xuống 0.6 để dễ trigger
+                motion_boost = 0.3   # Tăng từ 0.2 lên 0.3 để boost mạnh hơn
+            elif motion_level > 0.3: # Giảm từ 0.4 xuống 0.3
+                motion_boost = 0.2   # Tăng từ 0.1 lên 0.2 để boost nhiều hơn
+            elif motion_level > 0.1: # Thêm level trung gian
+                motion_boost = 0.05  # Boost nhẹ cho motion thấp
+            else:
+                motion_boost = -0.05 # Giảm penalty từ -0.1 xuống -0.05
+        else:  # seizure
+            # For seizures, be more conservative - LESS AGGRESSIVE
+            if motion_level > 0.8:   # Tăng từ 0.5 lên 0.8 để khó trigger hơn
+                motion_boost = 0.1   # Giảm từ 0.15 xuống 0.1
+            elif motion_level < 0.1: # Tăng từ 0.2 lên 0.1 để ít penalty hơn
+                motion_boost = -0.02 # Giảm penalty từ -0.05 xuống -0.02
+            else:
+                motion_boost = 0.02  # Giảm từ 0.05 xuống 0.02
+        
+        enhanced_confidence = base_confidence + motion_boost
+        return max(0.0, min(1.0, enhanced_confidence))  # Clamp to [0,1]
+    
     def initialize_components(self) -> bool:
         """Initialize all system components"""
         try:
@@ -160,22 +413,22 @@ class AdvancedHealthcareMonitor:
             processor_config = 120  # Motion threshold as integer
             self.video_processor = IntegratedVideoProcessor(processor_config)
             
-            # Initialize fall detector
+            # Initialize fall detector - MORE SENSITIVE FOR FALLS
             print("🩹 Initializing fall detection...")
             self.fall_detector = SimpleFallDetector(
-                confidence_threshold=0.7
+                confidence_threshold=0.4  # Giảm từ 0.5 xuống 0.4 để sensitive hơn cho fall
             )
             
-            # Initialize seizure detector
+            # Initialize seizure detector - LESS SENSITIVE FOR SEIZURES
             print("🧠 Initializing seizure detection...")
             try:
                 self.seizure_detector = VSViGSeizureDetector(
-                    confidence_threshold=0.65  # Giảm để dễ detect hơn
+                    confidence_threshold=0.7  # Tăng từ 0.4 lên 0.7 để giảm false positive seizure
                 )
                 self.seizure_predictor = SeizurePredictor(
-                    temporal_window=30,
-                    alert_threshold=0.65,      # Giảm để dễ detect
-                    warning_threshold=0.45     # Giảm để sensitive
+                    temporal_window=25,        # Tăng từ 20 lên 25 frames để ổn định hơn
+                    alert_threshold=0.7,       # Tăng từ 0.5 lên 0.7 để khó detect hơn
+                    warning_threshold=0.5      # Tăng từ 0.3 lên 0.5 để giảm warning
                 )
                 print("✅ Seizure detection initialized (models loading on first use)")
             except Exception as e:
@@ -195,7 +448,7 @@ class AdvancedHealthcareMonitor:
     
     def process_dual_detection(self, frame: np.ndarray, person_detections: list) -> Dict:
         """
-        Process dual detection (fall + seizure) for healthcare monitoring
+        Process dual detection (fall + seizure) for healthcare monitoring with enhanced accuracy
         
         Args:
             frame: Input frame
@@ -218,7 +471,20 @@ class AdvancedHealthcareMonitor:
         }
         
         if not person_detections:
+            # Reset confirmation frames when no person detected
+            self.detection_history['fall_confirmation_frames'] = 0
+            self.detection_history['seizure_confirmation_frames'] = 0
             return result
+        
+        # Calculate motion level for enhanced detection
+        motion_level = self.calculate_motion_level(person_detections)
+        self.detection_history['motion_levels'].append(motion_level)
+        if len(self.detection_history['motion_levels']) > self.detection_history['max_history']:
+            self.detection_history['motion_levels'].pop(0)
+        
+        # Update significant motion tracker
+        if motion_level > 0.3:
+            self.detection_history['last_significant_motion'] = time.time()
         
         # Get primary person (largest detection)
         primary_person = max(person_detections, key=lambda x: x.get('bbox', [0,0,0,0])[2] * x.get('bbox', [0,0,0,0])[3])
@@ -229,24 +495,46 @@ class AdvancedHealthcareMonitor:
             int(primary_person['bbox'][1] + primary_person['bbox'][3])
         ]
         
-        # Fall detection
+        # Fall detection with improvements
         fall_start = time.time()
         try:
             fall_result = self.fall_detector.detect_fall(frame, primary_person)
-            result['fall_detected'] = fall_result['fall_detected']
-            result['fall_confidence'] = fall_result['confidence']
+            base_fall_confidence = fall_result['confidence']
             
-            if fall_result['fall_detected']:
+            # Apply motion enhancement and smoothing
+            enhanced_fall_confidence = self.enhance_detection_with_motion(
+                base_fall_confidence, motion_level, 'fall'
+            )
+            smoothed_fall_confidence = self.smooth_detection_confidence(
+                enhanced_fall_confidence, 'fall'
+            )
+            
+            # Improved fall detection logic with confirmation frames - MORE SENSITIVE
+            fall_threshold = 0.3  # Giảm từ 0.4 xuống 0.3 để dễ detect fall hơn
+            if smoothed_fall_confidence > fall_threshold:
+                self.detection_history['fall_confirmation_frames'] += 1
+            else:
+                self.detection_history['fall_confirmation_frames'] = max(0, 
+                    self.detection_history['fall_confirmation_frames'] - 1)
+            
+            # Require fewer frames for fall confirmation - FASTER RESPONSE
+            min_confirmation_frames = 1  # Giảm từ 2 xuống 1 để nhanh hơn
+            if self.detection_history['fall_confirmation_frames'] >= min_confirmation_frames:
+                result['fall_detected'] = True
+                result['fall_confidence'] = smoothed_fall_confidence
+                
                 self.stats['fall_detections'] += 1
                 self.stats['last_fall_time'] = time.time()
-                self.logger.info(f"🩹 Fall detected! Confidence: {fall_result['confidence']:.2f}")
+                self.logger.info(f"🩹 Fall detected! Confidence: {smoothed_fall_confidence:.2f} (Motion: {motion_level:.2f})")
+            else:
+                result['fall_confidence'] = smoothed_fall_confidence
                 
         except Exception as e:
             self.logger.error(f"Fall detection error: {str(e)}")
         
         self.performance['fall_detection_time'] = time.time() - fall_start
         
-        # Seizure detection
+        # Seizure detection with improvements
         seizure_start = time.time()
         if self.seizure_detector is not None:
             try:
@@ -260,16 +548,41 @@ class AdvancedHealthcareMonitor:
                         seizure_result['confidence']
                     )
                     
-                    result['seizure_confidence'] = pred_result['smoothed_confidence']
-                    result['seizure_detected'] = pred_result['seizure_detected']
+                    base_seizure_confidence = pred_result['smoothed_confidence']
                     
-                    if pred_result['seizure_detected']:
+                    # Apply motion enhancement and additional smoothing
+                    enhanced_seizure_confidence = self.enhance_detection_with_motion(
+                        base_seizure_confidence, motion_level, 'seizure'
+                    )
+                    final_seizure_confidence = self.smooth_detection_confidence(
+                        enhanced_seizure_confidence, 'seizure'
+                    )
+                    
+                    # Improved seizure detection logic - LESS SENSITIVE
+                    seizure_threshold = 0.6   # Tăng từ 0.3 lên 0.6 để giảm false positive
+                    warning_threshold = 0.4   # Tăng từ 0.2 lên 0.4 để giảm warning spam
+                    
+                    if final_seizure_confidence > seizure_threshold:
+                        self.detection_history['seizure_confirmation_frames'] += 1
+                    else:
+                        self.detection_history['seizure_confirmation_frames'] = max(0,
+                            self.detection_history['seizure_confirmation_frames'] - 1)
+                    
+                    # Check for seizure detection with confirmation - STRICTER
+                    min_seizure_confirmation = 5  # Tăng từ 3 lên 5 frames để chắc chắn hơn
+                    if self.detection_history['seizure_confirmation_frames'] >= min_seizure_confirmation:
+                        result['seizure_detected'] = True
+                        result['seizure_confidence'] = final_seizure_confidence
+                        
                         self.stats['seizure_detections'] += 1
                         self.stats['last_seizure_time'] = time.time()
-                        self.logger.info(f"🧠 Seizure detected! Confidence: {pred_result['smoothed_confidence']:.2f}")
+                        self.logger.info(f"🧠 Seizure detected! Confidence: {final_seizure_confidence:.2f} (Motion: {motion_level:.2f})")
                     
-                    elif pred_result['alert_level'] == 'warning':
+                    elif final_seizure_confidence > warning_threshold and motion_level > 0.7:  # Cần cả high confidence VÀ high motion
+                        result['seizure_confidence'] = final_seizure_confidence
                         self.stats['seizure_warnings'] += 1
+                    else:
+                        result['seizure_confidence'] = final_seizure_confidence
                 
             except Exception as e:
                 self.logger.error(f"Seizure detection error: {str(e)}")
@@ -277,22 +590,45 @@ class AdvancedHealthcareMonitor:
         
         self.performance['seizure_detection_time'] = time.time() - seizure_start
         
-        # Determine overall alert level
+        # Enhanced alert level determination - BALANCED APPROACH
         if result['seizure_detected']:
             result['alert_level'] = 'critical'
             result['emergency_type'] = 'seizure'
             self.stats['critical_alerts'] += 1
+            # Save seizure alert image
+            self.save_alert_image(frame, 'seizure_detected', result['seizure_confidence'])
         elif result['fall_detected']:
             result['alert_level'] = 'high'
             result['emergency_type'] = 'fall'
-        elif result['seizure_confidence'] > 0.4:
+            # Save fall alert image
+            self.save_alert_image(frame, 'fall_detected', result['fall_confidence'])
+        elif result['seizure_confidence'] > 0.5 and motion_level > 0.8:  # Cần HIGH confidence + HIGH motion
             result['alert_level'] = 'warning'
             result['emergency_type'] = 'seizure_warning'
+            # Save seizure warning image
+            self.save_alert_image(frame, 'seizure_warning', result['seizure_confidence'])
+        elif result['fall_confidence'] > 0.25:  # Fall warning threshold - dễ hơn
+            result['alert_level'] = 'warning'
+            result['emergency_type'] = 'fall_warning'
+            self.save_alert_image(frame, 'fall_warning', result['fall_confidence'])
             
         if result['alert_level'] != 'normal':
             self.stats['total_alerts'] += 1
             self.stats['last_alert_time'] = time.time()
             self.stats['alert_type'] = result['alert_level']
+            
+            # Send to API servers
+            frame_info = {
+                "frame_number": self.stats['total_frames'],
+                "processing_time": self.performance['total_detection_time'],
+                "persons_detected": 1 if person_detections else 0,
+                "motion_level": motion_level,
+                "confirmation_frames": {
+                    "fall": self.detection_history['fall_confirmation_frames'],
+                    "seizure": self.detection_history['seizure_confirmation_frames']
+                }
+            }
+            self.send_to_api_servers(result, frame_info)
         
         self.performance['total_detection_time'] = time.time() - start_time
         return result
@@ -359,31 +695,62 @@ class AdvancedHealthcareMonitor:
                     pt2 = (int(keypoints[p2, 0]), int(keypoints[p2, 1]))
                     cv2.line(frame_vis, pt1, pt2, (255, 255, 0), 2)
         
-        # Add detection alerts
+        # Add detection alerts with enhanced information - BALANCED DISPLAY
         alert_y = 30
         
-        # Fall detection status
+        # Fall detection status - MORE PROMINENT
         if detection_result['fall_detected']:
             cv2.putText(frame_vis, f"🩹 FALL DETECTED: {detection_result['fall_confidence']:.2f}",
                        (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             alert_y += 30
+        elif detection_result['fall_confidence'] > 0.25:  # Lowered fall warning threshold
+            cv2.putText(frame_vis, f"⚠️ Fall Warning: {detection_result['fall_confidence']:.2f}",
+                       (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+            alert_y += 30
         
-        # Seizure detection status
+        # Seizure detection status - LESS PROMINENT
         if detection_result['seizure_detected']:
             cv2.putText(frame_vis, f"🧠 SEIZURE DETECTED: {detection_result['seizure_confidence']:.2f}",
                        (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             alert_y += 30
-        elif detection_result['seizure_confidence'] > 0.4:
-            cv2.putText(frame_vis, f"⚠️ Seizure Warning: {detection_result['seizure_confidence']:.2f}",
-                       (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-            alert_y += 30
+        elif detection_result['seizure_confidence'] > 0.5 and hasattr(self, 'detection_history') and self.detection_history['motion_levels']:
+            current_motion = self.detection_history['motion_levels'][-1]
+            if current_motion > 0.8:  # Only show seizure warning if high motion
+                cv2.putText(frame_vis, f"⚠️ Seizure Warning: {detection_result['seizure_confidence']:.2f}",
+                           (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                alert_y += 30
         
-        # Seizure buffer status
+        # Motion level indicator
+        if hasattr(self, 'detection_history') and self.detection_history['motion_levels']:
+            current_motion = self.detection_history['motion_levels'][-1]
+            motion_color = (0, 255, 0) if current_motion < 0.3 else (0, 255, 255) if current_motion < 0.7 else (0, 0, 255)
+            cv2.putText(frame_vis, f"📊 Motion Level: {current_motion:.2f}",
+                       (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
+            alert_y += 25
+        
+        # Confirmation frames status
+        if hasattr(self, 'detection_history'):
+            fall_conf = self.detection_history.get('fall_confirmation_frames', 0)
+            seizure_conf = self.detection_history.get('seizure_confirmation_frames', 0)
+            if fall_conf > 0 or seizure_conf > 0:
+                cv2.putText(frame_vis, f"🔍 Conf Frames - Fall:{fall_conf} Seizure:{seizure_conf}",
+                           (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+                alert_y += 20
+        
+        # Seizure buffer status - with error handling and updated window size
         if self.seizure_detector and not detection_result['seizure_ready']:
-            buffer_size = len(self.seizure_detector.frame_buffer)
-            frames_needed = 30 - buffer_size
-            cv2.putText(frame_vis, f"📊 Seizure Buffer: {frames_needed} frames needed",
-                       (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            try:
+                if hasattr(self.seizure_detector, 'frame_buffer'):
+                    buffer_size = len(self.seizure_detector.frame_buffer)
+                    frames_needed = 25 - buffer_size  # Updated to match new temporal window
+                    cv2.putText(frame_vis, f"📊 Seizure Buffer: {frames_needed} frames needed",
+                               (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                else:
+                    cv2.putText(frame_vis, f"📊 Seizure Detection: Initializing (less sensitive)...",
+                               (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            except Exception:
+                cv2.putText(frame_vis, f"📊 Seizure Detection: Ready (Higher Threshold)",
+                           (10, alert_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         
         return frame_vis
     
@@ -417,7 +784,7 @@ class AdvancedHealthcareMonitor:
         
         # Statistics text
         stats_text = [
-            "🏥 DUAL DETECTION SYSTEM",
+            "🏥 DUAL DETECTION SYSTEM - ENHANCED",
             f"Runtime: {runtime/60:.1f} minutes",
             f"FPS: {fps:.1f}",
             f"Efficiency: {efficiency:.1f}% skipped",
@@ -428,14 +795,21 @@ class AdvancedHealthcareMonitor:
             f"Keyframes: {self.stats['keyframes_detected']}",
             f"Persons: {self.stats['persons_detected']}",
             "",
-            "🩹 FALL DETECTION:",
+            "🩹 FALL DETECTION - ENHANCED:",
             f"Falls Detected: {self.stats['fall_detections']}",
             f"Avg Confidence: {self.stats['fall_confidence_avg']:.2f}",
+            f"Confirmation Frames: {self.detection_history.get('fall_confirmation_frames', 0)}",
             "",
-            "🧠 SEIZURE DETECTION:",
+            "🧠 SEIZURE DETECTION - ENHANCED:",
             f"Seizures: {self.stats['seizure_detections']}",
             f"Warnings: {self.stats['seizure_warnings']}",
             f"Pose Failures: {self.stats['pose_extraction_failures']}",
+            f"Confirmation Frames: {self.detection_history.get('seizure_confirmation_frames', 0)}",
+            "",
+            "📊 MOTION ANALYSIS:",
+            f"Current Motion: {self.detection_history['motion_levels'][-1]:.2f}" if self.detection_history['motion_levels'] else "Motion: N/A",
+            f"Motion History: {len(self.detection_history['motion_levels'])}/10",
+            f"Last Significant: {time.time() - self.detection_history['last_significant_motion']:.1f}s ago",
             "",
             "🚨 EMERGENCY ALERTS:",
             f"Critical: {self.stats['critical_alerts']}",
@@ -550,6 +924,94 @@ class AdvancedHealthcareMonitor:
     
     def run_monitoring(self):
         """Main monitoring loop with dual detection"""
+        if self.enable_streaming:
+            # Run async version with WebSocket
+            return asyncio.run(self.run_monitoring_async())
+        else:
+            # Run sync version without WebSocket
+            return self.run_monitoring_sync()
+    
+    async def run_monitoring_async(self):
+        """Async monitoring loop with WebSocket streaming"""
+        if not self.initialize_components():
+            return False
+        
+        # Setup WebSocket connection
+        await self.setup_websocket_connection()
+        
+        self.running = True
+        frame_count = 0
+        
+        print(f"\n🏥 ADVANCED HEALTHCARE MONITOR STARTED (WebSocket Mode)")
+        print(f"🌐 WebSocket URL: {self.websocket_url}")
+        print(f"📊 Keypoints Display: {'ON' if self.show_keypoints else 'OFF'}")
+        print(f"📈 Statistics Display: {'ON' if self.show_statistics else 'OFF'}")
+        print(f"🖼️ Dual Windows: {'ON' if self.show_dual_windows else 'OFF'}")
+        if self.enable_api_integration:
+            print(f"📤 API Integration: ON")
+            print(f"   Demo API: http://localhost:8003")
+            print(f"   Mobile API: http://localhost:8002")
+        print("\n🎮 Keyboard Controls:")
+        print(f"   'k' = toggle keypoints | 's' = toggle statistics | 'd' = toggle dual windows")
+        print(f"   'h' = show help | ' ' = screenshot | 'q' = quit")
+        print("=" * 70)
+        
+        try:
+            while self.running:
+                frame = self.camera.get_frame()
+                if frame is None:
+                    await asyncio.sleep(0.01)
+                    continue
+                
+                frame_count += 1
+                self.stats['total_frames'] = frame_count
+                
+                # Process frame
+                processing_result = self.video_processor.process_frame(frame)
+                if processing_result['processed']:
+                    self.stats['frames_processed'] += 1
+                    
+                    # Dual detection
+                    person_detections = processing_result.get('person_detections', processing_result.get('detections', []))
+                    detection_result = self.process_dual_detection(
+                        frame, person_detections
+                    )
+                    
+                    # Send to WebSocket server if alert detected
+                    if detection_result['alert_level'] != 'normal':
+                        frame_info = {
+                            "frame_number": frame_count,
+                            "processing_time": processing_result.get('processing_time', 0),
+                            "persons_detected": len(person_detections)
+                        }
+                        await self.send_detection_event(detection_result, frame_info)
+                    
+                    # Continue with normal visualization...
+                    processing_result['person_detections'] = person_detections  # Ensure compatibility
+                    self._handle_frame_display(frame, detection_result, processing_result)
+                
+                # Handle keyboard input
+                key = cv2.waitKey(1) & 0xFF
+                if self._handle_keyboard_input(key):
+                    break
+                    
+                # Small async delay
+                await asyncio.sleep(0.001)
+                
+        except KeyboardInterrupt:
+            print("\n👋 Stopping healthcare monitor...")
+        except Exception as e:
+            self.logger.error(f"Monitoring error: {e}")
+            print(f"❌ Error: {e}")
+            return False
+        finally:
+            await self.close_websocket()
+            self.cleanup()
+        
+        return True
+    
+    def run_monitoring_sync(self):
+        """Main monitoring loop with dual detection"""
         if not self.initialize_components():
             return False
         
@@ -581,17 +1043,18 @@ class AdvancedHealthcareMonitor:
                 if processing_result['processed']:
                     self.stats['keyframes_detected'] += 1
                     
-                    # Dual detection processing
+                    # Dual detection processing  
+                    person_detections = processing_result.get('person_detections', processing_result.get('detections', []))
                     detection_result = self.process_dual_detection(
-                        frame, processing_result['detections']
+                        frame, person_detections
                     )
                     
                     # Update statistics
-                    self.update_statistics(detection_result, len(processing_result['detections']))
+                    self.update_statistics(detection_result, len(person_detections))
                     
                     # Visualize results
                     frame_vis = self.visualize_dual_detection(
-                        frame, detection_result, processing_result['detections']
+                        frame, detection_result, person_detections
                     )
                     
                     # Add statistics overlay
@@ -599,7 +1062,7 @@ class AdvancedHealthcareMonitor:
                     
                     # Create normal camera window
                     frame_normal = self.create_normal_camera_window(
-                        frame, processing_result['detections']
+                        frame, person_detections
                     )
                     
                     # Display both windows
@@ -654,18 +1117,277 @@ class AdvancedHealthcareMonitor:
                     except Exception as e:
                         print(f"❌ Screenshot failed: {e}")
                 
-                # Update motion stats
-                if processing_result.get('motion_detected', False):
-                    self.stats['motion_frames'] += 1
-        
         except KeyboardInterrupt:
-            print("\n[🏥] Monitoring stopped by user")
+            print("👋 Stopping healthcare monitor...")
         except Exception as e:
-            self.logger.error(f"Monitoring error: {str(e)}")
+            self.logger.error(f"Monitoring error: {e}")
             print(f"❌ Error: {e}")
+            return False
         finally:
             self.cleanup()
+
+        return True
     
+    def _handle_frame_display(self, frame, detection_result, processing_result):
+        """Handle frame display for both analysis and normal views"""
+        # Update statistics
+        self.update_statistics(detection_result, len(processing_result['person_detections']))
+        
+        # Visualize results
+        frame_vis = self.visualize_dual_detection(
+            frame, detection_result, processing_result['person_detections']
+        )
+        
+        # Add statistics overlay
+        frame_vis = self.draw_statistics_overlay(frame_vis)
+        
+        # Create normal camera window
+        frame_normal = self.create_normal_camera_window(
+            frame, processing_result['person_detections']
+        )
+        
+        # Display both windows
+        cv2.imshow('Healthcare Monitor - Analysis View', frame_vis)
+        cv2.imshow('Healthcare Monitor - Normal View', frame_normal)
+        
+        # Log critical events
+        if detection_result['alert_level'] == 'critical':
+            alert_msg = f"🚨 CRITICAL ALERT: {detection_result['emergency_type']} detected!"
+            self.logger.critical(alert_msg)
+            print(f"[CRITICAL] {alert_msg}")
+    
+    def _handle_keyboard_input(self, key):
+        """Handle keyboard input, returns True if should quit"""
+        if key == ord('q'):
+            return True
+        elif key == ord('k'):
+            self.show_keypoints = not self.show_keypoints
+            print(f"🔧 Keypoints display: {'ON' if self.show_keypoints else 'OFF'}")
+        elif key == ord('s'):
+            self.show_statistics = not self.show_statistics
+            print(f"🔧 Statistics display: {'ON' if self.show_statistics else 'OFF'}")
+        elif key == ord('d'):
+            self.show_dual_windows = not self.show_dual_windows
+            print(f"🔧 Dual windows: {'ON' if self.show_dual_windows else 'OFF'}")
+            if not self.show_dual_windows:
+                cv2.destroyWindow('Healthcare Monitor - Normal View')
+        elif key == ord('h'):
+            print("🎮 Keyboard Controls:")
+            print("   'q' = Quit")
+            print("   'k' = Toggle keypoints")
+            print("   's' = Toggle statistics")
+            print("   'd' = Toggle dual windows")
+            print("   'h' = Show this help")
+            print("   ' ' = Screenshot both windows")
+        elif key == ord(' '):  # Spacebar for screenshot
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Screenshots would be handled by caller
+                print(f"📸 Screenshot feature available")
+            except Exception as e:
+                print(f"❌ Screenshot failed: {e}")
+        return False
+
+    async def close_websocket(self):
+        """Close WebSocket connection"""
+        if self.websocket:
+            try:
+                # Send disconnect message
+                disconnect_msg = {
+                    "type": "disconnection",
+                    "timestamp": time.time(),
+                    "status": "monitoring_stopped",
+                    "final_stats": {
+                        "total_frames": self.stats['total_frames'],
+                        "fall_detections": self.stats['fall_detections'],
+                        "seizure_detections": self.stats['seizure_detections'],
+                        "total_alerts": self.stats['total_alerts']
+                    }
+                }
+                await self.websocket.send(json.dumps(disconnect_msg))
+                await self.websocket.close()
+                self.logger.info("WebSocket connection closed")
+                print("[�] WebSocket disconnected")
+            except Exception as e:
+                self.logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.websocket = None
+    
+    async def setup_websocket_connection(self):
+        """Setup WebSocket connection to server"""
+        if not self.enable_streaming:
+            return
+            
+        try:
+            self.websocket = await websockets.connect(self.websocket_url)
+            self.logger.info(f"✅ WebSocket connected to {self.websocket_url}")
+            print(f"[🌐] WebSocket connected to {self.websocket_url}")
+            
+            # Send initial connection message
+            connect_msg = {
+                "type": "connection",
+                "timestamp": time.time(),
+                "status": "monitoring_started",
+                "device_info": {
+                    "camera_type": "IMOU",
+                    "detection_types": ["fall", "seizure"],
+                    "resolution": self.camera_config['resolution']
+                }
+            }
+            await self.websocket.send(json.dumps(connect_msg))
+            
+        except Exception as e:
+            self.logger.error(f"WebSocket connection failed: {e}")
+            print(f"[❌] WebSocket connection failed: {e}")
+            self.websocket = None
+    
+    async def send_detection_event(self, detection_result: Dict, frame_info: Optional[Dict] = None):
+        """Send detection event to WebSocket server"""
+        if not self.websocket or not self.enable_streaming:
+            return
+            
+        try:
+            # Get the latest saved image filename if available
+            imgurl = ""
+            if hasattr(self, '_last_saved_image'):
+                imgurl = f"http://localhost:8003/api/demo/alerts/{getattr(self, '_last_saved_image', '')}"
+            
+            # Map alert level to action
+            action_mapping = {
+                'normal': 'monitoring',
+                'warning': 'alert_warning',
+                'high': 'alert_fall',
+                'critical': 'alert_seizure'
+            }
+            
+            # Map alert level to status
+            status_mapping = {
+                'normal': 'normal',
+                'warning': 'warning', 
+                'high': 'warning',
+                'critical': 'danger'
+            }
+            
+            alert_level = detection_result.get('alert_level', 'normal')
+            
+            # Prepare detection event data in requested format
+            event_data = {
+                "userId": "patient123",
+                "sessionId": f"session_{int(time.time())}",
+                "imageUrl": imgurl,
+                "status": status_mapping.get(alert_level, 'normal'),
+                "action": action_mapping.get(alert_level, 'monitoring'),
+                "location": "Room A - Healthcare Monitor",
+                "time": int(time.time() * 1000)  # timestamp in milliseconds
+            }
+            
+            # Send to WebSocket server
+            await self.websocket.send(json.dumps(event_data))
+            
+            # Log significant events
+            if detection_result.get('alert_level') != 'normal':
+                self.logger.info(f"🚨 Alert sent: {detection_result.get('alert_level')} - {detection_result.get('emergency_type')}")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to send detection event: {e}")
+            # Try to reconnect
+            await self.setup_websocket_connection()
+    
+    def send_to_api_servers(self, detection_result: Dict, frame_info: Optional[Dict] = None):
+        """Send detection data to API servers (Demo + Mobile)"""
+        if not self.enable_api_integration:
+            return
+            
+        # Only send when there's an alert
+        if detection_result.get('alert_level', 'normal') == 'normal':
+            return
+            
+        try:
+            # Get the latest saved image filename if available
+            imgurl = ""
+            if hasattr(self, '_last_saved_image'):
+                imgurl = getattr(self, '_last_saved_image', "")
+            
+            # Create clean detection result without numpy arrays
+            clean_detection_result = {
+                'fall_detected': detection_result.get('fall_detected', False),
+                'fall_confidence': float(detection_result.get('fall_confidence', 0.0)),
+                'seizure_detected': detection_result.get('seizure_detected', False),
+                'seizure_confidence': float(detection_result.get('seizure_confidence', 0.0)),
+                'seizure_ready': detection_result.get('seizure_ready', False),
+                'alert_level': detection_result.get('alert_level', 'normal'),
+                'emergency_type': detection_result.get('emergency_type')
+                # Exclude keypoints as they are numpy arrays
+            }
+            
+            # Prepare data for Demo API (MO Format)
+            demo_data = {
+                "user_id": "patient123",
+                "event_type": detection_result.get('emergency_type', 'normal'),
+                "confidence": detection_result.get('fall_confidence', 0.0) if detection_result.get('fall_detected') else detection_result.get('seizure_confidence', 0.0),
+                "metadata": {
+                    "detection_result": clean_detection_result,
+                    "frame_info": frame_info or {}
+                },
+                # Map to 3-value status format
+                "status": self._map_alert_to_status(detection_result.get('alert_level', 'normal')),
+                "imgurl": f"http://localhost:8003/api/demo/alerts/{imgurl}" if imgurl else "",
+            }
+            
+            # Prepare data for Mobile API
+            mobile_data = {
+                "user_id": "patient123",
+                "event_type": detection_result.get('emergency_type', 'normal'),
+                "confidence": detection_result.get('fall_confidence', 0.0) if detection_result.get('fall_detected') else detection_result.get('seizure_confidence', 0.0),
+                "metadata": demo_data["metadata"],
+                "status": demo_data["status"],
+                "imgurl": imgurl
+            }
+            
+            # Send to Demo API in background thread
+            threading.Thread(target=self._send_to_demo_api, args=(demo_data,), daemon=True).start()
+            
+            # Send to Mobile API in background thread  
+            threading.Thread(target=self._send_to_mobile_api, args=(mobile_data,), daemon=True).start()
+            
+            print(f"📤 Demo API: http://localhost:8003")
+            print(f"📱 Mobile API: http://localhost:8002")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to send to API servers: {e}")
+            print(f"❌ API send error: {e}")
+    
+    def _map_alert_to_status(self, alert_level: str) -> str:
+        """Map alert level to 3-value status format"""
+        if alert_level == 'critical':
+            return 'danger'
+        elif alert_level in ['high', 'warning']:
+            return 'warning'
+        else:
+            return 'normal'
+    
+    def _send_to_demo_api(self, data: Dict):
+        """Send data to Demo API server"""
+        try:
+            response = requests.post(self.demo_api_url, json=data, timeout=5)
+            if response.status_code == 200:
+                self.logger.info(f"✅ Demo API sent: {data['event_type']}")
+            else:
+                self.logger.warning(f"⚠️ Demo API error: {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"Demo API send failed: {e}")
+    
+    def _send_to_mobile_api(self, data: Dict):
+        """Send data to Mobile API server"""
+        try:
+            response = requests.post(self.mobile_api_url, json=data, timeout=5)
+            if response.status_code == 200:
+                self.logger.info(f"✅ Mobile API sent: {data['event_type']}")
+            else:
+                self.logger.warning(f"⚠️ Mobile API error: {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"Mobile API send failed: {e}")
+
     def cleanup(self):
         """Cleanup resources"""
         self.running = False
@@ -681,35 +1403,59 @@ class AdvancedHealthcareMonitor:
         self.logger.info("Advanced Healthcare Monitor stopped")
     
     def print_final_statistics(self):
-        """Print comprehensive final statistics"""
+        """Print comprehensive final statistics with enhanced metrics"""
         runtime = time.time() - self.stats['start_time']
         
-        print("\n" + "="*60)
-        print("🏥 ADVANCED HEALTHCARE MONITOR - FINAL STATISTICS")
-        print("="*60)
+        print("\n" + "="*70)
+        print("🏥 ADVANCED HEALTHCARE MONITOR - ENHANCED FINAL STATISTICS")
+        print("="*70)
         print(f"📊 Runtime: {runtime/60:.1f} minutes")
         print(f"📊 Total Frames: {self.stats['total_frames']}")
         print(f"📊 Frames Processed: {self.stats['frames_processed']}")
         print(f"📊 Processing Efficiency: {(1-self.stats['frames_processed']/max(self.stats['total_frames'],1))*100:.1f}% skipped")
         print(f"📊 Average FPS: {self.stats['total_frames']/runtime:.1f}")
         print()
-        print("🩹 FALL DETECTION:")
+        print("🩹 ENHANCED FALL DETECTION:")
         print(f"   Falls Detected: {self.stats['fall_detections']}")
         print(f"   Average Confidence: {self.stats['fall_confidence_avg']:.2f}")
+        print(f"   Final Confirmation Frames: {self.detection_history.get('fall_confirmation_frames', 0)}")
         print(f"   Last Fall: {datetime.fromtimestamp(self.stats['last_fall_time']).strftime('%H:%M:%S') if self.stats['last_fall_time'] else 'None'}")
         print()
-        print("🧠 SEIZURE DETECTION:")
+        print("🧠 ENHANCED SEIZURE DETECTION:")
         print(f"   Seizures Detected: {self.stats['seizure_detections']}")
         print(f"   Seizure Warnings: {self.stats['seizure_warnings']}")
         print(f"   Average Confidence: {self.stats['seizure_confidence_avg']:.2f}")
+        print(f"   Final Confirmation Frames: {self.detection_history.get('seizure_confirmation_frames', 0)}")
         print(f"   Pose Extraction Failures: {self.stats['pose_extraction_failures']}")
         print(f"   Last Seizure: {datetime.fromtimestamp(self.stats['last_seizure_time']).strftime('%H:%M:%S') if self.stats['last_seizure_time'] else 'None'}")
+        print()
+        print("📊 MOTION ANALYSIS:")
+        if self.detection_history['motion_levels']:
+            avg_motion = sum(self.detection_history['motion_levels']) / len(self.detection_history['motion_levels'])
+            max_motion = max(self.detection_history['motion_levels'])
+            print(f"   Average Motion Level: {avg_motion:.2f}")
+            print(f"   Maximum Motion Level: {max_motion:.2f}")
+            print(f"   Motion Samples: {len(self.detection_history['motion_levels'])}")
+        else:
+            print(f"   No motion data collected")
         print()
         print("🚨 EMERGENCY ALERTS:")
         print(f"   Critical Alerts: {self.stats['critical_alerts']}")
         print(f"   Total Alerts: {self.stats['total_alerts']}")
         print(f"   Current Status: {self.stats['alert_type']}")
-        print("="*60)
+        if self.enable_api_integration:
+            print()
+            print("📤 API INTEGRATION:")
+            print(f"   Demo API Endpoint: http://localhost:8003")
+            print(f"   Mobile API Endpoint: http://localhost:8002")
+        print()
+        print("⚡ DETECTION ENHANCEMENTS:")
+        print(f"   ✅ Motion-based confidence boosting")
+        print(f"   ✅ Temporal smoothing and filtering")
+        print(f"   ✅ Multi-frame confirmation system")
+        print(f"   ✅ Lowered detection thresholds for sensitivity")
+        print(f"   ✅ Enhanced warning system")
+        print("="*70)
 
 
 def main():

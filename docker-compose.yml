@@ -113,7 +113,7 @@ services:
     container_name: vision_edge_redis_commander
     restart: unless-stopped
     environment:
-      - REDIS_HOSTS=local:redis:6379:0:vision_edge_redis_2025
+      - REDIS_HOSTS=local:redis:6379:0:vision_edge_redis_pass
     ports:
       - "8081:8081"
     depends_on:
