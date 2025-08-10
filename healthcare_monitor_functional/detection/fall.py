@@ -17,7 +17,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 
-def initialize_fall_detector(confidence_threshold: float = 0.4) -> Optional[Any]:
+def initialize_fall_detector(confidence_threshold: float = 0.4) -> Tuple[Any, Any]:
     """
     Initialize fall detection system
     
@@ -25,29 +25,87 @@ def initialize_fall_detector(confidence_threshold: float = 0.4) -> Optional[Any]
         confidence_threshold: Confidence threshold for fall detection
         
     Returns:
-        Fall detector instance or None if failed
+        Tuple of (detector, predictor) - for fallback, predictor is None
     """
     try:
         from fall_detection.simple_fall_detector_v2 import SimpleFallDetector
-        return SimpleFallDetector(confidence_threshold=confidence_threshold)
+        detector = SimpleFallDetector(confidence_threshold=confidence_threshold)
+        return detector, None
     except ImportError:
         try:
             from fall_detection.simple_fall_detector import SimpleFallDetector
-            return SimpleFallDetector(confidence_threshold=confidence_threshold)
+            detector = SimpleFallDetector(confidence_threshold=confidence_threshold)
+            return detector, None
         except ImportError:
             # Fallback implementation
-            return FallbackFallDetector(confidence_threshold)
+            detector = FallbackFallDetector(confidence_threshold)
+            return detector, None
 
 
 class FallbackFallDetector:
-    """Fallback fall detector when main detectors are not available"""
+    """Smart fallback fall detector with motion analysis"""
     
     def __init__(self, confidence_threshold: float = 0.7):
         self.confidence_threshold = confidence_threshold
+        self.motion_history = []
+        self.aspect_ratio_history = []
     
     def detect_fall(self, frame: np.ndarray, person: Dict) -> Dict[str, Any]:
-        """Fallback fall detection - always returns no fall detected"""
-        return {'fall_detected': False, 'confidence': 0.0}
+        """Smart fall detection based on aspect ratio and motion patterns"""
+        if not person or 'bbox' not in person:
+            return {'fall_detected': False, 'confidence': 0.0}
+        
+        bbox = person['bbox']
+        x1, y1, x2, y2 = map(int, bbox)
+        
+        # Calculate aspect ratio (width/height)
+        width = x2 - x1
+        height = y2 - y1
+        
+        if height == 0:
+            return {'fall_detected': False, 'confidence': 0.0}
+            
+        aspect_ratio = width / height
+        
+        # Update aspect ratio history
+        self.aspect_ratio_history.append(aspect_ratio)
+        if len(self.aspect_ratio_history) > 10:
+            self.aspect_ratio_history.pop(0)
+        
+        # Fall detection logic
+        confidence = 0.0
+        
+        # Check if aspect ratio suggests horizontal position (fall)
+        if aspect_ratio > 1.2:  # More wide than tall
+            confidence += 0.4
+        
+        # Check for sudden change in aspect ratio
+        if len(self.aspect_ratio_history) >= 5:
+            recent_avg = sum(self.aspect_ratio_history[-3:]) / 3
+            older_avg = sum(self.aspect_ratio_history[-5:-2]) / 3
+            
+            if recent_avg > older_avg * 1.3:  # 30% increase in width/height ratio
+                confidence += 0.3
+        
+        # Check if person is in lower part of frame (on ground)
+        frame_height = frame.shape[0] if frame is not None else 480
+        person_center_y = (y1 + y2) / 2
+        
+        if person_center_y > frame_height * 0.6:  # In lower 40% of frame
+            confidence += 0.2
+        
+        # Check if person bbox is very wide (lying down)
+        if width > height * 1.5:
+            confidence += 0.3
+            
+        fall_detected = confidence >= self.confidence_threshold
+        
+        return {
+            'fall_detected': fall_detected, 
+            'confidence': min(confidence, 1.0),
+            'aspect_ratio': aspect_ratio,
+            'person_center_y': person_center_y / frame_height if frame is not None else 0
+        }
 
 
 def detect_fall(detector: Any, frame: np.ndarray, person_detection: Dict, 

@@ -7,35 +7,47 @@ Function-based logging system
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
-def setup_logging(log_dir: Optional[Path] = None) -> logging.Logger:
+def setup_logging(logging_config: Optional[Dict[str, Any]] = None, log_dir: Optional[Path] = None) -> logging.Logger:
     """
     Setup comprehensive logging system
     
     Args:
+        logging_config: Logging configuration dictionary
         log_dir: Directory for log files (optional)
         
     Returns:
         Configured logger instance
     """
+    if logging_config is None:
+        logging_config = {}
+        
     if log_dir is None:
-        log_dir = Path("healthcare_monitor_functional/logs")
+        log_dir = Path("logs")
+    elif not isinstance(log_dir, Path):
+        log_dir = Path(log_dir) if log_dir else Path("logs")
     
     log_dir.mkdir(exist_ok=True)
     
+    # Get log level from config
+    log_level = logging_config.get('level', 'INFO')
+    if isinstance(log_level, str):
+        log_level = getattr(logging, log_level.upper(), logging.INFO)
+    
     logger = logging.getLogger('HealthcareMonitorFunctional')
-    logger.setLevel(logging.INFO)
+    logger.setLevel(log_level)
     
     # Remove existing handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
     # File handler
-    log_file = log_dir / f"healthcare_monitor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_filename = logging_config.get('file', f"healthcare_monitor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    log_file = log_dir / log_filename
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(log_level)
     
     # Console handler  
     console_handler = logging.StreamHandler()

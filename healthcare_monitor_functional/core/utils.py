@@ -12,21 +12,26 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
 
-def calculate_runtime_stats(start_time: float) -> Dict[str, float]:
+def calculate_runtime_stats(start_time: float, frame_count: int = 0) -> Dict[str, float]:
     """
     Calculate runtime statistics
     
     Args:
         start_time: Start time timestamp
+        frame_count: Total frames processed (optional)
         
     Returns:
         Runtime statistics dictionary
     """
     runtime = time.time() - start_time
+    avg_fps = frame_count / max(runtime, 1) if frame_count > 0 else 0.0
+    
     return {
         'runtime': runtime,
         'runtime_minutes': runtime / 60.0,
-        'runtime_hours': runtime / 3600.0
+        'runtime_hours': runtime / 3600.0,
+        'frame_count': frame_count,
+        'avg_fps': avg_fps
     }
 
 

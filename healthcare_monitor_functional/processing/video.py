@@ -32,7 +32,7 @@ def detect_objects_yolo(frame: np.ndarray, model: Any, confidence_threshold: flo
         results = model(frame, conf=confidence_threshold, verbose=False)
         detections = []
         
-        if results and len(results) > 0:
+        if results is not None and len(results) > 0:
             result = results[0]
             
             if hasattr(result, 'boxes') and result.boxes is not None:

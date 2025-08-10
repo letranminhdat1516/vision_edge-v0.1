@@ -46,22 +46,31 @@ def initialize_camera(camera_config: Dict[str, Any]) -> Tuple[Optional[cv2.Video
                 raise ValueError("RTSP URL not provided in configuration")
             camera_source = rtsp_url
             
+            # Initialize capture with specific backend for RTSP
+            cap = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
+            
         elif camera_config.get('type') == 'webcam':
             camera_source = camera_config.get('device_index', 0)
+            cap = cv2.VideoCapture(camera_source)
             
         else:
             # Try RTSP first, then fallback to webcam
             rtsp_url = camera_config.get('rtsp_url', '')
             if rtsp_url:
                 camera_source = rtsp_url
+                cap = cv2.VideoCapture(camera_source, cv2.CAP_FFMPEG)
             else:
                 camera_source = 0  # Default webcam
-        
-        # Initialize capture
-        cap = cv2.VideoCapture(camera_source)
+                cap = cv2.VideoCapture(camera_source)
         
         if not cap.isOpened():
+            logging.error(f"Failed to open camera source: {camera_source}")
             raise RuntimeError(f"Failed to open camera source: {camera_source}")
+        
+        # Set buffer size for RTSP to reduce latency
+        if camera_config.get('type') == 'rtsp':
+            buffer_size = camera_config.get('buffer_size', 1)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
         
         # Set camera properties
         width = camera_config.get('width', 640)
