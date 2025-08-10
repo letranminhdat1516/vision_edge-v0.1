@@ -1,0 +1,60 @@
+{
+  "camera": {
+    "type": "rtsp",
+    "rtsp_url": "rtsp://admin:password@192.168.1.100:554/cam/realmonitor?channel=1&subtype=0",
+    "width": 640,
+    "height": 480,
+    "fps": 15,
+    "device_index": 0
+  },
+  "detection": {
+    "yolo_model": "yolov8s.pt",
+    "confidence_threshold": 0.5,
+    "fall_threshold": 0.7,
+    "seizure_threshold": 0.7,
+    "confirmation_frames": 5,
+    "max_history": 10
+  },
+  "alerts": {
+    "alert_cooldown": 30,
+    "max_history": 1000,
+    "email_notifications": false,
+    "webhook_notifications": false,
+    "log_notifications": true,
+    "email": {
+      "enabled": false,
+      "smtp_server": "smtp.gmail.com",
+      "smtp_port": 587,
+      "username": "your_email@gmail.com",
+      "password": "your_password",
+      "recipients": ["admin@company.com"]
+    },
+    "webhook": {
+      "enabled": false,
+      "url": "https://your-webhook-url.com/alerts",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer your_token"
+      },
+      "timeout": 10
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "healthcare_monitor.log",
+    "max_file_size": "10MB",
+    "backup_count": 5,
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  },
+  "display": {
+    "show_keypoints": true,
+    "show_statistics": true,
+    "show_bounding_boxes": true,
+    "show_motion_indicators": true
+  },
+  "performance": {
+    "frame_skip": 0,
+    "processing_threads": 1,
+    "max_fps": 30
+  }
+}

@@ -1,3 +1,0 @@
-"""
-Vision Edge Source Package
-"""
