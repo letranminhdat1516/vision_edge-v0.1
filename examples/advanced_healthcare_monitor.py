@@ -102,10 +102,21 @@ class AdvancedHealthcareMonitor:
         self.show_statistics = show_statistics
         self.show_dual_windows = True  # Always show both windows
         
-        # WebSocket configuration
+        # WebSocket configuration for mobile alerts
         self.websocket_url = websocket_url
         self.enable_streaming = enable_streaming
         self.websocket = None
+        
+        # Initialize WebSocket server for mobile alerts
+        if enable_streaming:
+            try:
+                from healthcare_websocket_production import HealthcareWebSocketServer
+                self.mobile_server = HealthcareWebSocketServer(host="0.0.0.0", port=9999)
+                self.mobile_server_thread = self.mobile_server.run_server_in_thread()
+                print("📱 Mobile WebSocket server started on ws://0.0.0.0:9999")
+            except Exception as e:
+                print(f"⚠️ Mobile WebSocket server failed to start: {e}")
+                self.mobile_server = None
         
         # API Integration configuration - DISABLED
         self.enable_api_integration = False  # Tắt API integration
@@ -259,6 +270,10 @@ class AdvancedHealthcareMonitor:
                 
                 self.logger.info(f"🚨 Alert image saved: {filename}")
                 print(f"🚨 Alert image saved: {filename}")
+                
+                # Send alert to mobile clients
+                self.send_mobile_alert(alert_type, confidence, filename)
+                
                 return True
             else:
                 self.logger.error(f"Failed to save alert image: {filename}")
@@ -268,6 +283,91 @@ class AdvancedHealthcareMonitor:
             self.logger.error(f"Error saving alert image: {e}")
             print(f"❌ Error saving alert image: {e}")
             return False
+    
+    def send_mobile_alert(self, alert_type: str, confidence: float, image_filename: str):
+        """
+        Send alert to mobile clients via WebSocket
+        
+        Args:
+            alert_type: Type of alert (fall_detected, seizure_detected, fall_warning, seizure_warning, etc.)
+            confidence: Detection confidence
+            image_filename: Saved alert image filename
+        """
+        if not hasattr(self, 'mobile_server') or self.mobile_server is None:
+            return
+        
+        try:
+            # Construct image URL (assumes web server serving alerts folder)
+            base_url = "http://localhost:9999/alerts"
+            image_url = f"{base_url}/{image_filename}"
+            
+            # Determine action and status based on alert_type and confidence
+            if "fall" in alert_type:
+                detection_type = "fall"
+                if confidence >= 0.2:  # Lowered from 0.8 - Fall detection confidence is typically lower
+                    status = "danger"
+                    action = "fall_detected"
+                    log_level = "CRITICAL"
+                    log_message = f"🚨 CRITICAL ALERT: fall detected!"
+                elif confidence >= 0.15:  # Medium confidence  
+                    status = "warning"
+                    action = "fall_warning"
+                    log_level = "WARNING"
+                    log_message = f"⚠️ WARNING ALERT: possible fall detected (medium confidence)"
+                else:  # Low confidence
+                    status = "normal"
+                    action = "normal_movement"
+                    log_level = "INFO"
+                    log_message = f"👤 Normal movement detected - monitoring for fall patterns"
+                    
+            elif "seizure" in alert_type:
+                detection_type = "seizure"
+                if confidence >= 0.7:  # High confidence for seizures
+                    status = "danger"
+                    action = "seizure_detected"
+                    log_level = "CRITICAL"
+                    log_message = f"🚨 CRITICAL ALERT: seizure detected!"
+                elif confidence >= 0.4:  # Medium confidence  
+                    status = "warning"
+                    action = "seizure_warning"
+                    log_level = "WARNING"
+                    log_message = f"⚠️ WARNING ALERT: possible seizure detected (medium confidence)"
+                else:  # Low confidence
+                    status = "normal"
+                    action = "normal_brain_activity"
+                    log_level = "INFO"
+                    log_message = f"🧠 Normal brain activity detected - monitoring for seizure patterns"
+            else:
+                # Default fallback
+                status = "normal"
+                action = "normal_activity"
+                log_level = "INFO"
+                log_message = f"✅ Normal status - {alert_type.replace('_', ' ')} monitoring active"
+            
+            # Log the appropriate message
+            if log_level == "CRITICAL":
+                self.logger.critical(log_message)
+            elif log_level == "WARNING":
+                self.logger.warning(log_message)
+            else:
+                self.logger.info(log_message)
+            
+            # Create alert data matching exact format requested: imageUrl, status, action, time
+            alert_data = {
+                "imageUrl": image_url,
+                "status": status,
+                "action": action,
+                "time": int(time.time())  # timestamp format
+            }
+            
+            # Send to mobile clients
+            self.mobile_server.send_alert_sync(alert_data)
+            
+            self.logger.info(f"📱 Mobile alert sent: {action} (confidence: {confidence:.2f}, status: {status})")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to send mobile alert: {e}")
+            print(f"❌ Mobile alert failed: {e}")
     
     def calculate_motion_level(self, person_detections: list) -> float:
         """

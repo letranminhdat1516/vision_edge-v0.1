@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple WebSocket Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .log { background: #f0f0f0; padding: 10px; height: 400px; overflow-y: auto; margin: 10px 0; }
+        button { padding: 10px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Simple WebSocket Test</h1>
+    <button onclick="connect()">Connect</button>
+    <button onclick="disconnect()">Disconnect</button>
+    <button onclick="clearLog()">Clear Log</button>
+    
+    <div id="log" class="log"></div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+        
+        function log(msg) {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${msg}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function connect() {
+            if (isConnected) {
+                log('Already connected!');
+                return;
+            }
+            
+            log('🔄 Connecting to ws://localhost:9999...');
+            
+            ws = new WebSocket('ws://localhost:9999');
+            
+            ws.onopen = function() {
+                isConnected = true;
+                log('✅ Connected successfully!');
+            };
+            
+            ws.onmessage = function(event) {
+                log('📨 Message: ' + event.data);
+            };
+            
+            ws.onclose = function(event) {
+                isConnected = false;
+                log(`❌ Disconnected. Code: ${event.code}, Reason: ${event.reason}`);
+            };
+            
+            ws.onerror = function(error) {
+                log('🚨 Error: ' + error);
+            };
+        }
+        
+        function disconnect() {
+            if (ws && isConnected) {
+                ws.close();
+                log('🔌 Manual disconnect');
+            } else {
+                log('Not connected');
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+        
+        log('🚀 Simple WebSocket Test ready');
+    </script>
+</body>
+</html>
