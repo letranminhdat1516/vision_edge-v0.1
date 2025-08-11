@@ -263,10 +263,18 @@ logs/
 
 # AI Models
 models/
+ai_models/
+*/ai_models/
+**/ai_models/
 *.pt
 *.pth
 *.onnx
 *.pb
+*.tflite
+*.h5
+*.weights
+*.model
+*.bin
 
 # Video files
 videos/
@@ -274,6 +282,53 @@ videos/
 *.avi
 *.mov
 *.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+
+# Healthcare Monitor Specific
+# ==========================
+# Alert images and screenshots
+alerts/
+*/alerts/
+**/alerts/
+screenshots/
+*/screenshots/
+**/screenshots/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.gif
+*.webp
+
+# Data directories
+data/
+*/data/
+**/data/
+datasets/
+*/datasets/
+**/datasets/
+saved_frames/
+*/saved_frames/
+**/saved_frames/
+fall_dataset/
+Images/
+repos_clone/
+
+# Configuration files with sensitive data
+config.json
+vision_edge_config.json
+camera_config.json
+*.config
+
+# Large text files and CSVs
+*.csv
+*.tsv
+!requirements.txt
+!README.txt
 
 # Temporary files
 temp/
