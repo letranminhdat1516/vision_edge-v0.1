@@ -1,0 +1,140 @@
+# =====================================================
+# VISION EDGE HEALTHCARE - DOCKER COMPOSE
+# PostgreSQL + Redis + FastAPI Application
+# =====================================================
+
+version: '3.8'
+
+services:
+  # =====================================================
+  # POSTGRESQL DATABASE
+  # =====================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: vision_edge_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vision_edge_healthcare
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: vision_edge_2025
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/postgresql_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    networks:
+      - vision_edge_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vision_edge_healthcare"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================================================
+  # REDIS CACHE & STREAMING
+  # =====================================================
+  redis:
+    image: redis:7-alpine
+    container_name: vision_edge_redis
+    restart: unless-stopped
+    command: redis-server --requirepass vision_edge_redis_pass --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - vision_edge_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "vision_edge_redis_pass", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # =====================================================
+  # FASTAPI APPLICATION
+  # =====================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vision_edge_api
+    restart: unless-stopped
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=vision_edge_healthcare
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=vision_edge_2025
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=vision_edge_redis_2025
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vision_edge_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================================================
+  # OPTIONAL: PGADMIN FOR DATABASE MANAGEMENT
+  # =====================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: vision_edge_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@visionedge.com
+      PGADMIN_DEFAULT_PASSWORD: admin2025
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - vision_edge_network
+
+  # =====================================================
+  # OPTIONAL: REDIS COMMANDER FOR REDIS MANAGEMENT
+  # =====================================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: vision_edge_redis_commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:vision_edge_redis_pass
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - vision_edge_network
+
+# =====================================================
+# NETWORKS
+# =====================================================
+networks:
+  vision_edge_network:
+    driver: bridge
+
+# =====================================================
+# VOLUMES
+# =====================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local

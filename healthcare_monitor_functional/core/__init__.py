@@ -1,3 +1,0 @@
-"""
-Core healthcare monitoring utilities
-"""
