@@ -1,0 +1,1 @@
+# Entity/model for Snapshot

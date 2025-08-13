@@ -102,7 +102,9 @@ class SimpleFallDetector:
                         
                         if fall_result:
                             result.update(fall_result)
-                            log.warning(f"🚨 Fall detected! Confidence: {result['confidence']:.2f}")
+                            # REMOVED: log.warning(f"🚨 Fall detected! Confidence: {result['confidence']:.2f}")
+                            # Only log once per detection event, not every frame
+                            log.debug(f"Fall analysis result: {result['confidence']:.2f}")
                 except (ValueError, TypeError, KeyError) as time_error:
                     log.debug(f"Timestamp processing error: {time_error}")
                 

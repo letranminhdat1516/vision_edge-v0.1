@@ -1,332 +1,326 @@
--- =====================================================
--- VISION EDGE HEALTHCARE - POSTGRESQL SCHEMA
--- Multi-module system: Vision Edge + AI Analyst + AI Consumer
--- =====================================================
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pg_trgm";
-
--- =====================================================
--- CORE TABLES
--- =====================================================
-
--- Users table
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email VARCHAR(255) UNIQUE NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    phone VARCHAR(20),
-    avatar_url TEXT,
-    role VARCHAR(50) DEFAULT 'patient',
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.ai_configurations (
+  config_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  patient_profile_context jsonb,
+  behavior_rules jsonb,
+  model_settings jsonb,
+  detection_thresholds jsonb,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by uuid NOT NULL,
+  CONSTRAINT ai_configurations_pkey PRIMARY KEY (config_id),
+  CONSTRAINT ai_configurations_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(user_id),
+  CONSTRAINT ai_configurations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
-
--- Devices table  
-CREATE TABLE devices (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    device_name VARCHAR(255) NOT NULL,
-    device_type VARCHAR(100) NOT NULL,
-    mac_address VARCHAR(17) UNIQUE,
-    ip_address INET,
-    is_active BOOLEAN DEFAULT true,
-    last_seen TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.ai_processing_logs (
+  log_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  snapshot_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  processing_stage USER-DEFINED NOT NULL,
+  input_data jsonb,
+  output_data jsonb,
+  processing_time_ms integer DEFAULT 0,
+  result_status USER-DEFINED NOT NULL,
+  error_message text,
+  model_version character varying,
+  processed_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT ai_processing_logs_pkey PRIMARY KEY (log_id),
+  CONSTRAINT ai_processing_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT ai_processing_logs_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.snapshots(snapshot_id)
 );
-
--- =====================================================
--- DETECTION & AI PROCESSING
--- =====================================================
-
--- Detection events (from AI Analyst module)
-CREATE TABLE detection_events (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    session_id VARCHAR(255) NOT NULL,
-    image_url TEXT NOT NULL,
-    status VARCHAR(50) NOT NULL, -- Normal, Warning, Danger
-    action VARCHAR(255),
-    location JSONB, -- {x: number, y: number, room: string}
-    confidence_score DECIMAL(5,4),
-    ai_metadata JSONB, -- AI processing details
-    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.alerts (
+  alert_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  event_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  alert_type USER-DEFINED NOT NULL,
+  severity USER-DEFINED NOT NULL DEFAULT 'medium'::severity_enum,
+  alert_message text NOT NULL,
+  alert_data jsonb,
+  status USER-DEFINED NOT NULL DEFAULT 'active'::alert_status_enum,
+  acknowledged_by uuid,
+  acknowledged_at timestamp with time zone,
+  resolution_notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at timestamp with time zone,
+  CONSTRAINT alerts_pkey PRIMARY KEY (alert_id),
+  CONSTRAINT alerts_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.event_detections(event_id),
+  CONSTRAINT alerts_acknowledged_by_fkey FOREIGN KEY (acknowledged_by) REFERENCES public.users(user_id),
+  CONSTRAINT alerts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
-
--- Daily activity summary (aggregated by AI Consumer)
-CREATE TABLE daily_activity_summary (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    date DATE NOT NULL,
-    total_detections INTEGER DEFAULT 0,
-    normal_count INTEGER DEFAULT 0,
-    warning_count INTEGER DEFAULT 0,
-    danger_count INTEGER DEFAULT 0,
-    status VARCHAR(50) DEFAULT 'Normal', -- Overall day status
-    activity_score DECIMAL(5,2),
-    summary_data JSONB, -- Detailed metrics
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(user_id, date)
+CREATE TABLE public.camera_settings (
+  setting_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  camera_id uuid NOT NULL,
+  setting_name character varying NOT NULL,
+  setting_value text NOT NULL,
+  data_type USER-DEFINED NOT NULL DEFAULT 'string'::data_type_enum,
+  description text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT camera_settings_pkey PRIMARY KEY (setting_id),
+  CONSTRAINT camera_settings_camera_id_fkey FOREIGN KEY (camera_id) REFERENCES public.cameras(camera_id)
 );
-
--- AI analysis and insights (from AI Consumer module)
-CREATE TABLE ai_analysis (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    analysis_period VARCHAR(50) NOT NULL, -- daily, weekly, monthly
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    total_detection_sessions INTEGER DEFAULT 0,
-    progress_compared_to_last_week DECIMAL(5,2),
-    ai_summary TEXT,
-    recommendations JSONB,
-    health_metrics JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.cameras (
+  camera_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  room_id uuid NOT NULL,
+  camera_name character varying NOT NULL,
+  camera_type USER-DEFINED NOT NULL DEFAULT 'ip'::camera_type_enum,
+  ip_address character varying,
+  port integer DEFAULT 80,
+  rtsp_url character varying,
+  username character varying,
+  password character varying,
+  location_in_room character varying,
+  resolution character varying DEFAULT '1920x1080'::character varying,
+  fps integer DEFAULT 30,
+  status USER-DEFINED NOT NULL DEFAULT 'active'::camera_status_enum,
+  last_ping timestamp with time zone,
+  is_online boolean NOT NULL DEFAULT true,
+  last_heartbeat_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT cameras_pkey PRIMARY KEY (camera_id),
+  CONSTRAINT cameras_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(room_id)
 );
-
--- =====================================================
--- REAL-TIME & MONITORING
--- =====================================================
-
--- Active sessions (for real-time tracking)
-CREATE TABLE active_sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    session_id VARCHAR(255) UNIQUE NOT NULL,
-    device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
-    status VARCHAR(50) DEFAULT 'active',
-    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    metadata JSONB
+CREATE TABLE public.caregiver_patient_assignments (
+  assignment_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  caregiver_id uuid NOT NULL,
+  patient_id uuid NOT NULL,
+  assigned_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  unassigned_at timestamp with time zone,
+  is_active boolean NOT NULL DEFAULT true,
+  assigned_by uuid,
+  assignment_notes text,
+  CONSTRAINT caregiver_patient_assignments_pkey PRIMARY KEY (assignment_id)
 );
-
--- Real-time alerts
-CREATE TABLE alerts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    alert_type VARCHAR(100) NOT NULL,
-    severity VARCHAR(20) NOT NULL, -- low, medium, high, critical
-    message TEXT NOT NULL,
-    metadata JSONB,
-    is_read BOOLEAN DEFAULT false,
-    is_resolved BOOLEAN DEFAULT false,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.customer_requests (
+  request_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  type USER-DEFINED NOT NULL,
+  status USER-DEFINED NOT NULL,
+  title text,
+  description text,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT customer_requests_pkey PRIMARY KEY (request_id),
+  CONSTRAINT customer_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
-
--- System logs for debugging
-CREATE TABLE system_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    module VARCHAR(100) NOT NULL, -- vision_edge, ai_analyst, ai_consumer
-    level VARCHAR(20) NOT NULL, -- info, warning, error
-    message TEXT NOT NULL,
-    context JSONB,
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.daily_summaries (
+  summary_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  summary_date date NOT NULL,
+  activity_summary jsonb,
+  habit_compliance jsonb,
+  event_summary jsonb,
+  behavior_patterns jsonb,
+  total_snapshots integer DEFAULT 0,
+  total_events integer DEFAULT 0,
+  total_alerts integer DEFAULT 0,
+  sleep_quality_score numeric DEFAULT 0.00,
+  activity_level_score numeric DEFAULT 0.00,
+  overall_status USER-DEFINED NOT NULL DEFAULT 'good'::overall_status_enum,
+  notes text,
+  generated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT daily_summaries_pkey PRIMARY KEY (summary_id),
+  CONSTRAINT daily_summaries_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
-
--- =====================================================
--- INDEXES FOR PERFORMANCE
--- =====================================================
-
--- Detection events indexes
-CREATE INDEX idx_detection_events_user_created ON detection_events(user_id, created_at DESC);
-CREATE INDEX idx_detection_events_session ON detection_events(session_id);
-CREATE INDEX idx_detection_events_status ON detection_events(status);
-CREATE INDEX idx_detection_events_processed_at ON detection_events(processed_at DESC);
-
--- Daily activity indexes
-CREATE INDEX idx_daily_activity_user_date ON daily_activity_summary(user_id, date DESC);
-CREATE INDEX idx_daily_activity_date ON daily_activity_summary(date DESC);
-
--- AI analysis indexes
-CREATE INDEX idx_ai_analysis_user_period ON ai_analysis(user_id, analysis_period, created_at DESC);
-
--- Active sessions indexes
-CREATE INDEX idx_active_sessions_user ON active_sessions(user_id);
-CREATE INDEX idx_active_sessions_session_id ON active_sessions(session_id);
-CREATE INDEX idx_active_sessions_last_activity ON active_sessions(last_activity DESC);
-
--- Alerts indexes
-CREATE INDEX idx_alerts_user_created ON alerts(user_id, created_at DESC);
-CREATE INDEX idx_alerts_unread ON alerts(user_id, is_read) WHERE is_read = false;
-
--- System logs indexes
-CREATE INDEX idx_system_logs_module_created ON system_logs(module, created_at DESC);
-CREATE INDEX idx_system_logs_level ON system_logs(level, created_at DESC);
-
--- =====================================================
--- FUNCTIONS FOR API
--- =====================================================
-
--- Get real-time detection events
-CREATE OR REPLACE FUNCTION get_detection_events(
-    p_user_id UUID,
-    p_limit INTEGER DEFAULT 50,
-    p_offset INTEGER DEFAULT 0
-) RETURNS TABLE (
-    id UUID,
-    session_id VARCHAR,
-    image_url TEXT,
-    status VARCHAR,
-    action VARCHAR,
-    location JSONB,
-    confidence_score DECIMAL,
-    created_at TIMESTAMP WITH TIME ZONE
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        de.id,
-        de.session_id,
-        de.image_url,
-        de.status,
-        de.action,
-        de.location,
-        de.confidence_score,
-        de.created_at
-    FROM detection_events de
-    WHERE de.user_id = p_user_id
-    ORDER BY de.created_at DESC
-    LIMIT p_limit OFFSET p_offset;
-END;
-$$ LANGUAGE plpgsql;
-
--- Get daily activity log
-CREATE OR REPLACE FUNCTION get_daily_activity(
-    p_user_id UUID,
-    p_start_date DATE,
-    p_end_date DATE
-) RETURNS TABLE (
-    date DATE,
-    status VARCHAR,
-    total_detections INTEGER,
-    activity_score DECIMAL
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        das.date,
-        das.status,
-        das.total_detections,
-        das.activity_score
-    FROM daily_activity_summary das
-    WHERE das.user_id = p_user_id
-    AND das.date BETWEEN p_start_date AND p_end_date
-    ORDER BY das.date DESC;
-END;
-$$ LANGUAGE plpgsql;
-
--- Get AI summary
-CREATE OR REPLACE FUNCTION get_ai_summary(
-    p_user_id UUID,
-    p_period_days INTEGER DEFAULT 7
-) RETURNS TABLE (
-    total_detection_sessions INTEGER,
-    progress_compared_to_last_week DECIMAL,
-    ai_summary TEXT,
-    daily_activity JSONB
-) AS $$
-DECLARE
-    v_end_date DATE := CURRENT_DATE;
-    v_start_date DATE := CURRENT_DATE - INTERVAL '1 day' * p_period_days;
-    v_analysis ai_analysis%ROWTYPE;
-    v_daily_data JSONB;
-BEGIN
-    -- Get latest AI analysis
-    SELECT * INTO v_analysis
-    FROM ai_analysis aa
-    WHERE aa.user_id = p_user_id
-    AND aa.analysis_period = 'weekly'
-    ORDER BY aa.created_at DESC
-    LIMIT 1;
-    
-    -- Get daily activity data
-    SELECT jsonb_agg(
-        jsonb_build_object(
-            'date', das.date,
-            'status', das.status
-        ) ORDER BY das.date
-    ) INTO v_daily_data
-    FROM daily_activity_summary das
-    WHERE das.user_id = p_user_id
-    AND das.date BETWEEN v_start_date AND v_end_date;
-    
-    RETURN QUERY
-    SELECT 
-        COALESCE(v_analysis.total_detection_sessions, 0),
-        COALESCE(v_analysis.progress_compared_to_last_week, 0.0),
-        COALESCE(v_analysis.ai_summary, 'No analysis available'),
-        COALESCE(v_daily_data, '[]'::jsonb);
-END;
-$$ LANGUAGE plpgsql;
-
--- Insert detection event (from AI Analyst)
-CREATE OR REPLACE FUNCTION insert_detection_event(
-    p_user_id UUID,
-    p_session_id VARCHAR,
-    p_image_url TEXT,
-    p_status VARCHAR,
-    p_action VARCHAR,
-    p_location JSONB,
-    p_confidence_score DECIMAL DEFAULT NULL,
-    p_ai_metadata JSONB DEFAULT NULL
-) RETURNS UUID AS $$
-DECLARE
-    v_event_id UUID;
-BEGIN
-    INSERT INTO detection_events (
-        user_id, session_id, image_url, status, action, 
-        location, confidence_score, ai_metadata
-    ) VALUES (
-        p_user_id, p_session_id, p_image_url, p_status, p_action,
-        p_location, p_confidence_score, p_ai_metadata
-    ) RETURNING id INTO v_event_id;
-    
-    -- Update active session
-    UPDATE active_sessions 
-    SET last_activity = NOW()
-    WHERE session_id = p_session_id;
-    
-    RETURN v_event_id;
-END;
-$$ LANGUAGE plpgsql;
-
--- =====================================================
--- TRIGGERS FOR AUTO-UPDATES
--- =====================================================
-
--- Update timestamps
-CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER update_users_updated_at
-    BEFORE UPDATE ON users
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
--- =====================================================
--- SAMPLE DATA FOR TESTING
--- =====================================================
-
--- Insert test user
-INSERT INTO users (id, email, name, role) VALUES 
-('550e8400-e29b-41d4-a716-446655440000', 'patient@visionedge.com', 'Test Patient', 'patient'),
-('550e8400-e29b-41d4-a716-446655440001', 'doctor@visionedge.com', 'Dr. Smith', 'doctor');
-
--- Insert test device
-INSERT INTO devices (user_id, device_name, device_type) VALUES 
-('550e8400-e29b-41d4-a716-446655440000', 'Vision Camera 1', 'camera');
-
--- Insert sample detection events
-INSERT INTO detection_events (user_id, session_id, image_url, status, action, location) VALUES 
-('550e8400-e29b-41d4-a716-446655440000', 'session_001', '/images/detection_001.jpg', 'Normal', 'walking', '{"x": 100, "y": 200, "room": "living_room"}'),
-('550e8400-e29b-41d4-a716-446655440000', 'session_001', '/images/detection_002.jpg', 'Warning', 'sitting_long', '{"x": 150, "y": 220, "room": "living_room"}');
-
-COMMIT;
+CREATE TABLE public.emergency_contacts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  name text NOT NULL,
+  relation text NOT NULL,
+  phone text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT emergency_contacts_pkey PRIMARY KEY (id),
+  CONSTRAINT emergency_contacts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.event_detections (
+  event_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  snapshot_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  camera_id uuid NOT NULL,
+  room_id uuid NOT NULL,
+  event_type USER-DEFINED NOT NULL,
+  event_description text,
+  detection_data jsonb,
+  ai_analysis_result jsonb,
+  confidence_score numeric DEFAULT 0.00,
+  bounding_boxes jsonb,
+  status USER-DEFINED NOT NULL DEFAULT 'detected'::event_status_enum,
+  context_data jsonb,
+  detected_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  verified_at timestamp with time zone,
+  verified_by uuid,
+  acknowledged_at timestamp with time zone,
+  acknowledged_by uuid,
+  dismissed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT event_detections_pkey PRIMARY KEY (event_id),
+  CONSTRAINT event_detections_camera_id_fkey FOREIGN KEY (camera_id) REFERENCES public.cameras(camera_id),
+  CONSTRAINT event_detections_verified_by_fkey FOREIGN KEY (verified_by) REFERENCES public.users(user_id),
+  CONSTRAINT event_detections_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT event_detections_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(room_id),
+  CONSTRAINT event_detections_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.snapshots(snapshot_id)
+);
+CREATE TABLE public.notifications (
+  notification_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  alert_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  notification_type USER-DEFINED NOT NULL,
+  message text NOT NULL,
+  delivery_data jsonb,
+  status USER-DEFINED NOT NULL DEFAULT 'pending'::notif_status_enum,
+  sent_at timestamp with time zone,
+  delivered_at timestamp with time zone,
+  retry_count integer DEFAULT 0,
+  error_message text,
+  CONSTRAINT notifications_pkey PRIMARY KEY (notification_id),
+  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT notifications_alert_id_fkey FOREIGN KEY (alert_id) REFERENCES public.alerts(alert_id)
+);
+CREATE TABLE public.patient_habits (
+  habit_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  habit_type USER-DEFINED NOT NULL,
+  habit_name character varying NOT NULL,
+  description text,
+  typical_time time without time zone,
+  duration_minutes integer DEFAULT 30,
+  frequency USER-DEFINED NOT NULL DEFAULT 'daily'::frequency_enum,
+  days_of_week jsonb,
+  location character varying,
+  notes text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT patient_habits_pkey PRIMARY KEY (habit_id),
+  CONSTRAINT patient_habits_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.patient_medical_records (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  conditions jsonb NOT NULL DEFAULT '[]'::jsonb,
+  medications jsonb NOT NULL DEFAULT '[]'::jsonb,
+  history jsonb NOT NULL DEFAULT '[]'::jsonb,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT patient_medical_records_pkey PRIMARY KEY (id),
+  CONSTRAINT patient_medical_records_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.patient_supplements (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  name text,
+  dob date,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT patient_supplements_pkey PRIMARY KEY (id),
+  CONSTRAINT patient_supplements_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.rooms (
+  room_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  room_number character varying NOT NULL,
+  room_name character varying NOT NULL,
+  room_type USER-DEFINED NOT NULL DEFAULT 'single'::room_type_enum,
+  floor_number character varying,
+  building character varying,
+  description text,
+  max_capacity integer DEFAULT 1,
+  room_settings jsonb,
+  status USER-DEFINED NOT NULL DEFAULT 'available'::room_status_enum,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT rooms_pkey PRIMARY KEY (room_id)
+);
+CREATE TABLE public.snapshots (
+  snapshot_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  camera_id uuid NOT NULL,
+  room_id uuid NOT NULL,
+  user_id uuid,
+  image_path character varying NOT NULL,
+  cloud_url character varying,
+  metadata jsonb,
+  capture_type USER-DEFINED NOT NULL DEFAULT 'scheduled'::capture_type_enum,
+  captured_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  processed_at timestamp with time zone,
+  is_processed boolean NOT NULL DEFAULT false,
+  CONSTRAINT snapshots_pkey PRIMARY KEY (snapshot_id),
+  CONSTRAINT snapshots_camera_id_fkey FOREIGN KEY (camera_id) REFERENCES public.cameras(camera_id),
+  CONSTRAINT snapshots_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(room_id),
+  CONSTRAINT snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.system_settings (
+  setting_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  setting_key character varying NOT NULL,
+  setting_value text NOT NULL,
+  description text,
+  data_type USER-DEFINED NOT NULL DEFAULT 'string'::data_type_enum,
+  category character varying DEFAULT 'general'::character varying,
+  is_encrypted boolean DEFAULT false,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by uuid NOT NULL,
+  CONSTRAINT system_settings_pkey PRIMARY KEY (setting_id),
+  CONSTRAINT system_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.thread_memory (
+  thread_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  conversation_history jsonb,
+  context_cache jsonb,
+  last_updated timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at timestamp with time zone,
+  is_active boolean NOT NULL DEFAULT true,
+  CONSTRAINT thread_memory_pkey PRIMARY KEY (thread_id),
+  CONSTRAINT thread_memory_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.user_room_assignments (
+  assignment_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  room_id uuid NOT NULL,
+  bed_number character varying,
+  assigned_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  unassigned_at timestamp with time zone,
+  is_active boolean NOT NULL DEFAULT true,
+  assigned_by uuid NOT NULL,
+  assignment_notes text,
+  CONSTRAINT user_room_assignments_pkey PRIMARY KEY (assignment_id),
+  CONSTRAINT user_room_assignments_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(user_id),
+  CONSTRAINT user_room_assignments_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(room_id),
+  CONSTRAINT user_room_assignments_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.user_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  key character varying NOT NULL,
+  value text NOT NULL,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by uuid,
+  CONSTRAINT user_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT user_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(user_id),
+  CONSTRAINT user_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+);
+CREATE TABLE public.users (
+  user_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  username character varying NOT NULL,
+  email character varying NOT NULL,
+  password_hash character varying NOT NULL,
+  full_name character varying NOT NULL,
+  role USER-DEFINED NOT NULL DEFAULT 'customer'::role_enum,
+  date_of_birth date,
+  gender USER-DEFINED,
+  phone_number character varying,
+  emergency_contact character varying,
+  medical_conditions text,
+  mobility_limitations text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  otp_code text,
+  otp_expires_at date,
+  CONSTRAINT users_pkey PRIMARY KEY (user_id)
+);
