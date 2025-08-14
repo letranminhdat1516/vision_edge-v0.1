@@ -165,14 +165,14 @@ fall_sequence_*.png
 models/fall_detection/fall-detection/fall_dataset/
 models/fall_detection/fall-detection/Images/
 models/fall_detection/fall-detection/tests/
-*.h5
-*.pkl
-*.joblib
+# Allow all model files including h5, pkl, joblib
+# *.h5 - REMOVED
+# *.pkl - REMOVED  
+# *.joblib - REMOVED
 
-# Allow models folder but exclude large files
+# Allow models folder and ALL contents
 !models/
-models/**/*.bin
-models/**/*.safetensors
+!models/**/*
 
 # IDE files
 .vscode/
@@ -191,13 +191,12 @@ logs/*.log
 examples/logs/*.log
 
 # Allow essential model files but exclude very large ones
-# Comment out general *.pt rule to allow PyTorch models
-# *.pt
-# Keep specific exclusions for very large model files
-# Only exclude models that are too large for git (>100MB)
-large_models/
-*.bin
-*.safetensors
+# Allow all PyTorch models for healthcare system
+# *.pt - REMOVED to allow .pt files
+# Keep specific exclusions for very large model files only if needed
+# large_models/
+# *.bin - REMOVED to allow .bin files  
+# *.safetensors - REMOVED to allow .safetensors files
 sdist/
 var/
 wheels/
@@ -272,18 +271,22 @@ venv.bak/
 logs/
 *.log
 
-# AI Models - Allow models folder but exclude very large files
+# AI Models - ALLOW ALL MODEL FILES FOR HEALTHCARE SYSTEM
 !models/
-!models/**/*.pt
-!models/**/*.pth
-!models/**/*.onnx
-!models/**/*.pb
-!models/**/*.tflite
-!models/**/*.weights
-!models/**/*.model
-# Still exclude very large model files
-models/**/*.bin
-models/**/*.safetensors
+!models/**/*
+# Allow all model file types
+!**/*.pt
+!**/*.pth
+!**/*.onnx
+!**/*.pb
+!**/*.tflite
+!**/*.h5
+!**/*.weights
+!**/*.model
+!**/*.bin
+!**/*.safetensors
+!**/*.pkl
+!**/*.joblib
 
 # Video files
 videos/
