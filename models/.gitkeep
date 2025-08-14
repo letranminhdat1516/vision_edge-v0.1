@@ -1,0 +1,5 @@
+# This file ensures the models directory is tracked by Git
+# Models folder contains AI models for healthcare detection:
+# - VSViG/ - Seizure detection models
+# - Fall detection models
+# - YOLO models for object detection

@@ -161,13 +161,18 @@ final_scenario_*.png
 fall_sequence_*.jpg
 fall_sequence_*.png
 
-# Large datasets and models (keep only essential AI models)
+# Large datasets (keep only essential AI models)
 models/fall_detection/fall-detection/fall_dataset/
 models/fall_detection/fall-detection/Images/
 models/fall_detection/fall-detection/tests/
 *.h5
 *.pkl
 *.joblib
+
+# Allow models folder but exclude large files
+!models/
+models/**/*.bin
+models/**/*.safetensors
 
 # IDE files
 .vscode/
@@ -185,8 +190,14 @@ Thumbs.db
 logs/*.log
 examples/logs/*.log
 
-# Large model files (should be downloaded separately)
-*.pt
+# Allow essential model files but exclude very large ones
+# Comment out general *.pt rule to allow PyTorch models
+# *.pt
+# Keep specific exclusions for very large model files
+# Only exclude models that are too large for git (>100MB)
+large_models/
+*.bin
+*.safetensors
 sdist/
 var/
 wheels/
@@ -261,20 +272,18 @@ venv.bak/
 logs/
 *.log
 
-# AI Models
-models/
-ai_models/
-*/ai_models/
-**/ai_models/
-*.pt
-*.pth
-*.onnx
-*.pb
-*.tflite
-*.h5
-*.weights
-*.model
-*.bin
+# AI Models - Allow models folder but exclude very large files
+!models/
+!models/**/*.pt
+!models/**/*.pth
+!models/**/*.onnx
+!models/**/*.pb
+!models/**/*.tflite
+!models/**/*.weights
+!models/**/*.model
+# Still exclude very large model files
+models/**/*.bin
+models/**/*.safetensors
 
 # Video files
 videos/
