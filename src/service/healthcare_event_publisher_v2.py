@@ -35,10 +35,17 @@ except ImportError as e:
 logger = logging.getLogger(__name__)
 
 class HealthcareEventPublisher:
-    """Healthcare event publisher with mobile realtime notifications"""
+    """Healthcare event publisher with mobile realtime notifications and priority-based alerts"""
     
     def __init__(self):
         self.postgresql_service = postgresql_service
+        # Import AlertStateManager here to avoid circular imports
+        try:
+            from service.alert_state_manager import get_alert_state_manager
+            self.alert_manager = get_alert_state_manager(postgresql_service)
+        except ImportError:
+            logger.warning("AlertStateManager not available")
+            self.alert_manager = None
         
     def _create_event_response(self, event_id: Optional[str], status: str, event_type: str, 
                               confidence: float, camera_id: str, snapshot_timestamp: datetime) -> Dict[str, Any]:
@@ -82,7 +89,7 @@ class HealthcareEventPublisher:
     def publish_fall_detection(self, confidence: float, bounding_boxes: List[Dict], 
                               context: Optional[Dict] = None, camera_id: Optional[str] = None, 
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Publish a fall detection event and send mobile notification"""
+        """Publish a fall detection event with priority-based alert management"""
         try:
             # Extract IDs from context if provided, with fallback to defaults
             final_camera_id = camera_id or (context.get('camera_id') if context else None) or '3c0b0000-0000-4000-8000-000000000001'
@@ -91,9 +98,9 @@ class HealthcareEventPublisher:
             
             current_time = datetime.now()
             
-            # Determine status based on updated confidence thresholds
+            # Determine mobile status based on confidence thresholds
             status = "normal"
-            if confidence >= 0.6:  # 60-80% = warning
+            if confidence >= 0.6:  # 60-79% = warning
                 status = "warning"
             if confidence >= 0.8:  # >= 80% = danger
                 status = "danger"
@@ -108,6 +115,7 @@ class HealthcareEventPublisher:
                     'detection_timestamp': current_time.isoformat()
                 },
                 'confidence': confidence,
+                'confidence_score': confidence,  # For alert manager
                 'bounding_boxes': bounding_boxes,
                 'context': context or {},
                 'camera_id': final_camera_id,
@@ -118,6 +126,21 @@ class HealthcareEventPublisher:
             # Publish to database and get event_id
             db_result = self.postgresql_service.publish_event_detection(event_data)
             event_id = str(db_result.get('event_id', 'fallback_id')) if isinstance(db_result, dict) else str(db_result)
+            
+            # Add event_id to event_data for alert management
+            event_data['event_id'] = event_id
+            
+            # Priority-based alert management
+            alert_created = False
+            if self.alert_manager and confidence >= 0.4:  # Only create alerts for meaningful detections
+                # Check if should create alert based on priority
+                if self.alert_manager.should_create_alert(event_data):
+                    alert_id = self.alert_manager.create_alert(event_data)
+                    if alert_id:
+                        alert_created = True
+                        logger.info(f"Created priority-based alert {alert_id} for fall detection (confidence: {confidence:.1%})")
+                else:
+                    logger.info(f"Skipped alert creation - lower priority than existing alerts")
             
             # Create response format
             response = self._create_event_response(
@@ -129,8 +152,13 @@ class HealthcareEventPublisher:
                 snapshot_timestamp=current_time
             )
             
-            # Send realtime notification to mobile
-            send_mobile_notification(response)
+            # Add alert info to response
+            response['alert_created'] = alert_created
+            
+            # Send realtime notification to mobile only if alert was created or confidence is high
+            if alert_created or confidence >= 0.7:
+                send_mobile_notification(response)
+                logger.info(f"Sent mobile notification for fall detection (confidence: {confidence:.1%})")
             
             return response
             
@@ -140,13 +168,14 @@ class HealthcareEventPublisher:
                 "imageUrl": "",
                 "status": "normal", 
                 "action": "Error processing fall detection",
-                "time": datetime.now().isoformat()
+                "time": datetime.now().isoformat(),
+                "alert_created": False
             }
 
     def publish_seizure_detection(self, confidence: float, bounding_boxes: List[Dict],
                                  context: Optional[Dict] = None, camera_id: Optional[str] = None,
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Publish a seizure detection event and send mobile notification"""
+        """Publish a seizure detection event with priority-based alert management"""
         try:
             # Extract IDs from context if provided, with fallback to defaults
             final_camera_id = camera_id or (context.get('camera_id') if context else None) or '3c0b0000-0000-4000-8000-000000000002'
@@ -155,24 +184,25 @@ class HealthcareEventPublisher:
             
             current_time = datetime.now()
             
-            # Determine status based on updated confidence thresholds  
+            # Determine mobile status based on confidence thresholds  
             status = "normal"
-            if confidence >= 0.5:  # 50-70% = warning
+            if confidence >= 0.5:  # 50-69% = warning
                 status = "warning"
             if confidence >= 0.7:  # >= 70% = danger
                 status = "danger"
                 
             # Create event data dict for PostgreSQL service
             event_data = {
-                'event_type': 'abnormal_behavior',
+                'event_type': 'seizure',  # Changed to 'seizure' for better alert categorization
                 'description': f'Seizure activity detected with {confidence:.1%} confidence',
                 'detection_data': {
-                    'algorithm': 'seizure_detection',
+                    'algorithm': 'vsvig_seizure_detection',
                     'behavior_type': 'seizure',
-                    'model_version': 'v1.0',
+                    'model_version': 'vsvig_v1.0',
                     'detection_timestamp': current_time.isoformat()
                 },
                 'confidence': confidence,
+                'confidence_score': confidence,  # For alert manager
                 'bounding_boxes': bounding_boxes,
                 'context': context or {},
                 'camera_id': final_camera_id,
@@ -184,6 +214,21 @@ class HealthcareEventPublisher:
             db_result = self.postgresql_service.publish_event_detection(event_data)
             event_id = str(db_result.get('event_id', 'fallback_id')) if isinstance(db_result, dict) else str(db_result)
             
+            # Add event_id to event_data for alert management
+            event_data['event_id'] = event_id
+            
+            # Priority-based alert management (seizure has higher priority than fall)
+            alert_created = False
+            if self.alert_manager and confidence >= 0.3:  # Lower threshold for seizure as it's more critical
+                # Check if should create alert based on priority
+                if self.alert_manager.should_create_alert(event_data):
+                    alert_id = self.alert_manager.create_alert(event_data)
+                    if alert_id:
+                        alert_created = True
+                        logger.info(f"Created priority-based alert {alert_id} for seizure detection (confidence: {confidence:.1%})")
+                else:
+                    logger.info(f"Skipped seizure alert creation - lower priority than existing alerts")
+            
             # Create response format
             response = self._create_event_response(
                 event_id=event_id,
@@ -194,9 +239,14 @@ class HealthcareEventPublisher:
                 snapshot_timestamp=current_time
             )
             
-            # Send realtime notification to mobile
-            send_mobile_notification(response)
-                
+            # Add alert info to response
+            response['alert_created'] = alert_created
+            
+            # Send realtime notification to mobile only if alert was created or confidence is high
+            if alert_created or confidence >= 0.6:
+                send_mobile_notification(response)
+                logger.info(f"Sent mobile notification for seizure detection (confidence: {confidence:.1%})")
+            
             return response
             
         except Exception as e:
@@ -205,7 +255,8 @@ class HealthcareEventPublisher:
                 "imageUrl": "",
                 "status": "normal",
                 "action": "Error processing seizure detection", 
-                "time": datetime.now().isoformat()
+                "time": datetime.now().isoformat(),
+                "alert_created": False
             }
     
     def publish_system_status(self, status: str, metrics: Optional[Dict[str, Any]] = None):

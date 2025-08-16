@@ -1,6 +1,20 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.activity_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  timestamp timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actor_id uuid,
+  actor_name character varying,
+  action character varying NOT NULL,
+  resource_type character varying,
+  resource_id character varying,
+  message text,
+  severity USER-DEFINED NOT NULL DEFAULT 'normal'::activity_severity_enum,
+  meta jsonb,
+  ip character varying,
+  CONSTRAINT activity_logs_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.ai_configurations (
   config_id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
@@ -13,8 +27,8 @@ CREATE TABLE public.ai_configurations (
   updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by uuid NOT NULL,
   CONSTRAINT ai_configurations_pkey PRIMARY KEY (config_id),
-  CONSTRAINT ai_configurations_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(user_id),
-  CONSTRAINT ai_configurations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+  CONSTRAINT ai_configurations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT ai_configurations_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(user_id)
 );
 CREATE TABLE public.ai_processing_logs (
   log_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -29,8 +43,8 @@ CREATE TABLE public.ai_processing_logs (
   model_version character varying,
   processed_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT ai_processing_logs_pkey PRIMARY KEY (log_id),
-  CONSTRAINT ai_processing_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
-  CONSTRAINT ai_processing_logs_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.snapshots(snapshot_id)
+  CONSTRAINT ai_processing_logs_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.snapshots(snapshot_id),
+  CONSTRAINT ai_processing_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
 CREATE TABLE public.alerts (
   alert_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -47,8 +61,8 @@ CREATE TABLE public.alerts (
   created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   resolved_at timestamp with time zone,
   CONSTRAINT alerts_pkey PRIMARY KEY (alert_id),
-  CONSTRAINT alerts_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.event_detections(event_id),
   CONSTRAINT alerts_acknowledged_by_fkey FOREIGN KEY (acknowledged_by) REFERENCES public.users(user_id),
+  CONSTRAINT alerts_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.event_detections(event_id),
   CONSTRAINT alerts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
 CREATE TABLE public.camera_settings (
@@ -163,10 +177,10 @@ CREATE TABLE public.event_detections (
   created_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT event_detections_pkey PRIMARY KEY (event_id),
   CONSTRAINT event_detections_camera_id_fkey FOREIGN KEY (camera_id) REFERENCES public.cameras(camera_id),
-  CONSTRAINT event_detections_verified_by_fkey FOREIGN KEY (verified_by) REFERENCES public.users(user_id),
-  CONSTRAINT event_detections_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT event_detections_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.snapshots(snapshot_id),
   CONSTRAINT event_detections_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(room_id),
-  CONSTRAINT event_detections_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES public.snapshots(snapshot_id)
+  CONSTRAINT event_detections_verified_by_fkey FOREIGN KEY (verified_by) REFERENCES public.users(user_id),
+  CONSTRAINT event_detections_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
 CREATE TABLE public.notifications (
   notification_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -181,8 +195,8 @@ CREATE TABLE public.notifications (
   retry_count integer DEFAULT 0,
   error_message text,
   CONSTRAINT notifications_pkey PRIMARY KEY (notification_id),
-  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
-  CONSTRAINT notifications_alert_id_fkey FOREIGN KEY (alert_id) REFERENCES public.alerts(alert_id)
+  CONSTRAINT notifications_alert_id_fkey FOREIGN KEY (alert_id) REFERENCES public.alerts(alert_id),
+  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
 CREATE TABLE public.patient_habits (
   habit_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -222,6 +236,21 @@ CREATE TABLE public.patient_supplements (
   CONSTRAINT patient_supplements_pkey PRIMARY KEY (id),
   CONSTRAINT patient_supplements_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
 );
+CREATE TABLE public.payments (
+  payment_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  amount bigint NOT NULL,
+  description text,
+  vnp_txn_ref character varying NOT NULL UNIQUE,
+  vnp_response_code character varying,
+  vnp_transaction_no character varying,
+  vnp_bank_code character varying,
+  status character varying NOT NULL DEFAULT 'pending'::character varying,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT payments_pkey PRIMARY KEY (payment_id)
+);
 CREATE TABLE public.rooms (
   room_id uuid NOT NULL DEFAULT gen_random_uuid(),
   room_number character varying NOT NULL,
@@ -250,9 +279,9 @@ CREATE TABLE public.snapshots (
   processed_at timestamp with time zone,
   is_processed boolean NOT NULL DEFAULT false,
   CONSTRAINT snapshots_pkey PRIMARY KEY (snapshot_id),
-  CONSTRAINT snapshots_camera_id_fkey FOREIGN KEY (camera_id) REFERENCES public.cameras(camera_id),
   CONSTRAINT snapshots_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.rooms(room_id),
-  CONSTRAINT snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+  CONSTRAINT snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT snapshots_camera_id_fkey FOREIGN KEY (camera_id) REFERENCES public.cameras(camera_id)
 );
 CREATE TABLE public.system_settings (
   setting_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -301,8 +330,8 @@ CREATE TABLE public.user_settings (
   updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_by uuid,
   CONSTRAINT user_settings_pkey PRIMARY KEY (id),
-  CONSTRAINT user_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(user_id),
-  CONSTRAINT user_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id)
+  CONSTRAINT user_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
+  CONSTRAINT user_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(user_id)
 );
 CREATE TABLE public.users (
   user_id uuid NOT NULL DEFAULT gen_random_uuid(),

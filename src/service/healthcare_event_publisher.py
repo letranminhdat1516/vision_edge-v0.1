@@ -1,5 +1,5 @@
 """
-Healthcare Event Publisher Service
+Healthcare Event Publisher Service with Priority-Based Alert System
 Integrates healthcare detection pipeline with Supabase realtime system
 """
 
@@ -7,6 +7,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 import logging
+from enum import Enum
+
+# Priority-based alert system imports
+class AlertPriority(Enum):
+    RESOLVED = 0
+    ACKNOWLEDGED_LOW = 1
+    ACKNOWLEDGED_MEDIUM = 2
+    ACTIVE_LOW = 3
+    ACTIVE_MEDIUM = 4
+    ACTIVE_HIGH = 5
+    ACTIVE_CRITICAL = 6
 
 # Try to import Supabase service, fallback to mock
 try:
@@ -31,7 +42,19 @@ if MOCK_MODE:
 logger = logging.getLogger(__name__)
 
 class HealthcareEventPublisher:
-    """Service for publishing healthcare events to Supabase realtime system"""
+    """Service for publishing healthcare events with priority-based alert system"""
+    
+    # Confidence thresholds for severity mapping
+    SEVERITY_THRESHOLDS = {
+        'fall': {'high': 0.60, 'medium': 0.40, 'low': 0.20},  # Remove 'critical'
+        'seizure': {'high': 0.50, 'medium': 0.30, 'low': 0.10}  # Remove 'critical'
+    }
+    
+    # Notification thresholds (send notification even if no alert created)
+    NOTIFICATION_THRESHOLDS = {
+        'fall': 0.70,
+        'seizure': 0.60
+    }
     
     def __init__(self, default_user_id: Optional[str] = None, default_camera_id: Optional[str] = None, default_room_id: Optional[str] = None):
         self.default_user_id = default_user_id or str(uuid.uuid4())
@@ -40,11 +63,101 @@ class HealthcareEventPublisher:
         
         # Use PostgreSQL service directly
         self.postgresql_service = realtime_service
-        self.default_camera_id = default_camera_id or str(uuid.uuid4())
-        self.default_room_id = default_room_id or str(uuid.uuid4())
         
         # Start event listeners
         self._setup_event_listeners()
+    
+    def _map_confidence_to_severity(self, confidence: float, event_type: str) -> str:
+        """Map confidence score to database severity"""
+        thresholds = self.SEVERITY_THRESHOLDS.get(event_type, self.SEVERITY_THRESHOLDS['fall'])
+        
+        if confidence >= thresholds['high']:
+            return 'high'
+        elif confidence >= thresholds['medium']:
+            return 'medium'
+        else:
+            return 'low'
+    
+    def _map_status_for_mobile(self, severity: str) -> str:
+        """Map database severity to mobile status format"""
+        severity_to_mobile = {
+            'high': 'danger',
+            'medium': 'warning',
+            'low': 'normal'
+        }
+        return severity_to_mobile.get(severity, 'normal')
+    
+    def _calculate_priority_level(self, severity: str, alert_status: str) -> int:
+        """Calculate priority level for alert comparison"""
+        base_priority = {
+            'high': 4,
+            'medium': 3,
+            'low': 2
+        }.get(severity, 1)
+        
+        # Reduce priority for acknowledged/resolved alerts
+        if alert_status == 'acknowledged':
+            return max(1, base_priority - 2)
+        elif alert_status == 'resolved':
+            return 0
+        
+        return base_priority
+    
+    def _get_highest_priority_alert(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get current highest priority active alert for user"""
+        try:
+            conn = self.postgresql_service.get_connection()
+            if not conn:
+                return None
+                
+            with conn.cursor() as cursor:
+                # Get active alerts ordered by priority
+                cursor.execute("""
+                    SELECT a.*, 
+                           CASE a.severity
+                               WHEN 'high' THEN 4  
+                               WHEN 'medium' THEN 3
+                               WHEN 'low' THEN 2
+                               ELSE 1
+                           END as priority_level
+                    FROM alerts a
+                    WHERE a.user_id = %s AND a.status = 'active'
+                    ORDER BY priority_level DESC, a.created_at DESC
+                    LIMIT 1
+                """, (user_id,))
+                
+                result = cursor.fetchone()
+                self.postgresql_service.return_connection(conn)
+                
+                return dict(result) if result else None
+                
+        except Exception as e:
+            logger.error(f"Error getting highest priority alert: {e}")
+            if conn:
+                self.postgresql_service.return_connection(conn)
+            return None
+    
+    def _should_create_alert(self, confidence: float, event_type: str, user_id: str) -> tuple[bool, str]:
+        """Determine if alert should be created based on priority comparison"""
+        # Calculate new event priority
+        severity = self._map_confidence_to_severity(confidence, event_type)
+        new_priority = self._calculate_priority_level(severity, 'active')
+        
+        # Get highest existing priority
+        highest_alert = self._get_highest_priority_alert(user_id)
+        if highest_alert:
+            current_max_priority = highest_alert.get('priority_level', 0)
+            
+            # Only create alert if new priority is higher or equal
+            should_create = new_priority >= current_max_priority
+            reason = f"Priority {new_priority} vs current max {current_max_priority}"
+        else:
+            # No existing alerts, create if not low priority
+            should_create = new_priority > 2  # Skip low priority if no existing alerts
+            reason = f"No existing alerts, priority {new_priority}"
+        
+        logger.info(f"Alert decision: {should_create} - {reason}")
+        return should_create, severity
     
     def _setup_event_listeners(self):
         """Setup realtime event listeners"""
@@ -140,7 +253,7 @@ class HealthcareEventPublisher:
     def publish_fall_detection(self, confidence: float, bounding_boxes: List[Dict], 
                               context: Optional[Dict] = None, camera_id: Optional[str] = None, 
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Publish a fall detection event using PostgreSQL service"""
+        """Publish fall detection with priority-based alert system"""
         try:
             # Extract IDs from context if provided, with fallback to defaults
             final_camera_id = camera_id or (context.get('camera_id') if context else None) or '3c0b0000-0000-4000-8000-000000000001'
@@ -149,23 +262,18 @@ class HealthcareEventPublisher:
             
             current_time = datetime.now()
             
-            # Fix confidence thresholds based on requirements
-            if confidence >= 0.6:  # Changed to 60% for fall warning
-                status = "warning"
-            else:
-                status = "normal"
+            # Determine if alert should be created and get severity
+            should_create_alert, severity = self._should_create_alert(confidence, 'fall', final_user_id)
             
-            if confidence >= 0.8:  # 80% for fall danger
-                status = "danger"
-            
-            # Create event data dict for PostgreSQL service
+            # Always create event detection (for audit trail)
             event_data = {
                 'event_type': 'fall',
                 'description': f'Fall detected with {confidence:.1%} confidence',
                 'detection_data': {
                     'algorithm': 'yolo_fall_detection',
                     'model_version': 'v1.0',
-                    'detection_timestamp': current_time.isoformat()
+                    'detection_timestamp': current_time.isoformat(),
+                    'severity': severity
                 },
                 'confidence': confidence,
                 'bounding_boxes': bounding_boxes,
@@ -175,36 +283,73 @@ class HealthcareEventPublisher:
                 'user_id': final_user_id
             }
             
-            # Publish to database and get event_id
-            event_id = self.postgresql_service.publish_event_detection(event_data)
+            # Publish event to database
+            if hasattr(self.postgresql_service, 'publish_event_detection'):
+                event_result = self.postgresql_service.publish_event_detection(event_data)
+                event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+            else:
+                event_id = str(uuid.uuid4())  # Fallback for mock mode
             
-            # Create response format
+            # Create mobile response format
+            mobile_status = self._map_status_for_mobile(severity)
             response = self._create_event_response(
                 event_id=event_id,
-                status=status,
+                status=mobile_status,
                 event_type="fall",
                 confidence=confidence,
                 camera_id=final_camera_id,
                 snapshot_timestamp=current_time
             )
             
-            # Send realtime notification to mobile
-            send_mobile_notification(response)
+            # Add priority system metadata
+            response['alert_created'] = should_create_alert
+            response['severity'] = severity
+            response['priority_level'] = self._calculate_priority_level(severity, 'active')
+            
+            # Create alert only if priority check passed
+            if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):
+                alert_data = {
+                    'event_id': event_id,
+                    'user_id': final_user_id,
+                    'alert_type': 'fall_detection',  # Use valid enum value
+                    'severity': severity,
+                    'message': self._generate_action_message(mobile_status, 'fall', confidence),
+                    'alert_data': {
+                        'confidence': float(confidence),  # Ensure JSON serializable
+                        'bounding_boxes': bounding_boxes,
+                        'detection_type': context.get('detection_type', 'direct') if context else 'direct'
+                    }
+                }
+                self.postgresql_service.publish_alert(alert_data)
+            
+            # Send mobile notification based on conditions
+            should_notify = (
+                should_create_alert or  # Alert was created
+                confidence >= self.NOTIFICATION_THRESHOLDS['fall']  # High confidence
+            )
+            
+            if should_notify:
+                send_mobile_notification(response)
+                logger.info(f"📱 Fall notification sent: {mobile_status} - confidence {confidence:.2f}")
+            else:
+                logger.info(f"📵 Fall notification skipped: priority filter")
             
             return response
+            
         except Exception as e:
-            print(f"Error publishing fall detection: {e}")
+            logger.error(f"Error publishing fall detection: {e}")
             return {
                 "imageUrl": "",
                 "status": "normal", 
                 "action": "Error processing fall detection",
-                "time": datetime.now().isoformat()
+                "time": datetime.now().isoformat(),
+                "alert_created": False
             }
 
     def publish_seizure_detection(self, confidence: float, bounding_boxes: List[Dict],
                                  context: Optional[Dict] = None, camera_id: Optional[str] = None,
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
-        """Publish a seizure detection event using PostgreSQL service"""
+        """Publish seizure detection with priority-based alert system"""
         try:
             # Extract IDs from context if provided, with fallback to defaults
             final_camera_id = camera_id or (context.get('camera_id') if context else None) or '3c0b0000-0000-4000-8000-000000000002'
@@ -213,16 +358,10 @@ class HealthcareEventPublisher:
             
             current_time = datetime.now()
             
-            # Fix confidence thresholds based on requirements  
-            if confidence >= 0.5:  # Changed to 50% for seizure warning
-                status = "warning"
-            else:
-                status = "normal"
-            
-            if confidence >= 0.7:  # 70% for seizure danger
-                status = "danger"
+            # Determine if alert should be created and get severity
+            should_create_alert, severity = self._should_create_alert(confidence, 'seizure', final_user_id)
                 
-            # Create event data dict for PostgreSQL service
+            # Always create event detection (for audit trail)
             event_data = {
                 'event_type': 'abnormal_behavior',
                 'description': f'Seizure activity detected with {confidence:.1%} confidence',
@@ -230,7 +369,8 @@ class HealthcareEventPublisher:
                     'algorithm': 'seizure_detection',
                     'behavior_type': 'seizure',
                     'model_version': 'v1.0',
-                    'detection_timestamp': current_time.isoformat()
+                    'detection_timestamp': current_time.isoformat(),
+                    'severity': severity
                 },
                 'confidence': confidence,
                 'bounding_boxes': bounding_boxes,
@@ -240,33 +380,79 @@ class HealthcareEventPublisher:
                 'user_id': final_user_id
             }
             
-            # Publish to database and get event_id
-            try:
-                event_id = self.postgresql_service.publish_event_detection(event_data)
-                if isinstance(event_id, dict):
-                    event_id = event_id.get('event_id', 'unknown')
-            except:
-                event_id = 'fallback_id'
+            # Publish event to database
+            if hasattr(self.postgresql_service, 'publish_event_detection'):
+                event_result = self.postgresql_service.publish_event_detection(event_data)
+                event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+            else:
+                event_id = str(uuid.uuid4())  # Fallback for mock mode
             
-            # Create response format
+            # Create mobile response format
+            mobile_status = self._map_status_for_mobile(severity)
             response = self._create_event_response(
-                event_id=str(event_id) if event_id else None,
-                status=status,
+                event_id=event_id,
+                status=mobile_status,
                 event_type="seizure",
                 confidence=confidence,
                 camera_id=final_camera_id,
                 snapshot_timestamp=current_time
             )
+            
+            # Add priority system metadata
+            response['alert_created'] = should_create_alert
+            response['severity'] = severity
+            response['priority_level'] = self._calculate_priority_level(severity, 'active')
+            
+            # Create alert only if priority check passed
+            if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):
+                alert_data = {
+                    'event_id': event_id,
+                    'user_id': final_user_id,
+                    'alert_type': 'behavior_anomaly',  # Use valid enum value
+                    'severity': severity,
+                    'message': self._generate_action_message(mobile_status, 'seizure', confidence),
+                    'alert_data': {
+                        'confidence': float(confidence),  # Ensure JSON serializable
+                        'bounding_boxes': bounding_boxes,
+                        'detection_type': context.get('detection_type', 'confirmation') if context else 'confirmation'
+                    }
+                }
+                self.postgresql_service.publish_alert(alert_data)
+            
+            # Send mobile notification based on conditions
+            should_notify = (
+                should_create_alert or  # Alert was created
+                confidence >= self.NOTIFICATION_THRESHOLDS['seizure']  # High confidence
+            )
+            
+            if should_notify:
+                send_mobile_notification(response)
+                logger.info(f"📱 Seizure notification sent: {mobile_status} - confidence {confidence:.2f}")
+            else:
+                logger.info(f"📵 Seizure notification skipped: priority filter")
                 
             return response
+            
         except Exception as e:
-            print(f"Error publishing seizure detection: {e}")
+            logger.error(f"Error publishing seizure detection: {e}")
             return {
                 "imageUrl": "",
                 "status": "normal",
                 "action": "Error processing seizure detection", 
-                "time": datetime.now().isoformat()
+                "time": datetime.now().isoformat(),
+                "alert_created": False
             }
+    
+    def get_recent_events(self, limit: int = 10) -> list:
+        """Get recent healthcare events"""
+        try:
+            if hasattr(realtime_service, 'get_recent_events'):
+                return realtime_service.get_recent_events(limit)
+            else:
+                return []  # Fallback for mock mode
+        except Exception as e:
+            logger.error(f"Error getting recent events: {e}")
+            return []
     
     def publish_system_status(self, status: str, metrics: Optional[Dict[str, Any]] = None):
         """
@@ -289,14 +475,14 @@ class HealthcareEventPublisher:
             
         except Exception as e:
             logger.error(f"Error publishing system status: {e}")
-    
-    def get_recent_events(self, limit: int = 10) -> list:
-        """Get recent healthcare events"""
-        return realtime_service.get_recent_events(limit)
-    
+
     def close(self):
         """Close the event publisher"""
-        realtime_service.close()
+        try:
+            if hasattr(realtime_service, 'close'):
+                realtime_service.close()
+        except Exception as e:
+            logger.error(f"Error closing event publisher: {e}")
 
 # Global publisher instance
 healthcare_publisher = HealthcareEventPublisher()

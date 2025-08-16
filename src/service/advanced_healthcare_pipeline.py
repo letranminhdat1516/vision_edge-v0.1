@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Import Supabase integration
-from service.healthcare_event_publisher_v2 import HealthcareEventPublisher
+from service.healthcare_event_publisher import HealthcareEventPublisher
 
 class AdvancedHealthcarePipeline:
     def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder):
@@ -183,7 +183,7 @@ class AdvancedHealthcarePipeline:
                     
                     # Publish fall detection to Supabase realtime
                     try:
-                        bounding_boxes = [person_bbox] if person_bbox else []
+                        bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                         context_data = {
                             'motion_level': motion_level,
                             'detection_type': 'direct',
@@ -191,14 +191,16 @@ class AdvancedHealthcarePipeline:
                             'frame_number': self.stats['total_frames']
                         }
                         
-                        event_id = self.event_publisher.publish_fall_detection(
+                        response = self.event_publisher.publish_fall_detection(
                             confidence=base_fall_confidence,
                             bounding_boxes=bounding_boxes,
                             context=context_data
                         )
                         
-                        if event_id:
-                            print(f"📡 Fall event published to Supabase: {event_id}")
+                        if response.get('alert_created'):
+                            print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
+                        else:
+                            print(f"📵 Fall alert skipped: Lower priority than existing alerts")
                             
                     except Exception as e:
                         print(f"Error publishing fall detection: {e}")
@@ -227,7 +229,7 @@ class AdvancedHealthcarePipeline:
                         
                         # Publish fall detection to Supabase realtime
                         try:
-                            bounding_boxes = [person_bbox] if person_bbox else []
+                            bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                             context_data = {
                                 'motion_level': motion_level,
                                 'detection_type': 'confirmation',
@@ -236,14 +238,16 @@ class AdvancedHealthcarePipeline:
                                 'frame_number': self.stats['total_frames']
                             }
                             
-                            event_id = self.event_publisher.publish_fall_detection(
+                            response = self.event_publisher.publish_fall_detection(
                                 confidence=smoothed_fall_confidence,
                                 bounding_boxes=bounding_boxes,
                                 context=context_data
                             )
                             
-                            if event_id:
-                                print(f"📡 Fall event published to Supabase: {event_id}")
+                            if response.get('alert_created'):
+                                print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
+                            else:
+                                print(f"📵 Fall alert skipped: Lower priority than existing alerts")
                                 
                         except Exception as e:
                             print(f"Error publishing fall detection: {e}")
@@ -302,7 +306,7 @@ class AdvancedHealthcarePipeline:
                             
                             # Publish seizure detection to Supabase realtime
                             try:
-                                bounding_boxes = [person_bbox] if person_bbox else []
+                                bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                                 context_data = {
                                     'motion_level': motion_level,
                                     'detection_type': 'confirmation',
@@ -312,14 +316,16 @@ class AdvancedHealthcarePipeline:
                                     'frame_number': self.stats['total_frames']
                                 }
                                 
-                                event_id = self.event_publisher.publish_seizure_detection(
+                                response = self.event_publisher.publish_seizure_detection(
                                     confidence=final_seizure_confidence,
                                     bounding_boxes=bounding_boxes,
                                     context=context_data
                                 )
                                 
-                                if event_id:
-                                    print(f"📡 Seizure event published to Supabase: {event_id}")
+                                if response.get('alert_created'):
+                                    print(f"📡 Seizure alert created: Priority {response.get('priority_level')}")
+                                else:
+                                    print(f"📵 Seizure alert skipped: Lower priority than existing alerts")
                                     
                             except Exception as e:
                                 print(f"Error publishing seizure detection: {e}")
