@@ -1,6 +1,7 @@
 """
-Mobile Realtime Notification Service
+Mobile Realtime Notification Service  
 Handles sending healthcare events to mobile devices in realtime
+Enhanced with FCM integration for real mobile notifications
 """
 
 import json
@@ -9,6 +10,16 @@ import threading
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import logging
+import asyncio
+
+# Import FCM service for real mobile notifications
+try:
+    from service.fcm_notification_service import fcm_service
+    FCM_AVAILABLE = True
+    print("📱 FCM Service loaded for mobile notifications")
+except ImportError as e:
+    FCM_AVAILABLE = False
+    print(f"⚠️ FCM Service not available: {e}")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -37,7 +48,7 @@ class MobileRealtimeNotificationService:
         
     def send_healthcare_notification(self, event_response: Dict[str, Any]):
         """
-        Send healthcare event notification to mobile devices
+        Send healthcare event notification to mobile devices with FCM integration
         
         Args:
             event_response: Healthcare event response with format:
@@ -64,11 +75,84 @@ class MobileRealtimeNotificationService:
         # Store notification history
         self.notification_history.append(notification)
         
-        # Send to mobile devices (simulated)
+        # Send to mobile devices with FCM
         self._send_to_mobile_devices(notification)
+        
+        # Send real FCM notification for critical events
+        if FCM_AVAILABLE and event_response.get("status") in ["warning", "danger"]:
+            self._send_fcm_notification(event_response)
         
         # Log the notification
         logger.info(f"📱 Mobile notification sent: {notification['data']['status']} - {notification['data']['action']}")
+        
+    def _send_fcm_notification(self, event_response: Dict[str, Any]):
+        """Send real FCM notification to mobile devices"""
+        try:
+            status = event_response.get("status", "normal")
+            action = event_response.get("action", "Healthcare Event")
+            
+            # Map status to event type for FCM
+            event_type_map = {
+                "danger": "emergency",
+                "warning": "warning",
+                "normal": "info"
+            }
+            
+            # Determine FCM event type and confidence
+            if "fall" in action.lower():
+                fcm_event_type = "fall"
+                confidence = 0.85 if status == "danger" else 0.65
+            elif "seizure" in action.lower():
+                fcm_event_type = "seizure" 
+                confidence = 0.90 if status == "danger" else 0.70
+            else:
+                fcm_event_type = "emergency"
+                confidence = 0.75
+            
+            # Prepare additional data for FCM
+            additional_data = {
+                'alert_level': status,
+                'emergency_type': fcm_event_type,
+                'location': 'Healthcare Room',
+                'image_url': event_response.get("imageUrl", ""),
+                'detection_time': event_response.get("time", datetime.now().isoformat()),
+                'mobile_notification_id': f"mobile_{int(time.time())}"
+            }
+            
+            # Send FCM notification asynchronously
+            def send_fcm_async():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    response = loop.run_until_complete(
+                        fcm_service.send_emergency_alert(
+                            event_type=fcm_event_type,
+                            confidence=confidence,
+                            user_tokens=None,  # Use tokens from .env
+                            additional_data=additional_data
+                        )
+                    )
+                    
+                    loop.close()
+                    
+                    if response.get('success'):
+                        success_count = response.get('success_count', 0)
+                        total_tokens = response.get('total_tokens', 0)
+                        logger.info(f"🔥 FCM Emergency Alert sent: {fcm_event_type} to {success_count}/{total_tokens} devices")
+                    else:
+                        logger.error(f"❌ FCM Alert failed: {response.get('error', 'Unknown error')}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ FCM Async Error: {e}")
+            
+            # Run FCM in background thread
+            fcm_thread = threading.Thread(target=send_fcm_async)
+            fcm_thread.daemon = True
+            fcm_thread.start()
+            
+        except Exception as e:
+            logger.error(f"❌ FCM Notification Error: {e}")
         
     def _get_priority_from_status(self, status: str) -> str:
         """Get notification priority based on status"""

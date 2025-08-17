@@ -22,7 +22,16 @@ class AlertPriority(Enum):
 # Try to import Supabase service, fallback to mock
 try:
     from service.postgresql_healthcare_service import postgresql_service as realtime_service
-    from service.mobile_realtime_notification_service import send_mobile_notification
+    from service.mobile_realtime_notification_service import MobileRealtimeNotificationService
+    
+    # Initialize mobile notification service with FCM integration
+    mobile_notification_service = MobileRealtimeNotificationService()
+    mobile_notification_service.start_service()
+    
+    def send_mobile_notification(event_response): 
+        """Send mobile notification through service with FCM integration"""
+        mobile_notification_service.send_healthcare_notification(event_response)
+    
     MOCK_MODE = not realtime_service.is_connected
     if MOCK_MODE:
         logger = logging.getLogger(__name__)

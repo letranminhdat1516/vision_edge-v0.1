@@ -7,15 +7,26 @@ from pathlib import Path
 
 # Import Supabase integration
 from service.healthcare_event_publisher import HealthcareEventPublisher
+# Import FCM notification service
+from service.fcm_notification_service import fcm_service
 
 class AdvancedHealthcarePipeline:
-    def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder):
+    def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder, user_fcm_tokens=None):
         self.camera = camera
         self.video_processor = video_processor
         self.fall_detector = fall_detector
         self.seizure_detector = seizure_detector
         self.seizure_predictor = seizure_predictor
         self.alert_save_path = alerts_folder
+        
+        # FCM tokens - prioritize .env over parameter
+        if user_fcm_tokens:
+            self.user_fcm_tokens = user_fcm_tokens
+            print(f"📱 Using provided FCM tokens: {len(user_fcm_tokens)} devices")
+        else:
+            # FCM service will automatically load tokens from .env
+            self.user_fcm_tokens = None
+            print("📱 FCM tokens will be loaded from .env configuration")
         
         # Initialize Supabase event publisher
         self.event_publisher = HealthcareEventPublisher()
@@ -378,6 +389,9 @@ class AdvancedHealthcarePipeline:
             self.stats['last_alert_time'] = time.time()
             self.stats['alert_type'] = result['alert_level']
             
+            # Send FCM notification for critical/high alerts
+            self.send_fcm_emergency_notification(result)
+            
         self.performance['total_detection_time'] = time.time() - start_time
         return result
 
@@ -716,3 +730,94 @@ class AdvancedHealthcarePipeline:
         print(f"   ✅ Lowered detection thresholds for sensitivity")
         print(f"   ✅ Enhanced warning system")
         print("="*70)
+
+    def send_fcm_emergency_notification(self, detection_result):
+        """
+        Send FCM notification for emergency events
+        
+        Args:
+            detection_result: Detection result containing event info
+        """
+        try:
+            # Only send notifications for critical and high alerts
+            alert_level = detection_result.get('alert_level', 'normal')
+            emergency_type = detection_result.get('emergency_type')
+            
+            if alert_level in ['critical', 'high'] and emergency_type and self.user_fcm_tokens:
+                
+                if emergency_type in ['fall', 'fall_detected']:
+                    confidence = detection_result.get('fall_confidence', 0.0)
+                    event_type = 'fall'
+                elif emergency_type in ['seizure', 'seizure_detected']:
+                    confidence = detection_result.get('seizure_confidence', 0.0) 
+                    event_type = 'seizure'
+                else:
+                    return  # Skip other types for now
+                
+                # Prepare additional data
+                additional_data = {
+                    'alert_level': alert_level,
+                    'emergency_type': emergency_type,
+                    'location': 'Healthcare Room',  # You can customize this
+                    'camera_id': getattr(self.camera, 'camera_id', 'unknown'),
+                    'detection_time': datetime.now().strftime('%H:%M:%S')
+                }
+                
+                # Send FCM notification asynchronously
+                import asyncio
+                
+                def send_notification():
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        response = loop.run_until_complete(
+                            fcm_service.send_emergency_alert(
+                                event_type=event_type,
+                                confidence=confidence,
+                                user_tokens=self.user_fcm_tokens,  # Will use .env tokens if None
+                                additional_data=additional_data
+                            )
+                        )
+                        loop.close()
+                        
+                        if response.get('success'):
+                            success_count = response.get('success_count', 0)
+                            total_tokens = response.get('total_tokens', 0)
+                            if response.get('disabled'):
+                                print(f"� FCM Alert Disabled: {event_type} ({confidence:.2f}) - Notifications disabled in config")
+                            elif response.get('mock'):
+                                print(f"📱 FCM Alert Mock: {event_type} ({confidence:.2f}) - FCM not initialized")
+                            else:
+                                print(f"�📱 FCM Alert Sent: {event_type} ({confidence:.2f}) to {success_count}/{total_tokens} devices")
+                                if response.get('failure_count', 0) > 0:
+                                    print(f"   ⚠️ {response.get('failure_count')} tokens failed (invalid/expired)")
+                        else:
+                            print(f"❌ FCM Alert Failed: {response.get('error', 'Unknown error')}")
+                            
+                    except Exception as e:
+                        print(f"❌ FCM Notification Error: {e}")
+                
+                # Run in background thread to avoid blocking main pipeline
+                import threading
+                notification_thread = threading.Thread(target=send_notification)
+                notification_thread.daemon = True
+                notification_thread.start()
+                
+        except Exception as e:
+            print(f"❌ FCM Emergency Notification Error: {e}")
+    
+    def update_fcm_tokens(self, new_tokens):
+        """Update FCM tokens for emergency notifications"""
+        if isinstance(new_tokens, list):
+            self.user_fcm_tokens = new_tokens
+        else:
+            self.user_fcm_tokens = [new_tokens]
+        print(f"📱 Updated FCM tokens: {len(self.user_fcm_tokens)} devices registered")
+    
+    def add_fcm_token(self, token):
+        """Add a single FCM token"""
+        if self.user_fcm_tokens is None:
+            self.user_fcm_tokens = []
+        if token and token not in self.user_fcm_tokens:
+            self.user_fcm_tokens.append(token)
+            print(f"📱 Added FCM token: {len(self.user_fcm_tokens)} devices registered")

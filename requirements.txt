@@ -47,6 +47,9 @@ cryptography>=41.0.0
 pytest>=7.4.0
 pytest-asyncio==0.21.1
 
+# Firebase Cloud Messaging
+firebase-admin>=6.2.0
+
 # Utilities
 click==8.1.6
 tqdm==4.65.0
