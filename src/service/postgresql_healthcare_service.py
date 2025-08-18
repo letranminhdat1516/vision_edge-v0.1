@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, List
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
+
+from .vietnamese_caption_service import VietnameseCaptionService
 from psycopg2 import pool
 import threading
 from urllib.parse import urlparse
@@ -31,6 +33,10 @@ class PostgreSQLHealthcareService:
     def __init__(self):
         self.database_url = supabase_config.database_url
         self.connection_pool = None
+        
+        # Initialize Vietnamese Caption Service
+        self.vietnamese_caption = VietnameseCaptionService()
+        logger.info(f"🇻🇳 Vietnamese Caption Service: {'✅ Available' if self.vietnamese_caption.is_available() else '📝 Fallback mode'}")
         self.is_connected = False
         self.polling_threads = {}
         self.event_handlers = {}
@@ -305,6 +311,81 @@ class PostgreSQLHealthcareService:
         
         return None
     
+    def _determine_event_status(self, confidence: float, event_type: str) -> str:
+        """
+        Determine event status based on confidence and event type
+        Aligned with healthcare_event_publisher SEVERITY_THRESHOLDS
+        
+        Args:
+            confidence: Detection confidence (0.0 - 1.0)
+            event_type: Type of event ('fall', 'abnormal_behavior', etc.)
+            
+        Returns:
+            Status: 'normal', 'warning', or 'danger'
+        """
+        if event_type == 'fall':
+            if confidence >= 0.60:        # high threshold for falls
+                return 'danger'     
+            elif confidence >= 0.40:      # medium threshold for falls
+                return 'warning'    
+            else:
+                return 'normal'     # low confidence = normal monitoring
+                
+        elif event_type in ['abnormal_behavior', 'seizure']:
+            if confidence >= 0.50:        # high threshold for seizures
+                return 'danger'     
+            elif confidence >= 0.30:      # medium threshold for seizures  
+                return 'warning'    
+            else:
+                return 'normal'     # low confidence = normal monitoring
+                
+        else:
+            # Unknown event type - use conservative thresholds
+            if confidence >= 0.60:
+                return 'danger'    
+            elif confidence >= 0.40:
+                return 'warning'
+            else:
+                return 'normal'
+    
+    def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
+        """
+        Generate Vietnamese description for healthcare event
+        
+        Args:
+            event_type: Type of event (fall, abnormal_behavior, etc.)
+            confidence: Detection confidence
+            image_path: Path to event image/snapshot
+            fallback_description: Original description as fallback
+            
+        Returns:
+            Vietnamese description of the event
+        """
+        try:
+            # Try to generate Vietnamese caption from image
+            if image_path and self.vietnamese_caption.is_available():
+                vietnamese_desc = self.vietnamese_caption.generate_caption(
+                    image_path=image_path,
+                    event_type=event_type,
+                    confidence=confidence
+                )
+                logger.info(f"🇻🇳 Generated Vietnamese description: {vietnamese_desc}")
+                return vietnamese_desc
+            else:
+                # Use Vietnamese caption service's enhanced description (without image)
+                vietnamese_desc = self.vietnamese_caption.generate_caption(
+                    image_path="",  # No image path
+                    event_type=event_type,
+                    confidence=confidence
+                )
+                logger.info(f"📝 Generated fallback Vietnamese description: {vietnamese_desc}")
+                return vietnamese_desc
+                
+        except Exception as e:
+            logger.error(f"❌ Error generating Vietnamese description: {e}")
+            # Final fallback to original description
+            return fallback_description or f"Phát hiện sự kiện {event_type} (độ tin cậy: {confidence:.1%})"
+    
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Insert event detection into database"""
         if not self.is_connected:
@@ -329,6 +410,14 @@ class PostgreSQLHealthcareService:
                 snapshot_id = str(uuid.uuid4())
                 logger.warning("Using dummy snapshot_id due to snapshot creation failure")
             
+            # Generate Vietnamese description for the event
+            vietnamese_description = self._generate_event_description(
+                event_data.get('event_type', ''),
+                event_data.get('confidence', 0.0),
+                event_data.get('image_path', ''),
+                event_data.get('description', '')
+            )
+            
             # Prepare record with proper fallback values (using real IDs from database)
             record = {
                 'event_id': str(uuid.uuid4()),
@@ -337,12 +426,15 @@ class PostgreSQLHealthcareService:
                 'room_id': event_data.get('room_id') or '11111111-1111-1111-1111-111111111101',  # Room A101
                 'snapshot_id': snapshot_id,
                 'event_type': event_data.get('event_type'),
-                'event_description': event_data.get('description'),
+                'event_description': vietnamese_description,  # Use Vietnamese description
                 'detection_data': json.dumps(event_data.get('detection_data', {})),
                 'ai_analysis_result': json.dumps(event_data.get('ai_analysis', {})),
                 'confidence_score': float(event_data.get('confidence', 0.0)),
                 'bounding_boxes': json.dumps(event_data.get('bounding_boxes', [])),
-                'status': 'detected',
+                'status': self._determine_event_status(
+                    event_data.get('confidence', 0.0),
+                    event_data.get('event_type', '')
+                ),
                 'context_data': json.dumps(event_data.get('context', {})),
                 'detected_at': datetime.now(timezone.utc),
                 'created_at': datetime.now(timezone.utc)
