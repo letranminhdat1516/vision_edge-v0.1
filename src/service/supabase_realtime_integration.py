@@ -112,15 +112,15 @@ class SupabaseRealtimeIntegration:
     def setup_mobile_push_notifications(self, device_tokens: list = None):
         """
         Setup push notifications for mobile devices
-        (This would integrate with FCM/APNS in production)
+        (This is handled by NestJS backend in production)
         
         Args:
             device_tokens: List of mobile device tokens
         """
-        logger.info("📱 Mobile push notifications setup (mock implementation)")
-        # In production, you would:
+        logger.info("📱 Mobile push notifications handled by NestJS backend")
+        # Notification management moved to backend:
         # 1. Store device tokens in database
-        # 2. Setup FCM/APNS integration
+        # 2. Handle multi-channel notifications (FCM, SMS, Email)
         # 3. Send push notifications to registered devices
         pass
     

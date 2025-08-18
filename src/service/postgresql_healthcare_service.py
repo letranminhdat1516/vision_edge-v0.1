@@ -258,10 +258,10 @@ class PostgreSQLHealthcareService:
         if not conn:
             return None
         
-        # Use provided IDs or fallback to known valid ones
-        final_camera_id = camera_id or '3c0b0000-0000-4000-8000-000000000001'
-        final_room_id = room_id or '2d0a0000-0000-4000-8000-000000000001' 
-        final_user_id = user_id or '34e92ef3-1300-40d0-a0e0-72989cf30121'
+        # Use provided IDs or fallback to real valid IDs from database
+        final_camera_id = camera_id or '22222222-2222-2222-2222-222222222201'  # Entrance Cam
+        final_room_id = room_id or '11111111-1111-1111-1111-111111111101'      # Room A101
+        final_user_id = user_id or '00000000-0000-0000-0000-0000000000aa'      # admin_demo
         
         try:
             snapshot_id = str(uuid.uuid4())
@@ -317,17 +317,25 @@ class PostgreSQLHealthcareService:
             return None
         
         try:
-            # Prepare record with proper fallback values
+            # Create snapshot first
+            snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
+                camera_id=event_data.get('camera_id') or '22222222-2222-2222-2222-222222222201',
+                room_id=event_data.get('room_id') or '11111111-1111-1111-1111-111111111101',
+                user_id=event_data.get('user_id') or '00000000-0000-0000-0000-0000000000aa'
+            )
+            
+            # If snapshot creation failed, create a dummy UUID to avoid NULL constraint
+            if not snapshot_id:
+                snapshot_id = str(uuid.uuid4())
+                logger.warning("Using dummy snapshot_id due to snapshot creation failure")
+            
+            # Prepare record with proper fallback values (using real IDs from database)
             record = {
                 'event_id': str(uuid.uuid4()),
-                'user_id': event_data.get('user_id') or '34e92ef3-1300-40d0-a0e0-72989cf30121',  # Default admin user
-                'camera_id': event_data.get('camera_id') or '3c0b0000-0000-4000-8000-000000000001',  # Default camera
-                'room_id': event_data.get('room_id') or '2d0a0000-0000-4000-8000-000000000001',  # Default room
-                'snapshot_id': event_data.get('snapshot_id') or self._create_default_snapshot(
-                    camera_id=event_data.get('camera_id'),
-                    room_id=event_data.get('room_id'),
-                    user_id=event_data.get('user_id')
-                ),
+                'user_id': event_data.get('user_id') or '00000000-0000-0000-0000-0000000000aa',  # admin_demo user
+                'camera_id': event_data.get('camera_id') or '22222222-2222-2222-2222-222222222201',  # Entrance Cam
+                'room_id': event_data.get('room_id') or '11111111-1111-1111-1111-111111111101',  # Room A101
+                'snapshot_id': snapshot_id,
                 'event_type': event_data.get('event_type'),
                 'event_description': event_data.get('description'),
                 'detection_data': json.dumps(event_data.get('detection_data', {})),

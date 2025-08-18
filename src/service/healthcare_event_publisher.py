@@ -24,12 +24,12 @@ try:
     from service.postgresql_healthcare_service import postgresql_service as realtime_service
     from service.mobile_realtime_notification_service import MobileRealtimeNotificationService
     
-    # Initialize mobile notification service with FCM integration
+    # Initialize mobile notification service
     mobile_notification_service = MobileRealtimeNotificationService()
     mobile_notification_service.start_service()
     
     def send_mobile_notification(event_response): 
-        """Send mobile notification through service with FCM integration"""
+        """Send mobile notification through service"""
         mobile_notification_service.send_healthcare_notification(event_response)
     
     MOCK_MODE = not realtime_service.is_connected
@@ -264,10 +264,10 @@ class HealthcareEventPublisher:
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish fall detection with priority-based alert system"""
         try:
-            # Extract IDs from context if provided, with fallback to defaults
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or '3c0b0000-0000-4000-8000-000000000001'
-            final_room_id = room_id or (context.get('room_id') if context else None) or '2d0a0000-0000-4000-8000-000000000001'
-            final_user_id = user_id or (context.get('user_id') if context else None) or '34e92ef3-1300-40d0-a0e0-72989cf30121'
+            # Extract IDs from context if provided, with fallback to real database IDs
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or '22222222-2222-2222-2222-222222222201'
+            final_room_id = room_id or (context.get('room_id') if context else None) or '11111111-1111-1111-1111-111111111101'
+            final_user_id = user_id or (context.get('user_id') if context else None) or '00000000-0000-0000-0000-0000000000aa'
             
             current_time = datetime.now()
             
@@ -320,7 +320,7 @@ class HealthcareEventPublisher:
                 alert_data = {
                     'event_id': event_id,
                     'user_id': final_user_id,
-                    'alert_type': 'fall_detection',  # Use valid enum value
+                    'alert_type': 'emergency',  # Use valid enum value
                     'severity': severity,
                     'message': self._generate_action_message(mobile_status, 'fall', confidence),
                     'alert_data': {
@@ -360,10 +360,10 @@ class HealthcareEventPublisher:
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish seizure detection with priority-based alert system"""
         try:
-            # Extract IDs from context if provided, with fallback to defaults
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or '3c0b0000-0000-4000-8000-000000000002'
-            final_room_id = room_id or (context.get('room_id') if context else None) or '2d0a0000-0000-4000-8000-000000000002'
-            final_user_id = user_id or (context.get('user_id') if context else None) or '361a335c-4f4d-4ed4-9e5c-ab7715d081b4'
+            # Extract IDs from context if provided, with fallback to real database IDs
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or '22222222-2222-2222-2222-222222222202'
+            final_room_id = room_id or (context.get('room_id') if context else None) or '11111111-1111-1111-1111-111111111102'
+            final_user_id = user_id or (context.get('user_id') if context else None) or '00000000-0000-0000-0000-0000000000aa'
             
             current_time = datetime.now()
             
@@ -417,7 +417,7 @@ class HealthcareEventPublisher:
                 alert_data = {
                     'event_id': event_id,
                     'user_id': final_user_id,
-                    'alert_type': 'behavior_anomaly',  # Use valid enum value
+                    'alert_type': 'warning',  # Use valid enum value
                     'severity': severity,
                     'message': self._generate_action_message(mobile_status, 'seizure', confidence),
                     'alert_data': {
