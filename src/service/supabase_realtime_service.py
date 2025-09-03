@@ -11,6 +11,8 @@ from supabase import create_client, Client
 import threading
 import logging
 import time
+import os
+import cv2
 
 from config.supabase_config import supabase_config
 
@@ -26,6 +28,15 @@ class SupabaseRealtimeService:
         self.polling_threads = {}
         self.event_handlers = {}
         self.last_check_times = {}
+        
+        # Initialize Vietnamese caption service for intelligent actions
+        self.vietnamese_caption_service = None
+        try:
+            from service.image_caption_service import ProfessionalVietnameseCaptionPipeline
+            self.vietnamese_caption_service = ProfessionalVietnameseCaptionPipeline()
+            logger.info("✅ Vietnamese caption service initialized in Supabase service")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not initialize Vietnamese caption service: {e}")
         
         # Initialize clients
         self._initialize_clients()
@@ -128,6 +139,46 @@ class SupabaseRealtimeService:
                 logger.error(f"Error polling {table}: {e}")
                 time.sleep(5)  # Wait longer on error
     
+    def _generate_intelligent_action(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
+        """
+        Generate intelligent action message with Vietnamese caption for event_description field
+        
+        Args:
+            event_type: Type of event (seizure, fall, etc.)
+            confidence: Detection confidence
+            image_path: Path to image file
+            fallback_description: Fallback description if caption fails
+            
+        Returns:
+            Intelligent action message with Vietnamese caption
+        """
+        try:
+            # Generate Vietnamese caption if service is available
+            vietnamese_caption = fallback_description
+            if self.vietnamese_caption_service and image_path and os.path.exists(image_path):
+                try:
+                    frame = cv2.imread(image_path)
+                    if frame is not None:
+                        caption_result = self.vietnamese_caption_service.generate_professional_caption(frame)
+                        if caption_result and isinstance(caption_result, tuple) and len(caption_result) > 0:
+                            vietnamese_caption = caption_result[0]  # First element is the caption
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to generate Vietnamese caption: {e}")
+            
+            # Create intelligent action message based on event type
+            if event_type.lower() == 'seizure':
+                return f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} 🚨 Cảnh báo: Phát hiện co giật - Độ tin cậy: 0.0% - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+            elif event_type.lower() == 'fall':
+                return f"⚠️ CẢNH BÁO: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Độ tin cậy: 0.0% - Cần theo dõi (Tin cậy: {confidence:.0%})"
+            elif event_type.lower() == 'abnormal':
+                return f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Độ tin cậy: 0.0% - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+            else:
+                return f"🔍 PHÁT HIỆN: {vietnamese_caption} 📊 Cảnh báo: Phát hiện sự kiện {event_type} - Độ tin cậy: {confidence:.0%}"
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Error generating intelligent action: {e}")
+            return fallback_description
+    
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Publish a new event detection to the database
@@ -143,6 +194,14 @@ class SupabaseRealtimeService:
             return None
         
         try:
+            # Generate intelligent action description
+            intelligent_action = self._generate_intelligent_action(
+                event_data.get('event_type', ''),
+                event_data.get('confidence', 0.0),
+                event_data.get('image_path', ''),
+                event_data.get('description', '')
+            )
+            
             # Prepare event detection record
             record = {
                 'event_id': str(uuid.uuid4()),
@@ -151,7 +210,7 @@ class SupabaseRealtimeService:
                 'room_id': event_data.get('room_id'),
                 'snapshot_id': event_data.get('snapshot_id'),
                 'event_type': event_data.get('event_type'),
-                'event_description': event_data.get('description'),
+                'event_description': intelligent_action,  # Use intelligent action with Vietnamese caption
                 'detection_data': event_data.get('detection_data', {}),
                 'ai_analysis_result': event_data.get('ai_analysis', {}),
                 'confidence_score': event_data.get('confidence', 0.0),

@@ -400,12 +400,16 @@ class HealthcareEventPublisher:
             if should_create_alert:
                 try:
                     if hasattr(self.postgresql_service, 'publish_alert'):
+                        # Use same message generator as event_description for consistency
+                        same_action_message = self.postgresql_service._generate_event_description(
+                            'fall', confidence, alert_image_path or '', ''
+                        )
                         alert_data = {
                             'event_id': event_id,
                             'user_id': final_user_id,
                             'alert_type': 'emergency',
                             'severity': severity,
-                            'message': self._generate_action_message(mobile_status, 'fall', confidence, alert_image_path),
+                            'message': same_action_message,
                             'alert_data': {
                                 'confidence': float(confidence),
                                 'bounding_boxes': bounding_boxes,
@@ -510,12 +514,16 @@ class HealthcareEventPublisher:
             
             # Create alert only if priority check passed
             if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):
+                # Use same message generator as event_description for consistency
+                same_action_message = self.postgresql_service._generate_event_description(
+                    'seizure', confidence, alert_image_path or '', ''
+                )
                 alert_data = {
                     'event_id': event_id,
                     'user_id': final_user_id,
                     'alert_type': 'warning',  # Use valid enum value
                     'severity': severity,
-                    'message': self._generate_action_message(mobile_status, 'seizure', confidence, alert_image_path),
+                    'message': same_action_message,
                     'alert_data': {
                         'confidence': float(confidence),  # Ensure JSON serializable
                         'bounding_boxes': bounding_boxes,

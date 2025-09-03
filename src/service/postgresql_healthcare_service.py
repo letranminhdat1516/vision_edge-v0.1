@@ -14,8 +14,6 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 
-# Vietnamese caption service removed temporarily
-# Will be replaced with a different implementation later
 from psycopg2 import pool
 import threading
 from urllib.parse import urlparse
@@ -48,10 +46,14 @@ class PostgreSQLHealthcareService:
         self.database_url = supabase_config.database_url
         self.connection_pool = None
         
-        # Vietnamese Caption Service removed temporarily 
-        # Will be implemented with a different approach later
-        self.vietnamese_caption = None
-        logger.info("📝 Vietnamese Caption Service: Disabled (will implement different approach)")
+        # Initialize Vietnamese Caption Service for alert messages
+        try:
+            from service.image_caption_service import ProfessionalVietnameseCaptionPipeline
+            self.vietnamese_caption = ProfessionalVietnameseCaptionPipeline()
+            logger.info("📝 Vietnamese Caption Service: Enabled for alert messages")
+        except ImportError as e:
+            self.vietnamese_caption = None
+            logger.warning(f"📝 Vietnamese Caption Service: Disabled - {e}")
         self.is_connected = False
         self.polling_threads = {}
         self.event_handlers = {}
@@ -377,37 +379,170 @@ class PostgreSQLHealthcareService:
     
     def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
         """
-        Generate technical event description for database logging
-        Optimized to avoid redundancy with alert_message
+        Generate intelligent action message for event_description field
+        This should contain the FULL intelligent action with Vietnamese caption
         
         Args:
             event_type: Type of event (fall, abnormal_behavior, etc.)
             confidence: Detection confidence
-            image_path: Path to event image/snapshot (not used currently)
+            image_path: Path to event image/snapshot
             fallback_description: Original description as fallback
             
         Returns:
-            Technical event description (no Vietnamese caption)
+            Full intelligent action message (like: "🆘 KHẨN CẤP - CO GIẬT: Two young men are đứng trong phòng...")
         """
         try:
-            # Generate timestamp
-            current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H:%M:%S")
+            # Try to generate intelligent action with Vietnamese caption
+            # If image_path not provided, try to find latest alert image
+            image_file_to_use = image_path
+            if not image_file_to_use or not os.path.exists(image_file_to_use):
+                # Try to find latest alert image
+                try:
+                    import glob
+                    from pathlib import Path
+                    
+                    # Try multiple alert directories
+                    alert_dirs = [
+                        "examples/data/saved_frames/alerts",
+                        "data/saved_frames/alerts",
+                        os.path.join(os.getcwd(), "examples/data/saved_frames/alerts"),
+                        os.path.join(os.getcwd(), "data/saved_frames/alerts")
+                    ]
+                    
+                    for alerts_dir in alert_dirs:
+                        alerts_path = Path(alerts_dir)
+                        if alerts_path.exists():
+                            image_files = list(alerts_path.glob("*.jpg"))
+                            if image_files:
+                                # Get most recent image
+                                image_file_to_use = str(max(image_files, key=lambda p: p.stat().st_ctime))
+                                logger.info(f"🔍 Found latest alert image: {image_file_to_use}")
+                                break
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not find alert image: {e}")
             
-            # Technical descriptions for database logging
+            if image_file_to_use and os.path.exists(image_file_to_use):
+                logger.info(f"🔍 Attempting to generate Vietnamese caption for image: {image_file_to_use}")
+                # Try to use BLIP + Translation pipeline for full intelligent action
+                try:
+                    if self.vietnamese_caption is not None:
+                        logger.info("✅ Vietnamese caption service is available, generating caption...")
+                        # Generate Vietnamese caption from image
+                        vietnamese_result = self.vietnamese_caption.generate_professional_caption(image_file_to_use)
+                        vietnamese_caption = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
+                        
+                        logger.info(f"📝 Generated Vietnamese caption: {vietnamese_caption}")
+                        
+                        if vietnamese_caption and len(vietnamese_caption.strip()) > 0:
+                            # Create full intelligent action message like in main.py
+                            if event_type in ['abnormal_behavior', 'seizure']:
+                                if confidence >= 0.50:
+                                    result = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} 🚨 Cảnh báo: Phát hiện co giật - Độ tin cậy: 0.0% - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                                    logger.info(f"🚨 Generated seizure action: {result}")
+                                    return result
+                                elif confidence >= 0.30:
+                                    result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                                    logger.info(f"⚠️ Generated abnormal action: {result}")
+                                    return result
+                                else:
+                                    result = f"📊 QUAN SÁT: {vietnamese_caption} - Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                                    logger.info(f"📊 Generated observation action: {result}")
+                                    return result
+                            elif event_type == 'fall':
+                                if confidence >= 0.60:
+                                    result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} 🚨 Cảnh báo: Phát hiện té ngã - Độ tin cậy: 0.0% - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                                    logger.info(f"🚨 Generated fall emergency action: {result}")
+                                    return result
+                                elif confidence >= 0.40:
+                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Độ tin cậy: 0.0% - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                                    logger.info(f"⚠️ Generated fall warning action: {result}")
+                                    return result
+                                else:
+                                    result = f"📊 THEO DÕI: {vietnamese_caption} - Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Quan sát (Tin cậy: {confidence:.0%})"
+                                    logger.info(f"📊 Generated fall observation action: {result}")
+                                    return result
+                    else:
+                        logger.warning("⚠️ Vietnamese caption service is not available")
+                except Exception as e:
+                    logger.warning(f"Failed to generate intelligent action: {e}")
+            else:
+                logger.warning(f"⚠️ No valid image file found for caption generation")
+            
+            # Fallback to simple action messages if Vietnamese caption fails
+            logger.info("📋 Using fallback action messages")
             if event_type == 'fall':
-                return f"fall_detection_at_{current_time}_confidence_{confidence:.1%}"
+                if confidence >= 0.60:
+                    return f"🚨 KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - Độ tin cậy: {confidence:.1%} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
+                elif confidence >= 0.40:
+                    return f"⚠️ CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Độ tin cậy: {confidence:.1%} - Cần kiểm tra"
+                else:
+                    return f"📊 THEO DÕI: Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Quan sát"
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
-                return f"seizure_detection_at_{current_time}_confidence_{confidence:.1%}"
+                if confidence >= 0.50:
+                    return f"🆘 KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - Độ tin cậy: {confidence:.1%} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                elif confidence >= 0.30:
+                    return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi chặt chẽ"
+                else:
+                    return f"📊 QUAN SÁT: Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Tiếp tục theo dõi"
                     
             else:
                 # Unknown event type
-                return f"{event_type}_detection_at_{current_time}_confidence_{confidence:.1%}"
+                return f"🔍 PHÁT HIỆN: Sự kiện {event_type} - Độ tin cậy: {confidence:.1%} - Cần đánh giá"
                 
         except Exception as e:
-            logger.error(f"❌ Error generating event description: {e}")
+            logger.error(f"❌ Error generating intelligent action: {e}")
             # Final fallback
-            return fallback_description or f"{event_type}_detected_confidence_{confidence:.1%}"
+            return fallback_description or f"Phát hiện sự kiện {event_type} (độ tin cậy: {confidence:.1%})"
+    
+    def generate_vietnamese_caption(self, image_path: str, event_type: str, confidence: float) -> str:
+        """
+        Generate Vietnamese caption for alert messages using BLIP model
+        
+        Args:
+            image_path: Path to the image for captioning
+            event_type: Type of event (fall, seizure, etc.)
+            confidence: Detection confidence
+            
+        Returns:
+            Vietnamese caption describing what's happening in the image
+        """
+        try:
+            if self.vietnamese_caption is None:
+                # Fallback: simple Vietnamese description
+                if event_type == 'fall':
+                    return f"Phát hiện té ngã với độ tin cậy {confidence:.1%}"
+                elif event_type in ['abnormal_behavior', 'seizure']:
+                    return f"Phát hiện co giật với độ tin cậy {confidence:.1%}"
+                else:
+                    return f"Phát hiện sự kiện {event_type} với độ tin cậy {confidence:.1%}"
+            
+            # Use BLIP model for Vietnamese captioning
+            vietnamese_result = self.vietnamese_caption.generate_professional_caption(image_path)
+            vietnamese_description = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
+            
+            if vietnamese_description and len(vietnamese_description.strip()) > 0:
+                logger.info(f"✅ Generated Vietnamese caption: {vietnamese_description[:50]}...")
+                return vietnamese_description
+            else:
+                # Fallback if BLIP fails
+                logger.warning("BLIP returned empty caption, using fallback")
+                if event_type == 'fall':
+                    return f"Phát hiện té ngã với độ tin cậy {confidence:.1%}"
+                elif event_type in ['abnormal_behavior', 'seizure']:
+                    return f"Phát hiện co giật với độ tin cậy {confidence:.1%}"
+                else:
+                    return f"Phát hiện sự kiện {event_type} với độ tin cậy {confidence:.1%}"
+                    
+        except Exception as e:
+            logger.error(f"❌ Error generating Vietnamese caption: {e}")
+            # Fallback description
+            if event_type == 'fall':
+                return f"Phát hiện té ngã với độ tin cậy {confidence:.1%}"
+            elif event_type in ['abnormal_behavior', 'seizure']:
+                return f"Phát hiện co giật với độ tin cậy {confidence:.1%}"
+            else:
+                return f"Phát hiện sự kiện {event_type} với độ tin cậy {confidence:.1%}"
     
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Insert event detection into database"""

@@ -102,7 +102,7 @@ def test_model_with_real_weights():
 def generate_dummy_caption():
     """Tạo caption giả để demo"""
     captions = [
-        "Một người đang nằm trên sàn nhà",
+        "đang nằm trên sàn nhà",
         "Có dấu hiệu của một sự cố sức khỏe",
         "Cảnh báo: Phát hiện tình huống bất thường",
         "Người trong ảnh có thể cần hỗ trợ y tế",
