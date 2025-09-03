@@ -84,7 +84,7 @@ if __name__ == "__main__":
         print("🤖 Intelligent action generation: ACTIVE")
     else:
         print("📝 Static action messages: ACTIVE")
-    print("Press 'q' to quit, 's' to show statistics, 'i' to toggle intelligent actions")
+    print("Press 'q' to quit, 's' to show statistics, 'i' to toggle intelligent actions, 'e' to create random test event")
     print("="*60)
 
     # Real-time processing variables
@@ -198,6 +198,103 @@ if __name__ == "__main__":
                 print(f"   Frame Count: {frame_count}")
             else:
                 print(f"\n📝 Static action messages only - Install 'transformers torch pillow' for intelligent actions")
+        elif key == ord('e'):
+            # Create random event for testing
+            print("\n🎲 Creating random test event...")
+            try:
+                import random
+                import uuid
+                from datetime import datetime, timezone
+                
+                # Random event types and data
+                event_types = ['fall', 'seizure', 'abnormal_behavior']
+                event_type = random.choice(event_types)
+                confidence = random.uniform(0.3, 0.95)
+                
+                # Random Vietnamese descriptions for testing
+                test_descriptions = [
+                    "Một người đàn ông trong glasses đang đứng trong phòng",
+                    "Một phụ nữ đang ngồi trên ghế",
+                    "Hai người đang nói chuyện trong phòng khách",
+                    "Một người già đang đi bộ",
+                    "Một em bé đang chơi trên sàn nhà",
+                    "Một người đàn ông trong áo đen đang cầm điện thoại",
+                    "Một phụ nữ đang đọc sách trên giường",
+                    "Một người đàn ông đang xem TV"
+                ]
+                
+                random_description = random.choice(test_descriptions)
+                
+                # Create test event data
+                test_event_data = {
+                    'event_type': event_type,
+                    'description': f'Test {event_type} event',
+                    'detection_data': {
+                        'algorithm': 'manual_test',
+                        'model_version': 'test_v1.0',
+                        'detection_timestamp': datetime.now(timezone.utc).isoformat(),
+                        'severity': 'high' if confidence > 0.7 else 'medium'
+                    },
+                    'confidence': confidence,
+                    'bounding_boxes': [
+                        {
+                            'x': random.randint(100, 400),
+                            'y': random.randint(100, 300),
+                            'width': random.randint(50, 200),
+                            'height': random.randint(50, 200),
+                            'confidence': confidence,
+                            'class': 'person'
+                        }
+                    ],
+                    'context': {
+                        'room': 'Test Room',
+                        'camera': 'Test Camera',
+                        'manual_trigger': True,
+                        'test_description': random_description
+                    }
+                }
+                
+                # Generate intelligent action for console
+                if event_type in ['abnormal_behavior', 'seizure']:
+                    if confidence >= 0.50:
+                        intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {random_description} 🚨 Cảnh báo: Phát hiện co giật - Độ tin cậy: 0.0% - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                    elif confidence >= 0.30:
+                        intelligent_action = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {random_description} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                    else:
+                        intelligent_action = f"📊 QUAN SÁT: {random_description} - Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                elif event_type == 'fall':
+                    if confidence >= 0.60:
+                        intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {random_description} 🚨 Cảnh báo: Phát hiện té ngã - Độ tin cậy: 0.0% - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                    elif confidence >= 0.40:
+                        intelligent_action = f"⚠️ CẢNH BÁO TÉ NGÃ: {random_description} ⚠️ Cảnh báo: Phát hiện ngã đổ - Độ tin cậy: 0.0% - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                    else:
+                        intelligent_action = f"📊 THEO DÕI: {random_description} - Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Quan sát (Tin cậy: {confidence:.0%})"
+                
+                print(f"🎯 Test Event Details:")
+                print(f"   Type: {event_type.upper()}")
+                print(f"   Confidence: {confidence:.1%}")
+                print(f"   Description: {random_description}")
+                print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
+                
+                # Publish to healthcare system
+                if event_type == 'fall':
+                    alert_result = pipeline.event_publisher.publish_fall_detection(
+                        confidence=confidence,
+                        bounding_boxes=test_event_data['bounding_boxes'],
+                        context=test_event_data['context']
+                    )
+                elif event_type in ['seizure', 'abnormal_behavior']:
+                    alert_result = pipeline.event_publisher.publish_seizure_detection(
+                        confidence=confidence,
+                        bounding_boxes=test_event_data['bounding_boxes'],
+                        context=test_event_data['context']
+                    )
+                
+                print(f"✅ Random {event_type} event created and saved to database!")
+                print(f"   💬 Action saved: {intelligent_action[:50]}...")
+                
+            except Exception as e:
+                print(f"❌ Error creating random event: {e}")
         # ...các xử lý khác như lưu ảnh, cập nhật thống kê...
 
     print("📱 Notifications stopped")
