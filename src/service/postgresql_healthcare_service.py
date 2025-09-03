@@ -24,6 +24,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Import configuration
+from service.config_loader import config_loader
+
 try:
     from config.supabase_config import supabase_config
 except ImportError:
@@ -63,6 +66,9 @@ class PostgreSQLHealthcareService:
         
         # Initialize connection
         self._initialize_connection()
+        
+        # Ensure default entities exist in database
+        self._ensure_default_entities()
     
     def _initialize_connection(self):
         """Initialize PostgreSQL connection pool"""
@@ -276,10 +282,19 @@ class PostgreSQLHealthcareService:
         if not conn:
             return None
         
-        # Use provided IDs or fallback to real valid IDs from database
-        final_camera_id = camera_id or '22222222-2222-2222-2222-222222222201'  # Entrance Cam
-        final_room_id = room_id or '11111111-1111-1111-1111-111111111101'      # Room A101
-        final_user_id = user_id or '00000000-0000-0000-0000-0000000000aa'      # admin_demo
+        # Get default IDs from config
+        db_config = config_loader.get_database_config()
+        fall_defaults = db_config.get('default_ids', {}).get('fall_detection', {})
+        
+        # Use provided IDs or fallback to config values, validate not None
+        final_camera_id = camera_id or fall_defaults.get('camera_id')
+        final_room_id = room_id or fall_defaults.get('room_id')
+        final_user_id = user_id or fall_defaults.get('user_id')
+        
+        # Validate UUIDs - if any is None/empty, skip snapshot creation
+        if not all([final_camera_id, final_room_id, final_user_id]):
+            logger.warning("⚠️ Missing required IDs for snapshot creation, skipping...")
+            return None
         
         try:
             snapshot_id = str(uuid.uuid4())
@@ -362,8 +377,8 @@ class PostgreSQLHealthcareService:
     
     def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
         """
-        Generate description for healthcare event (simplified version)
-        Vietnamese caption service temporarily removed
+        Generate technical event description for database logging
+        Optimized to avoid redundancy with alert_message
         
         Args:
             event_type: Type of event (fall, abnormal_behavior, etc.)
@@ -372,34 +387,27 @@ class PostgreSQLHealthcareService:
             fallback_description: Original description as fallback
             
         Returns:
-            Event description in Vietnamese (basic implementation)
+            Technical event description (no Vietnamese caption)
         """
         try:
-            # Simple Vietnamese descriptions based on event type
+            # Generate timestamp
+            current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H:%M:%S")
+            
+            # Technical descriptions for database logging
             if event_type == 'fall':
-                if confidence >= 0.80:
-                    return f"🚨 PHÁT HIỆN TÉ NGÃ NGHIÊM TRỌNG - Độ tin cậy: {confidence:.1%} - Cần hỗ trợ khẩn cấp!"
-                elif confidence >= 0.60:
-                    return f"⚠️ Phát hiện té ngã - Độ tin cậy: {confidence:.1%} - Cần kiểm tra"
-                else:
-                    return f"📊 Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Theo dõi"
+                return f"fall_detection_at_{current_time}_confidence_{confidence:.1%}"
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
-                if confidence >= 0.70:
-                    return f"🆘 PHÁT HIỆN CO GIẬT NGHIÊM TRỌNG - Độ tin cậy: {confidence:.1%} - Cần điều trị ngay!"
-                elif confidence >= 0.50:
-                    return f"⚠️ Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi"
-                else:
-                    return f"📊 Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Quan sát"
+                return f"seizure_detection_at_{current_time}_confidence_{confidence:.1%}"
                     
             else:
                 # Unknown event type
-                return f"🔍 Phát hiện sự kiện {event_type} - Độ tin cậy: {confidence:.1%}"
+                return f"{event_type}_detection_at_{current_time}_confidence_{confidence:.1%}"
                 
         except Exception as e:
             logger.error(f"❌ Error generating event description: {e}")
             # Final fallback
-            return fallback_description or f"Phát hiện sự kiện {event_type} (độ tin cậy: {confidence:.1%})"
+            return fallback_description or f"{event_type}_detected_confidence_{confidence:.1%}"
     
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Insert event detection into database"""
@@ -413,11 +421,15 @@ class PostgreSQLHealthcareService:
             return None
         
         try:
+            # Get default IDs from config
+            db_config = config_loader.get_database_config()
+            fall_defaults = db_config.get('default_ids', {}).get('fall_detection', {})
+            
             # Create snapshot first
             snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
-                camera_id=event_data.get('camera_id') or '22222222-2222-2222-2222-222222222201',
-                room_id=event_data.get('room_id') or '11111111-1111-1111-1111-111111111101',
-                user_id=event_data.get('user_id') or '00000000-0000-0000-0000-0000000000aa'
+                camera_id=event_data.get('camera_id') or fall_defaults.get('camera_id'),
+                room_id=event_data.get('room_id') or fall_defaults.get('room_id'),
+                user_id=event_data.get('user_id') or fall_defaults.get('user_id')
             )
             
             # If snapshot creation failed, create a dummy UUID to avoid NULL constraint
@@ -433,12 +445,31 @@ class PostgreSQLHealthcareService:
                 event_data.get('description', '')
             )
             
-            # Prepare record with proper fallback values (using real IDs from database)
+            # Get default IDs from config for event detection
+            event_type = event_data.get('event_type', '')
+            if event_type == 'seizure':
+                event_defaults = db_config.get('default_ids', {}).get('seizure_detection', {})
+            else:
+                event_defaults = db_config.get('default_ids', {}).get('fall_detection', {})
+            
+            # Get IDs with validation
+            user_id = event_data.get('user_id') or event_defaults.get('user_id')
+            camera_id = event_data.get('camera_id') or event_defaults.get('camera_id')
+            room_id = event_data.get('room_id') or event_defaults.get('room_id')
+            
+            # Validate all required IDs exist
+            if not all([user_id, camera_id, room_id]):
+                logger.warning("⚠️ Missing required IDs for event detection, using dummy values...")
+                user_id = user_id or str(uuid.uuid4())
+                camera_id = camera_id or str(uuid.uuid4())
+                room_id = room_id or str(uuid.uuid4())
+            
+            # Prepare record with validated values
             record = {
                 'event_id': str(uuid.uuid4()),
-                'user_id': event_data.get('user_id') or '00000000-0000-0000-0000-0000000000aa',  # admin_demo user
-                'camera_id': event_data.get('camera_id') or '22222222-2222-2222-2222-222222222201',  # Entrance Cam
-                'room_id': event_data.get('room_id') or '11111111-1111-1111-1111-111111111101',  # Room A101
+                'user_id': user_id,
+                'camera_id': camera_id,
+                'room_id': room_id,
                 'snapshot_id': snapshot_id,
                 'event_type': event_data.get('event_type'),
                 'event_description': vietnamese_description,  # Use Vietnamese description
@@ -628,6 +659,147 @@ class PostgreSQLHealthcareService:
             
         except Exception as e:
             logger.error(f"Error closing PostgreSQL service: {e}")
+    
+    def _ensure_default_entities(self):
+        """Ensure default users, cameras, rooms exist in database"""
+        try:
+            db_config = config_loader.get_database_config()
+            default_ids = db_config.get('default_ids', {})
+            
+            # Get default IDs for both fall and seizure detection
+            fall_defaults = default_ids.get('fall_detection', {})
+            seizure_defaults = default_ids.get('seizure_detection', {})
+            
+            all_defaults = [fall_defaults, seizure_defaults]
+            
+            # Create default entities if they don't exist
+            for defaults in all_defaults:
+                if defaults:
+                    self._create_default_user(defaults.get('user_id'))
+                    self._create_default_room(defaults.get('room_id'))
+                    self._create_default_camera(defaults.get('camera_id'), defaults.get('room_id'))
+                    
+            logger.info("✅ Default entities verified/created")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Could not ensure default entities: {e}")
+    
+    def _create_default_user(self, user_id: str):
+        """Create default user if not exists"""
+        if not user_id:
+            return
+            
+        conn = self.get_connection()
+        if not conn:
+            return
+            
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+                if cursor.fetchone():
+                    return  # User already exists
+                
+                # Create default user
+                cursor.execute("""
+                    INSERT INTO users (user_id, username, email, role, created_at) 
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                """, (
+                    user_id,
+                    'admin_demo',
+                    'admin@vision-edge.com',
+                    'admin',
+                    datetime.now(timezone.utc)
+                ))
+                conn.commit()
+                logger.info(f"✅ Created default user: {user_id}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not create default user {user_id}: {e}")
+        finally:
+            self.return_connection(conn)
+    
+    def _create_default_room(self, room_id: str):
+        """Create default room if not exists"""
+        if not room_id:
+            return
+            
+        conn = self.get_connection()
+        if not conn:
+            return
+            
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT room_id FROM rooms WHERE room_id = %s", (room_id,))
+                if cursor.fetchone():
+                    return  # Room already exists
+                
+                # Create default room
+                cursor.execute("""
+                    INSERT INTO rooms (room_id, room_name, location, capacity, room_type, created_at) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (room_id) DO NOTHING
+                """, (
+                    room_id,
+                    'Healthcare Room A101',
+                    'First Floor - Healthcare Wing',
+                    4,
+                    'patient_room',
+                    datetime.now(timezone.utc)
+                ))
+                conn.commit()
+                logger.info(f"✅ Created default room: {room_id}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not create default room {room_id}: {e}")
+        finally:
+            self.return_connection(conn)
+    
+    def _create_default_camera(self, camera_id: str, room_id: str):
+        """Create default camera if not exists"""
+        if not camera_id or not room_id:
+            return
+            
+        conn = self.get_connection()
+        if not conn:
+            return
+            
+        try:
+            # Get default user_id from config
+            db_config = config_loader.get_database_config()
+            default_user_id = db_config.get('default_ids', {}).get('fall_detection', {}).get('user_id')
+            
+            if not default_user_id:
+                logger.warning(f"⚠️ No default user_id found for camera creation")
+                return
+            
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT camera_id FROM cameras WHERE camera_id = %s", (camera_id,))
+                if cursor.fetchone():
+                    return  # Camera already exists
+                
+                # Create default camera
+                cursor.execute("""
+                    INSERT INTO cameras (camera_id, user_id, room_id, camera_name, camera_type, ip_address, status, created_at) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (camera_id) DO NOTHING
+                """, (
+                    camera_id,
+                    default_user_id,  # Add user_id
+                    room_id,
+                    f'Healthcare Camera - Room {room_id[-3:]}',
+                    'rtsp',  # Use valid enum value for RTSP cameras
+                    '192.168.8.122',
+                    'active',
+                    datetime.now(timezone.utc)
+                ))
+                conn.commit()
+                logger.info(f"✅ Created default camera: {camera_id}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not create default camera {camera_id}: {e}")
+        finally:
+            self.return_connection(conn)
 
 # Global service instance
 postgresql_service = PostgreSQLHealthcareService()

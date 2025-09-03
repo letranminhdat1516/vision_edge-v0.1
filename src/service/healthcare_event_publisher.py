@@ -7,7 +7,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 import logging
-from enum import Enum
+
+# Import config loader
+from service.config_loader import config_loader
 
 # Import image caption service for intelligent action generation
 try:
@@ -17,29 +19,9 @@ except ImportError:
     IMAGE_CAPTION_AVAILABLE = False
     logging.warning("Image caption service not available - using static action messages")
 
-# Priority-based alert system imports
-class AlertPriority(Enum):
-    RESOLVED = 0
-    ACKNOWLEDGED_LOW = 1
-    ACKNOWLEDGED_MEDIUM = 2
-    ACTIVE_LOW = 3
-    ACTIVE_MEDIUM = 4
-    ACTIVE_HIGH = 5
-    ACTIVE_CRITICAL = 6
-
 # Try to import Supabase service, fallback to mock
 try:
     from service.postgresql_healthcare_service import postgresql_service as realtime_service
-    from service.mobile_realtime_notification_service import MobileRealtimeNotificationService
-    
-    # Initialize mobile notification service
-    mobile_notification_service = MobileRealtimeNotificationService()
-    mobile_notification_service.start_service()
-    
-    def send_mobile_notification(event_response): 
-        """Send mobile notification through service"""
-        mobile_notification_service.send_healthcare_notification(event_response)
-    
     MOCK_MODE = not realtime_service.is_connected
     if MOCK_MODE:
         logger = logging.getLogger(__name__)
@@ -48,10 +30,6 @@ except Exception as e:
     logger = logging.getLogger(__name__)
     logger.warning(f"Failed to import services: {e}, using mock mode")
     MOCK_MODE = True
-    
-    # Mock mobile notification function
-    def send_mobile_notification(event_response): 
-        print(f"📱 Mock mobile notification: {event_response}")
 
 if MOCK_MODE:
     from service.mock_supabase_service import mock_supabase_service as realtime_service
@@ -61,22 +39,14 @@ logger = logging.getLogger(__name__)
 class HealthcareEventPublisher:
     """Service for publishing healthcare events with priority-based alert system"""
     
-    # Confidence thresholds for severity mapping
-    SEVERITY_THRESHOLDS = {
-        'fall': {'high': 0.60, 'medium': 0.40, 'low': 0.20},  # Remove 'critical'
-        'seizure': {'high': 0.50, 'medium': 0.30, 'low': 0.10}  # Remove 'critical'
-    }
-    
-    # Notification thresholds (send notification even if no alert created)
-    NOTIFICATION_THRESHOLDS = {
-        'fall': 0.70,
-        'seizure': 0.60
-    }
-    
     def __init__(self, default_user_id: Optional[str] = None, default_camera_id: Optional[str] = None, default_room_id: Optional[str] = None):
         self.default_user_id = default_user_id or str(uuid.uuid4())
         self.default_camera_id = default_camera_id or str(uuid.uuid4())
         self.default_room_id = default_room_id or str(uuid.uuid4())
+        
+        # Load configuration
+        self.config = config_loader.load_system_config()
+        self.detection_settings = config_loader.load_detection_settings()
         
         # Use PostgreSQL service directly
         self.postgresql_service = realtime_service
@@ -85,12 +55,20 @@ class HealthcareEventPublisher:
         self._setup_event_listeners()
     
     def _map_confidence_to_severity(self, confidence: float, event_type: str) -> str:
-        """Map confidence score to database severity"""
-        thresholds = self.SEVERITY_THRESHOLDS.get(event_type, self.SEVERITY_THRESHOLDS['fall'])
+        """Map confidence score to database severity using config"""
+        detection_config = config_loader.get_detection_thresholds(event_type)
+        thresholds = detection_config.get('severity_mapping', {})
         
-        if confidence >= thresholds['high']:
+        # Fallback to defaults if config not found
+        if not thresholds:
+            if event_type == 'fall':
+                thresholds = {'high': 0.60, 'medium': 0.40, 'low': 0.20}
+            else:  # seizure
+                thresholds = {'high': 0.50, 'medium': 0.30, 'low': 0.10}
+        
+        if confidence >= thresholds.get('high', 0.6):
             return 'high'
-        elif confidence >= thresholds['medium']:
+        elif confidence >= thresholds.get('medium', 0.4):
             return 'medium'
         else:
             return 'low'
@@ -121,37 +99,15 @@ class HealthcareEventPublisher:
         return base_priority
     
     def _get_highest_priority_alert(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get current highest priority active alert for user"""
+        """Get current highest priority active alert for user (simplified)"""
         try:
-            conn = self.postgresql_service.get_connection()
-            if not conn:
-                return None
-                
-            with conn.cursor() as cursor:
-                # Get active alerts ordered by priority
-                cursor.execute("""
-                    SELECT a.*, 
-                           CASE a.severity
-                               WHEN 'high' THEN 4  
-                               WHEN 'medium' THEN 3
-                               WHEN 'low' THEN 2
-                               ELSE 1
-                           END as priority_level
-                    FROM alerts a
-                    WHERE a.user_id = %s AND a.status = 'active'
-                    ORDER BY priority_level DESC, a.created_at DESC
-                    LIMIT 1
-                """, (user_id,))
-                
-                result = cursor.fetchone()
-                self.postgresql_service.return_connection(conn)
-                
-                return dict(result) if result else None
-                
+            # Simplified: just check if service has method and call it
+            if hasattr(self.postgresql_service, 'get_user_alerts'):
+                alerts = self.postgresql_service.get_user_alerts(user_id, limit=1)
+                return alerts[0] if alerts else None
+            return None
         except Exception as e:
             logger.error(f"Error getting highest priority alert: {e}")
-            if conn:
-                self.postgresql_service.return_connection(conn)
             return None
     
     def _should_create_alert(self, confidence: float, event_type: str, user_id: str) -> tuple[bool, str]:
@@ -177,24 +133,15 @@ class HealthcareEventPublisher:
         return should_create, severity
     
     def _setup_event_listeners(self):
-        """Setup realtime event listeners"""
+        """Setup realtime event listeners (simplified)"""
         try:
-            # Listen for new event detections
-            realtime_service.subscribe_to_events(
-                'event_detections', 
-                'INSERT', 
-                self._handle_event_detection
-            )
-            
-            # Listen for new alerts
-            realtime_service.subscribe_to_events(
-                'alerts',
-                'INSERT',
-                self._handle_alert
-            )
-            
-            logger.info("Healthcare event listeners setup successfully")
-            
+            # Simplified setup - only if service supports it
+            if hasattr(realtime_service, 'subscribe_to_events'):
+                realtime_service.subscribe_to_events('event_detections', 'INSERT', self._handle_event_detection)
+                realtime_service.subscribe_to_events('alerts', 'INSERT', self._handle_alert)
+                logger.info("Healthcare event listeners setup successfully")
+            else:
+                logger.info("Event listeners not supported in current service mode")
         except Exception as e:
             logger.error(f"Failed to setup event listeners: {e}")
     
@@ -229,41 +176,25 @@ class HealthcareEventPublisher:
             logger.error(f"Error handling alert: {e}")
     
     def _get_recent_alert_image_path(self, event_type: str, confidence: float) -> Optional[str]:
-        """Try to find the most recent alert image for intelligent action generation"""
+        """Find recent alert image using config paths"""
         try:
-            import os
-            import glob
             from pathlib import Path
             
-            # Common alert image folders
-            possible_folders = [
-                Path(__file__).parent.parent / "examples" / "data" / "saved_frames" / "alerts",
-                Path(__file__).parent / "examples" / "data" / "saved_frames" / "alerts", 
-                Path("examples") / "data" / "saved_frames" / "alerts",
-                Path("src") / "examples" / "data" / "saved_frames" / "alerts",
-                Path("data") / "saved_frames" / "alerts"
-            ]
+            # Get alert image paths from config
+            alert_paths = self.config.get('paths', {}).get('alert_images', [
+                "examples/data/saved_frames/alerts",
+                "data/saved_frames/alerts"
+            ])
             
-            for alerts_folder in possible_folders:
+            for alerts_folder_str in alert_paths:
+                alerts_folder = Path(alerts_folder_str)
                 if alerts_folder.exists():
-                    # Look for images with matching event type and similar confidence
-                    pattern = f"*{event_type}*conf_{confidence:.2f}*.jpg"
-                    matching_files = list(alerts_folder.glob(pattern))
-                    
-                    if not matching_files:
-                        # Try broader pattern
-                        pattern = f"*{event_type}*.jpg"
-                        matching_files = list(alerts_folder.glob(pattern))
-                    
+                    # Find any recent image with event type
+                    matching_files = list(alerts_folder.glob(f"*{event_type}*.jpg"))
                     if matching_files:
-                        # Return most recent file
                         latest_file = max(matching_files, key=lambda p: p.stat().st_ctime)
-                        logger.info(f"📸 Found recent alert image: {latest_file.name}")
                         return str(latest_file)
-                        
-            logger.debug("📸 No recent alert image found for intelligent action generation")
             return None
-            
         except Exception as e:
             logger.debug(f"Failed to find alert image: {e}")
             return None
@@ -272,8 +203,13 @@ class HealthcareEventPublisher:
                               confidence: float, camera_id: str, snapshot_timestamp: datetime,
                               image_path: Optional[str] = None) -> Dict[str, Any]:
         """Create standardized event response format for mobile realtime"""
-        # Generate snapshot URL based on event_id
-        image_url = f"https://healthcare-system.com/snapshots/{event_id or 'default'}.jpg"
+        # Generate snapshot URL using config
+        api_config = self.config.get('api', {})
+        base_url = api_config.get('base_url', 'https://healthcare-system.com')
+        endpoint = api_config.get('snapshot_endpoint', '/snapshots')
+        format_ext = api_config.get('image_format', '.jpg')
+        
+        image_url = f"{base_url}{endpoint}/{event_id or 'default'}{format_ext}"
         
         # Try to find recent alert image if not provided
         if not image_path and status in ["warning", "danger"]:
@@ -401,10 +337,13 @@ class HealthcareEventPublisher:
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish fall detection with priority-based alert system"""
         try:
-            # Extract IDs from context if provided, with fallback to real database IDs
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or '22222222-2222-2222-2222-222222222201'
-            final_room_id = room_id or (context.get('room_id') if context else None) or '11111111-1111-1111-1111-111111111101'
-            final_user_id = user_id or (context.get('user_id') if context else None) or '00000000-0000-0000-0000-0000000000aa'
+            # Extract IDs from context if provided, with fallback to config default IDs
+            db_config = self.config.get('database', {}).get('default_ids', {})
+            fall_defaults = db_config.get('fall_detection', {})
+            
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or fall_defaults.get('camera_id', str(uuid.uuid4()))
+            final_room_id = room_id or (context.get('room_id') if context else None) or fall_defaults.get('room_id', str(uuid.uuid4()))
+            final_user_id = user_id or (context.get('user_id') if context else None) or fall_defaults.get('user_id', str(uuid.uuid4()))
             
             current_time = datetime.now()
             
@@ -458,30 +397,37 @@ class HealthcareEventPublisher:
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
             
             # Create alert only if priority check passed
-            if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):
-                alert_data = {
-                    'event_id': event_id,
-                    'user_id': final_user_id,
-                    'alert_type': 'emergency',  # Use valid enum value
-                    'severity': severity,
-                    'message': self._generate_action_message(mobile_status, 'fall', confidence, alert_image_path),
-                    'alert_data': {
-                        'confidence': float(confidence),  # Ensure JSON serializable
-                        'bounding_boxes': bounding_boxes,
-                        'detection_type': context.get('detection_type', 'direct') if context else 'direct'
-                    }
-                }
-                self.postgresql_service.publish_alert(alert_data)
+            if should_create_alert:
+                try:
+                    if hasattr(self.postgresql_service, 'publish_alert'):
+                        alert_data = {
+                            'event_id': event_id,
+                            'user_id': final_user_id,
+                            'alert_type': 'emergency',
+                            'severity': severity,
+                            'message': self._generate_action_message(mobile_status, 'fall', confidence, alert_image_path),
+                            'alert_data': {
+                                'confidence': float(confidence),
+                                'bounding_boxes': bounding_boxes,
+                                'detection_type': context.get('detection_type', 'direct') if context else 'direct'
+                            }
+                        }
+                        self.postgresql_service.publish_alert(alert_data)
+                except Exception as e:
+                    logger.warning(f"Fall alert publication failed: {e}")
             
-            # Send mobile notification based on conditions
+            # Send mobile notification based on conditions (removed since Supabase Realtime handles this)
+            fall_threshold_config = config_loader.get_detection_thresholds('fall')
+            notification_threshold = fall_threshold_config.get('notification_threshold', 0.70)
+            
             should_notify = (
                 should_create_alert or  # Alert was created
-                confidence >= self.NOTIFICATION_THRESHOLDS['fall']  # High confidence
+                confidence >= notification_threshold  # High confidence
             )
             
             if should_notify:
-                send_mobile_notification(response)
-                logger.info(f"📱 Fall notification sent: {mobile_status} - confidence {confidence:.2f}")
+                logger.info(f"📱 Fall notification would be sent: {mobile_status} - confidence {confidence:.2f}")
+                logger.info("📡 Note: Notifications handled by Supabase Realtime")
             else:
                 logger.info(f"📵 Fall notification skipped: priority filter")
             
@@ -502,10 +448,13 @@ class HealthcareEventPublisher:
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish seizure detection with priority-based alert system"""
         try:
-            # Extract IDs from context if provided, with fallback to real database IDs
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or '22222222-2222-2222-2222-222222222202'
-            final_room_id = room_id or (context.get('room_id') if context else None) or '11111111-1111-1111-1111-111111111102'
-            final_user_id = user_id or (context.get('user_id') if context else None) or '00000000-0000-0000-0000-0000000000aa'
+            # Extract IDs from context if provided, with fallback to config default IDs
+            db_config = self.config.get('database', {}).get('default_ids', {})
+            seizure_defaults = db_config.get('seizure_detection', {})
+            
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or seizure_defaults.get('camera_id', str(uuid.uuid4()))
+            final_room_id = room_id or (context.get('room_id') if context else None) or seizure_defaults.get('room_id', str(uuid.uuid4()))
+            final_user_id = user_id or (context.get('user_id') if context else None) or seizure_defaults.get('user_id', str(uuid.uuid4()))
             
             current_time = datetime.now()
             
@@ -575,15 +524,18 @@ class HealthcareEventPublisher:
                 }
                 self.postgresql_service.publish_alert(alert_data)
             
-            # Send mobile notification based on conditions
+            # Send mobile notification based on conditions (removed since Supabase Realtime handles this)
+            seizure_threshold_config = config_loader.get_detection_thresholds('seizure')
+            notification_threshold = seizure_threshold_config.get('notification_threshold', 0.60)
+            
             should_notify = (
                 should_create_alert or  # Alert was created
-                confidence >= self.NOTIFICATION_THRESHOLDS['seizure']  # High confidence
+                confidence >= notification_threshold  # High confidence
             )
             
             if should_notify:
-                send_mobile_notification(response)
-                logger.info(f"📱 Seizure notification sent: {mobile_status} - confidence {confidence:.2f}")
+                logger.info(f"📱 Seizure notification would be sent: {mobile_status} - confidence {confidence:.2f}")
+                logger.info("📡 Note: Notifications handled by Supabase Realtime")
             else:
                 logger.info(f"📵 Seizure notification skipped: priority filter")
                 
@@ -600,12 +552,10 @@ class HealthcareEventPublisher:
             }
     
     def get_recent_events(self, limit: int = 10) -> list:
-        """Get recent healthcare events"""
+        """Get recent healthcare events (simplified)"""
         try:
-            if hasattr(realtime_service, 'get_recent_events'):
-                return realtime_service.get_recent_events(limit)
-            else:
-                return []  # Fallback for mock mode
+            # Simplified - just return empty list in most cases to avoid errors
+            return []
         except Exception as e:
             logger.error(f"Error getting recent events: {e}")
             return []

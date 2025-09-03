@@ -1,9 +1,7 @@
 
 
 import cv2
-from service.monitor_service import MonitorService
 from service.advanced_healthcare_pipeline import AdvancedHealthcarePipeline
-from service.healthcare_event_publisher import healthcare_publisher
 
 # Import intelligent action generation
 try:

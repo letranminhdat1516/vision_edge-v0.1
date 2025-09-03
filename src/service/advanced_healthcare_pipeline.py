@@ -9,7 +9,7 @@ from pathlib import Path
 from service.healthcare_event_publisher import HealthcareEventPublisher
 
 class AdvancedHealthcarePipeline:
-    def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder, user_fcm_tokens=None):
+    def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder):
         self.camera = camera
         self.video_processor = video_processor
         self.fall_detector = fall_detector
@@ -17,53 +17,40 @@ class AdvancedHealthcarePipeline:
         self.seizure_predictor = seizure_predictor
         self.alert_save_path = alerts_folder
         
-        # Notification handling moved to NestJS backend
-        if user_fcm_tokens:
-            print(f"⚠️ FCM tokens provided but notifications handled by backend now")
-        else:
-            print("📱 Notifications will be handled by NestJS backend")
-        
         # Initialize Supabase event publisher
         self.event_publisher = HealthcareEventPublisher()
         
         # Create alert save directory
         Path(self.alert_save_path).mkdir(parents=True, exist_ok=True)
         
-        # Enhanced statistics với đầy đủ metric như file mẫu
+        # Simplified statistics - only essential metrics
         self.stats = {
             'start_time': time.time(),
             'total_frames': 0,
             'frames_processed': 0,
             'keyframes_detected': 0,
             'persons_detected': 0,
-            'last_detection_time': None,
             'fps': 0.0,
             'frame_times': [],
-            'avg_processing_time': 0.0,
-            'fall_processing_time': 0.0,
-            'seizure_processing_time': 0.0,
-            # Enhanced fall detection metrics
+            # Fall detection metrics
             'fall_detections': 0,
             'last_fall_time': None,
-            'fall_confidence_avg': 0.0,
-            # Enhanced seizure detection metrics
+            # Seizure detection metrics
             'seizure_detections': 0,
             'last_seizure_time': None,
-            'seizure_confidence_avg': 0.0,
             'seizure_warnings': 0,
             'pose_extraction_failures': 0,
+            # Alert metrics
             'critical_alerts': 0,
             'total_alerts': 0,
             'last_alert_time': None,
-            'alert_type': 'normal',
-            'motion_frames': 0
+            'alert_type': 'normal'
         }
         
         # Enhanced detection history
         self.detection_history = {
             'fall_confidences': [],
             'seizure_confidences': [],
-            'person_positions': [],
             'motion_levels': [],
             'max_history': 10,
             'fall_confirmation_frames': 0,
@@ -71,10 +58,8 @@ class AdvancedHealthcarePipeline:
             'last_significant_motion': time.time()
         }
         
-        # Performance tracking
+        # Performance tracking - merged with stats
         self.performance = {
-            'fps': 0.0,
-            'processing_time': 0.0,
             'fall_detection_time': 0.0,
             'seizure_detection_time': 0.0,
             'total_detection_time': 0.0
@@ -456,7 +441,7 @@ class AdvancedHealthcarePipeline:
             print(f"Error saving alert image: {e}")
 
     def update_statistics(self, detection_result, person_count):
-        """Update comprehensive statistics như file mẫu"""
+        """Update simplified statistics"""
         # Frame counting
         self.stats['frames_processed'] += 1
         self.stats['persons_detected'] += person_count
@@ -470,13 +455,6 @@ class AdvancedHealthcarePipeline:
         if len(self.stats['frame_times']) > 1:
             time_diff = self.stats['frame_times'][-1] - self.stats['frame_times'][0]
             self.stats['fps'] = len(self.stats['frame_times']) / time_diff if time_diff > 0 else 0
-        
-        # Detection updates (đã được update trong process_dual_detection)
-        # Performance metrics
-        if hasattr(self, 'performance'):
-            self.stats['avg_processing_time'] = self.performance.get('total_detection_time', 0) * 1000  # ms
-            self.stats['fall_processing_time'] = self.performance.get('fall_detection_time', 0) * 1000
-            self.stats['seizure_processing_time'] = self.performance.get('seizure_detection_time', 0) * 1000
 
     def calculate_motion_level(self, prev_frame, current_frame):
         """Calculate motion level between frames như file mẫu"""
@@ -601,11 +579,11 @@ class AdvancedHealthcarePipeline:
         return frame_normal
 
     def draw_statistics_overlay(self, frame, stats):
-        """Vẽ bảng statistics chi tiết giống file mẫu"""
+        """Simplified statistics overlay - only essential info"""
         frame_vis = frame.copy()
         h, w = frame.shape[:2]
-        panel_width = 300
-        panel_height = 350
+        panel_width = 250
+        panel_height = 180
         panel_x = w - panel_width - 10
         panel_y = 10
 
@@ -614,117 +592,68 @@ class AdvancedHealthcarePipeline:
         cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height), (0, 0, 0), -1)
         frame_vis = cv2.addWeighted(frame_vis, 0.7, overlay, 0.3, 0)
 
-        # Calculate runtime statistics
+        # Calculate runtime
         runtime = time.time() - stats['start_time']
-        fps = stats['frames_processed'] / runtime if runtime > 0 else 0
-        efficiency = (1 - stats['frames_processed'] / max(stats['total_frames'], 1)) * 100
-
-        # Statistics text
+        
+        # Simplified statistics text
         stats_text = [
-            "🏥 DUAL DETECTION SYSTEM - ENHANCED",
-            f"Runtime: {runtime/60:.1f} minutes",
-            f"FPS: {fps:.1f}",
-            f"Efficiency: {efficiency:.1f}% skipped",
+            "🏥 HEALTHCARE MONITOR",
+            f"Runtime: {runtime/60:.1f}min | FPS: {stats['fps']:.1f}",
+            f"Frames: {stats['frames_processed']}/{stats['total_frames']}",
             "",
-            "📊 DETECTION STATS:",
-            f"Total Frames: {stats['total_frames']}",
-            f"Processed: {stats['frames_processed']}",
-            f"Keyframes: {stats['keyframes_detected']}",
-            f"Persons: {stats['persons_detected']}",
+            "🩹 FALL DETECTION:",
+            f"Detected: {stats['fall_detections']}",
+            f"Frames: {self.detection_history.get('fall_confirmation_frames', 0)}",
             "",
-            "🩹 FALL DETECTION - ENHANCED:",
-            f"Falls Detected: {stats['fall_detections']}",
-            f"Avg Confidence: {stats['fall_confidence_avg']:.2f}",
-            f"Confirmation Frames: {self.detection_history.get('fall_confirmation_frames', 0)}",
-            "",
-            "🧠 SEIZURE DETECTION - ENHANCED:",
-            f"Seizures: {stats['seizure_detections']}",
+            "🧠 SEIZURE DETECTION:",
+            f"Detected: {stats['seizure_detections']}",
             f"Warnings: {stats['seizure_warnings']}",
-            f"Pose Failures: {stats['pose_extraction_failures']}",
-            f"Confirmation Frames: {self.detection_history.get('seizure_confirmation_frames', 0)}",
+            f"Frames: {self.detection_history.get('seizure_confirmation_frames', 0)}",
             "",
-            "📊 MOTION ANALYSIS:",
-            f"Current Motion: {self.detection_history['motion_levels'][-1]:.2f}" if self.detection_history['motion_levels'] else "Motion: N/A",
-            f"Motion History: {len(self.detection_history['motion_levels'])}/10",
-            f"Last Significant: {time.time() - self.detection_history['last_significant_motion']:.1f}s ago",
-            "",
-            "🚨 EMERGENCY ALERTS:",
-            f"Critical: {stats['critical_alerts']}",
-            f"Total Alerts: {stats['total_alerts']}",
-            f"Status: {stats['alert_type']}",
-            "",
-            "⚡ PERFORMANCE:",
-            f"Fall Det: {self.performance['fall_detection_time']*1000:.1f}ms",
-            f"Seizure Det: {self.performance['seizure_detection_time']*1000:.1f}ms",
-            f"Total: {self.performance['total_detection_time']*1000:.1f}ms"
+            " ALERTS:",
+            f"Critical: {stats['critical_alerts']} | Total: {stats['total_alerts']}",
+            f"Status: {stats['alert_type']}"
         ]
 
         # Draw statistics
-        text_y = panel_y + 20
+        text_y = panel_y + 15
         for line in stats_text:
             if line == "":
                 text_y += 5
                 continue
             color = (255, 255, 255)
-            if "🚨" in line or "CRITICAL" in line:
+            if "🚨" in line:
                 color = (0, 0, 255)
             elif "🩹" in line or "🧠" in line:
                 color = (0, 255, 255)
-            elif "📊" in line:
-                color = (0, 255, 0)
             cv2.putText(frame_vis, line, (panel_x + 10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            text_y += 15
+            text_y += 12
 
         return frame_vis
 
     def print_final_statistics(self):
-        """Print comprehensive final statistics như file mẫu"""
+        """Print simplified final statistics"""
         runtime = time.time() - self.stats['start_time']
-        print("\n" + "="*70)
-        print("🏥 ADVANCED HEALTHCARE MONITOR - ENHANCED FINAL STATISTICS")
-        print("="*70)
-        print(f"📊 Runtime: {runtime/60:.1f} minutes")
-        print(f"📊 Total Frames: {self.stats['total_frames']}")
-        print(f"📊 Frames Processed: {self.stats['frames_processed']}")
-        print(f"📊 Processing Efficiency: {(1-self.stats['frames_processed']/max(self.stats['total_frames'],1))*100:.1f}% skipped")
-        print(f"📊 Average FPS: {self.stats['total_frames']/runtime:.1f}")
+        print("\n" + "="*50)
+        print("🏥 HEALTHCARE MONITOR - FINAL STATISTICS")
+        print("="*50)
+        print(f"📊 Runtime: {runtime/60:.1f} minutes | FPS: {self.stats['fps']:.1f}")
+        print(f"📊 Frames: {self.stats['frames_processed']}/{self.stats['total_frames']}")
+        print(f"📊 Persons Detected: {self.stats['persons_detected']}")
         print()
-        print("🩹 ENHANCED FALL DETECTION:")
-        print(f"   Falls Detected: {self.stats['fall_detections']}")
-        print(f"   Average Confidence: {self.stats['fall_confidence_avg']:.2f}")
-        print(f"   Final Confirmation Frames: {self.detection_history.get('fall_confirmation_frames', 0)}")
-        print(f"   Last Fall: {datetime.fromtimestamp(self.stats['last_fall_time']).strftime('%H:%M:%S') if self.stats['last_fall_time'] else 'None'}")
+        print("🩹 FALL DETECTION:")
+        print(f"   Detected: {self.stats['fall_detections']}")
+        print(f"   Last: {datetime.fromtimestamp(self.stats['last_fall_time']).strftime('%H:%M:%S') if self.stats['last_fall_time'] else 'None'}")
         print()
-        print("🧠 ENHANCED SEIZURE DETECTION:")
-        print(f"   Seizures Detected: {self.stats['seizure_detections']}")
-        print(f"   Seizure Warnings: {self.stats['seizure_warnings']}")
-        print(f"   Average Confidence: {self.stats['seizure_confidence_avg']:.2f}")
-        print(f"   Final Confirmation Frames: {self.detection_history.get('seizure_confirmation_frames', 0)}")
-        print(f"   Pose Extraction Failures: {self.stats['pose_extraction_failures']}")
-        print(f"   Last Seizure: {datetime.fromtimestamp(self.stats['last_seizure_time']).strftime('%H:%M:%S') if self.stats['last_seizure_time'] else 'None'}")
+        print("🧠 SEIZURE DETECTION:")
+        print(f"   Detected: {self.stats['seizure_detections']}")
+        print(f"   Warnings: {self.stats['seizure_warnings']}")
+        print(f"   Last: {datetime.fromtimestamp(self.stats['last_seizure_time']).strftime('%H:%M:%S') if self.stats['last_seizure_time'] else 'None'}")
         print()
-        print("📊 MOTION ANALYSIS:")
-        if self.detection_history['motion_levels']:
-            avg_motion = sum(self.detection_history['motion_levels']) / len(self.detection_history['motion_levels'])
-            max_motion = max(self.detection_history['motion_levels'])
-            print(f"   Average Motion Level: {avg_motion:.2f}")
-            print(f"   Maximum Motion Level: {max_motion:.2f}")
-            print(f"   Motion Samples: {len(self.detection_history['motion_levels'])}")
-        else:
-            print(f"   No motion data collected")
-        print()
-        print("🚨 EMERGENCY ALERTS:")
-        print(f"   Critical Alerts: {self.stats['critical_alerts']}")
-        print(f"   Total Alerts: {self.stats['total_alerts']}")
-        print(f"   Current Status: {self.stats['alert_type']}")
-        print()
-        print("⚡ DETECTION ENHANCEMENTS:")
-        print(f"   ✅ Motion-based confidence boosting")
-        print(f"   ✅ Temporal smoothing and filtering")
-        print(f"   ✅ Multi-frame confirmation system")
-        print(f"   ✅ Lowered detection thresholds for sensitivity")
-        print(f"   ✅ Enhanced warning system")
-        print("="*70)
+        print("🚨 ALERTS:")
+        print(f"   Critical: {self.stats['critical_alerts']} | Total: {self.stats['total_alerts']}")
+        print(f"   Status: {self.stats['alert_type']}")
+        print("="*50)
 
     def send_emergency_notification(self, detection_result):
         """
@@ -766,11 +695,3 @@ class AdvancedHealthcarePipeline:
                 
         except Exception as e:
             print(f"❌ Emergency Event Logging Error: {e}")
-    
-    def update_fcm_tokens(self, new_tokens):
-        """Update FCM tokens for emergency notifications (deprecated - handled by backend)"""
-        print("⚠️ FCM token update moved to NestJS backend")
-    
-    def add_fcm_token(self, token):
-        """Add a single FCM token (deprecated - handled by backend)"""
-        print("⚠️ FCM token management moved to NestJS backend")
