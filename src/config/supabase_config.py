@@ -13,8 +13,8 @@ class SupabaseConfig:
     """Configuration class for Supabase connection and realtime settings"""
     
     def __init__(self):
-        self.url = os.getenv('SUPABASE_URL', 'https://your-project.supabase.co')
-        self.key = os.getenv('SUPABASE_KEY', 'your-anon-key')  # Changed from SUPABASE_ANON_KEY
+        self.url = os.getenv('SUPABASE_URL')
+        self.key = os.getenv('SUPABASE_KEY')  # Changed from SUPABASE_ANON_KEY
         self.service_role_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY', self.key)  # Fallback to anon key
         self.database_url = os.getenv('DATABASE_URL', '')  # Direct PostgreSQL connection
         

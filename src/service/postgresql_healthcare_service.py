@@ -14,7 +14,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 
-from .vietnamese_caption_service import VietnameseCaptionService
+# Vietnamese caption service removed temporarily
+# Will be replaced with a different implementation later
 from psycopg2 import pool
 import threading
 from urllib.parse import urlparse
@@ -23,7 +24,17 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from config.supabase_config import supabase_config
+try:
+    from config.supabase_config import supabase_config
+except ImportError:
+    try:
+        from src.config.supabase_config import supabase_config
+    except ImportError:
+        # Fallback configuration if config module not available
+        class FallbackConfig:
+            def __init__(self):
+                self.database_url = os.getenv('DATABASE_URL', '')
+        supabase_config = FallbackConfig()
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +45,10 @@ class PostgreSQLHealthcareService:
         self.database_url = supabase_config.database_url
         self.connection_pool = None
         
-        # Initialize Vietnamese Caption Service
-        self.vietnamese_caption = VietnameseCaptionService()
-        logger.info(f"🇻🇳 Vietnamese Caption Service: {'✅ Available' if self.vietnamese_caption.is_available() else '📝 Fallback mode'}")
+        # Vietnamese Caption Service removed temporarily 
+        # Will be implemented with a different approach later
+        self.vietnamese_caption = None
+        logger.info("📝 Vietnamese Caption Service: Disabled (will implement different approach)")
         self.is_connected = False
         self.polling_threads = {}
         self.event_handlers = {}
@@ -350,40 +362,43 @@ class PostgreSQLHealthcareService:
     
     def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
         """
-        Generate Vietnamese description for healthcare event
+        Generate description for healthcare event (simplified version)
+        Vietnamese caption service temporarily removed
         
         Args:
             event_type: Type of event (fall, abnormal_behavior, etc.)
             confidence: Detection confidence
-            image_path: Path to event image/snapshot
+            image_path: Path to event image/snapshot (not used currently)
             fallback_description: Original description as fallback
             
         Returns:
-            Vietnamese description of the event
+            Event description in Vietnamese (basic implementation)
         """
         try:
-            # Try to generate Vietnamese caption from image
-            if image_path and self.vietnamese_caption.is_available():
-                vietnamese_desc = self.vietnamese_caption.generate_caption(
-                    image_path=image_path,
-                    event_type=event_type,
-                    confidence=confidence
-                )
-                logger.info(f"🇻🇳 Generated Vietnamese description: {vietnamese_desc}")
-                return vietnamese_desc
+            # Simple Vietnamese descriptions based on event type
+            if event_type == 'fall':
+                if confidence >= 0.80:
+                    return f"🚨 PHÁT HIỆN TÉ NGÃ NGHIÊM TRỌNG - Độ tin cậy: {confidence:.1%} - Cần hỗ trợ khẩn cấp!"
+                elif confidence >= 0.60:
+                    return f"⚠️ Phát hiện té ngã - Độ tin cậy: {confidence:.1%} - Cần kiểm tra"
+                else:
+                    return f"📊 Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Theo dõi"
+                    
+            elif event_type in ['abnormal_behavior', 'seizure']:
+                if confidence >= 0.70:
+                    return f"🆘 PHÁT HIỆN CO GIẬT NGHIÊM TRỌNG - Độ tin cậy: {confidence:.1%} - Cần điều trị ngay!"
+                elif confidence >= 0.50:
+                    return f"⚠️ Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi"
+                else:
+                    return f"📊 Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Quan sát"
+                    
             else:
-                # Use Vietnamese caption service's enhanced description (without image)
-                vietnamese_desc = self.vietnamese_caption.generate_caption(
-                    image_path="",  # No image path
-                    event_type=event_type,
-                    confidence=confidence
-                )
-                logger.info(f"📝 Generated fallback Vietnamese description: {vietnamese_desc}")
-                return vietnamese_desc
+                # Unknown event type
+                return f"🔍 Phát hiện sự kiện {event_type} - Độ tin cậy: {confidence:.1%}"
                 
         except Exception as e:
-            logger.error(f"❌ Error generating Vietnamese description: {e}")
-            # Final fallback to original description
+            logger.error(f"❌ Error generating event description: {e}")
+            # Final fallback
             return fallback_description or f"Phát hiện sự kiện {event_type} (độ tin cậy: {confidence:.1%})"
     
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:

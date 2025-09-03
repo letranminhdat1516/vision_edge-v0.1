@@ -1,1 +1,0 @@
-# Entity/model for DailySummary

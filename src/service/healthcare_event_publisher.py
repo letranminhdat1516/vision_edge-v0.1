@@ -9,6 +9,14 @@ from typing import Dict, Any, Optional, List
 import logging
 from enum import Enum
 
+# Import image caption service for intelligent action generation
+try:
+    from service.image_caption_service import get_professional_caption_pipeline
+    IMAGE_CAPTION_AVAILABLE = True
+except ImportError:
+    IMAGE_CAPTION_AVAILABLE = False
+    logging.warning("Image caption service not available - using static action messages")
+
 # Priority-based alert system imports
 class AlertPriority(Enum):
     RESOLVED = 0
@@ -220,14 +228,59 @@ class HealthcareEventPublisher:
         except Exception as e:
             logger.error(f"Error handling alert: {e}")
     
+    def _get_recent_alert_image_path(self, event_type: str, confidence: float) -> Optional[str]:
+        """Try to find the most recent alert image for intelligent action generation"""
+        try:
+            import os
+            import glob
+            from pathlib import Path
+            
+            # Common alert image folders
+            possible_folders = [
+                Path(__file__).parent.parent / "examples" / "data" / "saved_frames" / "alerts",
+                Path(__file__).parent / "examples" / "data" / "saved_frames" / "alerts", 
+                Path("examples") / "data" / "saved_frames" / "alerts",
+                Path("src") / "examples" / "data" / "saved_frames" / "alerts",
+                Path("data") / "saved_frames" / "alerts"
+            ]
+            
+            for alerts_folder in possible_folders:
+                if alerts_folder.exists():
+                    # Look for images with matching event type and similar confidence
+                    pattern = f"*{event_type}*conf_{confidence:.2f}*.jpg"
+                    matching_files = list(alerts_folder.glob(pattern))
+                    
+                    if not matching_files:
+                        # Try broader pattern
+                        pattern = f"*{event_type}*.jpg"
+                        matching_files = list(alerts_folder.glob(pattern))
+                    
+                    if matching_files:
+                        # Return most recent file
+                        latest_file = max(matching_files, key=lambda p: p.stat().st_ctime)
+                        logger.info(f"📸 Found recent alert image: {latest_file.name}")
+                        return str(latest_file)
+                        
+            logger.debug("📸 No recent alert image found for intelligent action generation")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Failed to find alert image: {e}")
+            return None
+
     def _create_event_response(self, event_id: Optional[str], status: str, event_type: str, 
-                              confidence: float, camera_id: str, snapshot_timestamp: datetime) -> Dict[str, Any]:
+                              confidence: float, camera_id: str, snapshot_timestamp: datetime,
+                              image_path: Optional[str] = None) -> Dict[str, Any]:
         """Create standardized event response format for mobile realtime"""
         # Generate snapshot URL based on event_id
         image_url = f"https://healthcare-system.com/snapshots/{event_id or 'default'}.jpg"
         
-        # Generate action message based on status and event type
-        action = self._generate_action_message(status, event_type, confidence)
+        # Try to find recent alert image if not provided
+        if not image_path and status in ["warning", "danger"]:
+            image_path = self._get_recent_alert_image_path(event_type, confidence)
+        
+        # Generate action message based on status, event type, and optionally image content
+        action = self._generate_action_message(status, event_type, confidence, image_path)
         
         return {
             "imageUrl": image_url,
@@ -236,8 +289,92 @@ class HealthcareEventPublisher:
             "time": snapshot_timestamp.isoformat()  # Time from snapshot creation
         }
     
-    def _generate_action_message(self, status: str, event_type: str, confidence: float) -> str:
-        """Generate action message based on status and event type"""
+    def _generate_action_message(self, status: str, event_type: str, confidence: float, 
+                                image_path: Optional[str] = None) -> str:
+        """Generate action message based on status, event type, and optionally image content"""
+        
+        # Try to generate intelligent action from image content first
+        if image_path and IMAGE_CAPTION_AVAILABLE:
+            try:
+                intelligent_action = self._generate_intelligent_action(image_path, status, event_type, confidence)
+                if intelligent_action:
+                    return intelligent_action
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to generate intelligent action: {e}")
+        
+        # Fallback to static action messages
+        return self._generate_static_action_message(status, event_type, confidence)
+    
+    def _generate_intelligent_action(self, image_path: str, status: str, event_type: str, confidence: float) -> Optional[str]:
+        """Generate intelligent action message using BLIP + Translation pipeline"""
+        try:
+            if not IMAGE_CAPTION_AVAILABLE:
+                return None
+                
+            # Get image caption pipeline
+            caption_pipeline = get_professional_caption_pipeline()
+            
+            # Generate Vietnamese caption from image
+            vietnamese_caption, metadata = caption_pipeline.generate_professional_caption(image_path)
+            
+            if not metadata.get("success", False):
+                logger.warning("Image captioning failed, using static action")
+                return None
+            
+            # Enhance caption with emergency context based on status and confidence
+            enhanced_action = self._enhance_caption_with_emergency_context(
+                vietnamese_caption, status, event_type, confidence
+            )
+            
+            logger.info(f"🤖 Generated intelligent action: {enhanced_action}")
+            logger.info(f"📸 Based on image content: {metadata.get('english_caption', 'N/A')}")
+            
+            return enhanced_action
+            
+        except Exception as e:
+            logger.error(f"❌ Intelligent action generation failed: {e}")
+            return None
+    
+    def _enhance_caption_with_emergency_context(self, base_caption: str, status: str, 
+                                              event_type: str, confidence: float) -> str:
+        """Enhance image caption with emergency context and urgency"""
+        
+        # Remove existing alert markers from caption to avoid duplication
+        cleaned_caption = base_caption.replace("⚠️ Cảnh báo:", "").replace("🚨 Cảnh báo:", "").strip()
+        
+        # Generate emergency context based on status
+        if status == "danger":
+            if event_type == "fall":
+                emergency_prefix = "🚨 KHẨN CẤP - TÉ NGÃ:"
+                urgency_suffix = f" - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+            elif event_type in ["abnormal_behavior", "seizure"]:
+                emergency_prefix = "🆘 KHẨN CẤP - CO GIẬT:"
+                urgency_suffix = f" - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+            else:
+                emergency_prefix = "🚨 TÌNH HUỐNG KHẨN CẤP:"
+                urgency_suffix = f" - Cần hỗ trợ gấp! (Tin cậy: {confidence:.0%})"
+                
+        elif status == "warning":
+            if event_type == "fall":
+                emergency_prefix = "⚠️ CẢNH BÁO TÉ NGÃ:"
+                urgency_suffix = f" - Cần theo dõi và kiểm tra (Tin cậy: {confidence:.0%})"
+            elif event_type in ["abnormal_behavior", "seizure"]:
+                emergency_prefix = "⚠️ CẢNH BÁO BẤT THƯỜNG:"
+                urgency_suffix = f" - Cần quan sát chặt chẽ (Tin cậy: {confidence:.0%})"
+            else:
+                emergency_prefix = "⚠️ CẢNH BÁO:"
+                urgency_suffix = f" - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                
+        else:  # normal
+            return f"✅ BÌNH THƯỜNG: {cleaned_caption}"
+        
+        # Combine all parts
+        enhanced_action = f"{emergency_prefix} {cleaned_caption}{urgency_suffix}"
+        
+        return enhanced_action
+    
+    def _generate_static_action_message(self, status: str, event_type: str, confidence: float) -> str:
+        """Generate static action message (original implementation)"""
         if status == "normal":
             return "Không có gì bất thường"
         
@@ -301,13 +438,18 @@ class HealthcareEventPublisher:
             
             # Create mobile response format
             mobile_status = self._map_status_for_mobile(severity)
+            
+            # Try to find alert image for intelligent action generation
+            alert_image_path = self._get_recent_alert_image_path('fall', confidence)
+            
             response = self._create_event_response(
                 event_id=event_id,
                 status=mobile_status,
                 event_type="fall",
                 confidence=confidence,
                 camera_id=final_camera_id,
-                snapshot_timestamp=current_time
+                snapshot_timestamp=current_time,
+                image_path=alert_image_path
             )
             
             # Add priority system metadata
@@ -322,7 +464,7 @@ class HealthcareEventPublisher:
                     'user_id': final_user_id,
                     'alert_type': 'emergency',  # Use valid enum value
                     'severity': severity,
-                    'message': self._generate_action_message(mobile_status, 'fall', confidence),
+                    'message': self._generate_action_message(mobile_status, 'fall', confidence, alert_image_path),
                     'alert_data': {
                         'confidence': float(confidence),  # Ensure JSON serializable
                         'bounding_boxes': bounding_boxes,
@@ -398,13 +540,18 @@ class HealthcareEventPublisher:
             
             # Create mobile response format
             mobile_status = self._map_status_for_mobile(severity)
+            
+            # Try to find alert image for intelligent action generation
+            alert_image_path = self._get_recent_alert_image_path('seizure', confidence)
+            
             response = self._create_event_response(
                 event_id=event_id,
                 status=mobile_status,
                 event_type="seizure",
                 confidence=confidence,
                 camera_id=final_camera_id,
-                snapshot_timestamp=current_time
+                snapshot_timestamp=current_time,
+                image_path=alert_image_path
             )
             
             # Add priority system metadata
@@ -419,7 +566,7 @@ class HealthcareEventPublisher:
                     'user_id': final_user_id,
                     'alert_type': 'warning',  # Use valid enum value
                     'severity': severity,
-                    'message': self._generate_action_message(mobile_status, 'seizure', confidence),
+                    'message': self._generate_action_message(mobile_status, 'seizure', confidence, alert_image_path),
                     'alert_data': {
                         'confidence': float(confidence),  # Ensure JSON serializable
                         'bounding_boxes': bounding_boxes,
