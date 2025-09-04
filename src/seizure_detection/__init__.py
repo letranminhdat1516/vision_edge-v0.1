@@ -4,13 +4,13 @@ Real-time seizure detection from video surveillance for healthcare monitoring
 """
 
 from .vsvig_detector import VSViGSeizureDetector
-from .pose_estimator import CustomPoseEstimator  
-from .seizure_predictor import SeizurePredictor
+from .pose_estimator import UltimatePoseEstimator  
+from .yolov8_pose_estimator import YOLOv8PoseEstimator
 
 __all__ = [
     'VSViGSeizureDetector',
-    'CustomPoseEstimator', 
-    'SeizurePredictor'
+    'UltimatePoseEstimator',
+    'YOLOv8PoseEstimator'
 ]
 
 __version__ = '1.0.0'

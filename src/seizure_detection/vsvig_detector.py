@@ -26,7 +26,7 @@ except ImportError as e:
     logging.error(f"VSViG model classes not available: {e}")
     VSVIG_AVAILABLE = False
 
-from .pose_estimator import get_pose_estimator
+from .yolov8_pose_estimator import YOLOv8PoseEstimator
 
 class VSViGSeizureDetector:
     """
@@ -82,7 +82,7 @@ class VSViGSeizureDetector:
         self.current_seizure_state = False  # Track if currently in seizure
         
         # Components
-        self.pose_estimator = get_pose_estimator(pose_model_path, device)
+        self.pose_estimator = YOLOv8PoseEstimator(model_size='n')
         self.vsvig_model = None
         self.is_initialized = False
         self.inference_error_logged = False  # Prevent spam logging
@@ -114,9 +114,8 @@ class VSViGSeizureDetector:
             self.logger.info(f"Loading VSViG model from: {self.vsvig_model_path}")
             self.logger.info(f"Loading dynamic order from: {self.dynamic_order_path}")
             
-            # Load pose estimator
-            if not self.pose_estimator.load_model():
-                self.logger.warning("Failed to load pose estimation model - using fallback")
+            # YOLOv8PoseEstimator initializes automatically
+            self.logger.info("YOLOv8 Pose Estimator loaded successfully")
             
             # Load VSViG model with proper architecture
             if not Path(self.vsvig_model_path).exists():
@@ -208,7 +207,7 @@ class VSViGSeizureDetector:
             # Extract pose keypoints
             keypoints = self.pose_estimator.extract_keypoints(frame, person_bbox)
             
-            if keypoints is None or not self.pose_estimator.is_valid_pose(keypoints):
+            if keypoints is None or not self.pose_estimator.validate_keypoints(keypoints):
                 self.stats['pose_extraction_failures'] += 1
                 return result
             

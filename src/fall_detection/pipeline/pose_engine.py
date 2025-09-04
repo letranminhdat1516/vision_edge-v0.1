@@ -84,43 +84,82 @@ class PoseEngine():
         
 
     def draw_kps(self, kps, template_image):
-
+        """
+        Draw keypoints with improved accuracy and visualization
+        """
         pil_im = template_image
         draw = ImageDraw.Draw(pil_im)
         
         leftShoulder = False
         rightShoulder = False
         
-        scoreList = {'LShoulder_score':0,'RShoulder_score':0,'LHip_score':0,'RHip_score':0}
+        scoreList = {'LShoulder_score':0.0,'RShoulder_score':0.0,'LHip_score':0.0,'RHip_score':0.0}
+        
+        # Improved confidence threshold
+        confidence_threshold = 0.5  # Increased from implicit low threshold
+        
+        # Store shoulder and hip points for body line drawing
+        leftShoulder_point = None
+        rightShoulder_point = None
+        leftHip_point = None
+        rightHip_point = None
         
         for i in range(kps.shape[0]):
-                                    
-            x, y, r = int(round(kps[i, 1])), int(round(kps[i, 0])), 1
+            x, y = int(round(kps[i, 1])), int(round(kps[i, 0]))
+            confidence = kps[i, -1] if kps.shape[1] > 2 else 1.0
+            
+            # Only draw if confidence is high enough
+            if confidence < confidence_threshold:
+                continue
+            
+            # Determine point size and color based on confidence
+            if confidence > 0.8:
+                r = 3
+                color = (0, 255, 0, 255)  # Bright green
+            elif confidence > 0.6:
+                r = 2  
+                color = (0, 255, 255, 255)  # Yellow
+            else:
+                r = 1
+                color = (255, 165, 0, 255)  # Orange
 
-            if i == 5:
+            # Track key body points for fall detection
+            if i == 5:  # Left shoulder
                 leftShoulder = True
                 leftShoulder_point = [x, y]
-                scoreList['LShoulder_score'] = kps[i,-1]
+                scoreList['LShoulder_score'] = confidence
                 
-            if i == 6:
+            if i == 6:  # Right shoulder
                 rightShoulder = True
                 rightShoulder_point = [x, y]
-                scoreList['RShoulder_score'] = kps[i,-1]
+                scoreList['RShoulder_score'] = confidence
 
+            if i == 11:  # Left hip
+                leftHip_point = [x, y]
+                scoreList['LHip_score'] = confidence
+
+            if i == 12:  # Right hip
+                rightHip_point = [x, y]
+                scoreList['RHip_score'] = confidence
+
+            # Draw keypoint
             leftUpPoint = (x-r, y-r)
             rightDownPoint = (x+r, y+r)
             twoPointList = [leftUpPoint, rightDownPoint]
-            draw.ellipse(twoPointList, fill=(0, 255, 0, 255))
+            draw.ellipse(twoPointList, fill=color)
 
-            if i == 11 and leftShoulder:
-                leftHip_point = [x, y]
-                scoreList['LHip_score'] = kps[i,-1]
-                draw.line((leftShoulder_point[0],leftShoulder_point[1], leftHip_point[0],leftHip_point[1]), fill='green', width=3)
+        # Draw body lines with improved logic
+        if leftShoulder_point and leftHip_point and scoreList['LShoulder_score'] > confidence_threshold and scoreList['LHip_score'] > confidence_threshold:
+            line_color = 'green' if min(scoreList['LShoulder_score'], scoreList['LHip_score']) > 0.7 else 'yellow'
+            line_width = 4 if min(scoreList['LShoulder_score'], scoreList['LHip_score']) > 0.7 else 3
+            draw.line((leftShoulder_point[0], leftShoulder_point[1], leftHip_point[0], leftHip_point[1]), 
+                     fill=line_color, width=line_width)
 
-            if i == 12 and rightShoulder:
-                rightHip_point = [x, y]
-                scoreList['RHip_score'] = kps[i,-1]
-                draw.line((rightShoulder_point[0],rightShoulder_point[1], rightHip_point[0],rightHip_point[1]), fill='green', width=3)
+        if rightShoulder_point and rightHip_point and scoreList['RShoulder_score'] > confidence_threshold and scoreList['RHip_score'] > confidence_threshold:
+            line_color = 'green' if min(scoreList['RShoulder_score'], scoreList['RHip_score']) > 0.7 else 'yellow'
+            line_width = 4 if min(scoreList['RShoulder_score'], scoreList['RHip_score']) > 0.7 else 3
+            draw.line((rightShoulder_point[0], rightShoulder_point[1], rightHip_point[0], rightHip_point[1]), 
+                     fill=line_color, width=line_width)
                     
         return pil_im, scoreList
 

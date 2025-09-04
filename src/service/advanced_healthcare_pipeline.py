@@ -501,22 +501,81 @@ class AdvancedHealthcarePipeline:
             cv2.rectangle(frame_vis, (x, y), (x + w, y + h), color, 2)
             cv2.putText(frame_vis, f"Person: {confidence:.2f}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-        # Vẽ keypoints nếu có
+        # Vẽ keypoints với improved accuracy
         keypoints = detection_result.get('keypoints')
         if keypoints is not None:
+            conf_threshold = 0.5  # Increased threshold for better accuracy
+            
+            # Draw keypoints with better color coding
             for i, (kx, ky, kconf) in enumerate(keypoints):
-                if kconf > 0.3:
-                    color = (0, 255, 0) if kconf > 0.7 else (0, 255, 255)
-                    cv2.circle(frame_vis, (int(kx), int(ky)), 3, color, -1)
-                    cv2.putText(frame_vis, str(i), (int(kx), int(ky-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
+                if kconf > conf_threshold:
+                    # Improved color coding based on confidence
+                    if kconf > 0.8:
+                        color = (0, 255, 0)    # Bright green for very high confidence
+                    elif kconf > 0.6:
+                        color = (0, 255, 255)  # Yellow for high confidence  
+                    else:
+                        color = (0, 165, 255)  # Orange for medium confidence
+                    
+                    # Size based on confidence
+                    radius = 4 if kconf > 0.7 else 3
+                    cv2.circle(frame_vis, (int(kx), int(ky)), radius, color, -1)
+                    
+                    # Better keypoint labels (COCO-17 format)
+                    keypoint_names = ['nose', 'l_eye', 'r_eye', 'l_ear', 'r_ear', 
+                                     'l_shldr', 'r_shldr', 'l_elbow', 'r_elbow', 
+                                     'l_wrist', 'r_wrist', 'l_hip', 'r_hip', 
+                                     'l_knee', 'r_knee', 'l_ankle', 'r_ankle']
+                    
+                    if i < len(keypoint_names) and kconf > 0.6:
+                        cv2.putText(frame_vis, keypoint_names[i], (int(kx), int(ky-8)), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.25, color, 1)
 
-            # Vẽ skeleton connections
-            connections = [(5, 6), (5, 7), (6, 8), (7, 9), (8, 10), (11, 12), (11, 13), (12, 14)]
-            for p1, p2 in connections:
-                if (p1 < len(keypoints) and p2 < len(keypoints) and keypoints[p1][2] > 0.3 and keypoints[p2][2] > 0.3):
+            # Improved skeleton connections
+            connections = [
+                # Head connections
+                (0, 1), (0, 2), (1, 3), (2, 4),  # nose-eyes, eyes-ears
+                
+                # Torso connections  
+                (5, 6),   # shoulder to shoulder
+                (5, 11), (6, 12),  # shoulders to hips
+                (11, 12), # hip to hip
+                
+                # Arms
+                (5, 7), (7, 9),   # left arm: shoulder -> elbow -> wrist
+                (6, 8), (8, 10),  # right arm: shoulder -> elbow -> wrist
+                
+                # Legs
+                (11, 13), (13, 15), # left leg: hip -> knee -> ankle
+                (12, 14), (14, 16), # right leg: hip -> knee -> ankle
+            ]
+            
+            # Draw skeleton with color coding for body parts
+            for i, (p1, p2) in enumerate(connections):
+                if (p1 < len(keypoints) and p2 < len(keypoints) and 
+                    keypoints[p1][2] > conf_threshold and keypoints[p2][2] > conf_threshold):
+                    
                     pt1 = (int(keypoints[p1][0]), int(keypoints[p1][1]))
                     pt2 = (int(keypoints[p2][0]), int(keypoints[p2][1]))
-                    cv2.line(frame_vis, pt1, pt2, (255, 255, 0), 2)
+                    
+                    # Color coding for different body parts
+                    if i < 4:  # Head connections
+                        color = (255, 0, 255)  # Magenta
+                    elif i < 8:  # Torso connections
+                        color = (0, 255, 255)  # Cyan
+                    elif i < 10: # Left arm
+                        color = (0, 255, 0)    # Green
+                    elif i < 12: # Right arm
+                        color = (255, 255, 0)  # Yellow
+                    elif i < 14: # Left leg
+                        color = (255, 0, 0)    # Blue
+                    else:        # Right leg
+                        color = (0, 0, 255)    # Red
+                    
+                    # Thickness based on confidence
+                    min_conf = min(keypoints[p1][2], keypoints[p2][2])
+                    thickness = 3 if min_conf > 0.7 else 2
+                    cv2.line(frame_vis, pt1, pt2, color, thickness)
 
         # Vẽ thông tin cảnh báo, motion, confirmation frames
         alert_y = 30

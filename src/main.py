@@ -1,6 +1,7 @@
 
 
 import cv2
+import time
 from service.advanced_healthcare_pipeline import AdvancedHealthcarePipeline
 
 # Import intelligent action generation
@@ -177,7 +178,8 @@ if __name__ == "__main__":
         
         cv2.imshow("Healthcare Monitor - Analysis View", analysis_view)
         
-        key = cv2.waitKey(1)
+        # Check keyboard input
+        key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             print("\n🛑 Shutting down Healthcare Monitoring System...")
             break
@@ -203,7 +205,6 @@ if __name__ == "__main__":
             print("\n🎲 Creating random test event...")
             try:
                 import random
-                import uuid
                 from datetime import datetime, timezone
                 
                 # Random event types and data
@@ -225,17 +226,30 @@ if __name__ == "__main__":
                 
                 random_description = random.choice(test_descriptions)
                 
+                # Generate intelligent action for console
+                if event_type in ['abnormal_behavior', 'seizure']:
+                    if confidence >= 0.50:
+                        intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                    elif confidence >= 0.30:
+                        intelligent_action = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                    else:
+                        intelligent_action = f"📊 QUAN SÁT: {random_description} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                elif event_type == 'fall':
+                    if confidence >= 0.60:
+                        intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                    elif confidence >= 0.40:
+                        intelligent_action = f"⚠️ CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                    else:
+                        intelligent_action = f"📊 THEO DÕI: {random_description} - Quan sát (Tin cậy: {confidence:.0%})"
+                
+                print(f"🎯 Test Event Details:")
+                print(f"   Type: {event_type.upper()}")
+                print(f"   Confidence: {confidence:.1%}")
+                print(f"   Description: {random_description}")
+                print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
+                
                 # Create test event data
                 test_event_data = {
-                    'event_type': event_type,
-                    'description': f'Test {event_type} event',
-                    'detection_data': {
-                        'algorithm': 'manual_test',
-                        'model_version': 'test_v1.0',
-                        'detection_timestamp': datetime.now(timezone.utc).isoformat(),
-                        'severity': 'high' if confidence > 0.7 else 'medium'
-                    },
-                    'confidence': confidence,
                     'bounding_boxes': [
                         {
                             'x': random.randint(100, 400),
@@ -253,28 +267,6 @@ if __name__ == "__main__":
                         'test_description': random_description
                     }
                 }
-                
-                # Generate intelligent action for console
-                if event_type in ['abnormal_behavior', 'seizure']:
-                    if confidence >= 0.50:
-                        intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {random_description} 🚨 Cảnh báo: Phát hiện co giật - Độ tin cậy: 0.0% - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
-                    elif confidence >= 0.30:
-                        intelligent_action = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {random_description} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
-                    else:
-                        intelligent_action = f"📊 QUAN SÁT: {random_description} - Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
-                elif event_type == 'fall':
-                    if confidence >= 0.60:
-                        intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {random_description} 🚨 Cảnh báo: Phát hiện té ngã - Độ tin cậy: 0.0% - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
-                    elif confidence >= 0.40:
-                        intelligent_action = f"⚠️ CẢNH BÁO TÉ NGÃ: {random_description} ⚠️ Cảnh báo: Phát hiện ngã đổ - Độ tin cậy: 0.0% - Cần theo dõi (Tin cậy: {confidence:.0%})"
-                    else:
-                        intelligent_action = f"📊 THEO DÕI: {random_description} - Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Quan sát (Tin cậy: {confidence:.0%})"
-                
-                print(f"🎯 Test Event Details:")
-                print(f"   Type: {event_type.upper()}")
-                print(f"   Confidence: {confidence:.1%}")
-                print(f"   Description: {random_description}")
-                print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
                 
                 # Publish to healthcare system
                 if event_type == 'fall':

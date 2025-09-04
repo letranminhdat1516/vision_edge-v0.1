@@ -270,35 +270,66 @@ class FallDetector():
         self._prev_data[-1] = curr_data
 
     def draw_lines(self, thumbnail, pose_dix, score):
-        """Draw body lines if available. Return number of lines drawn."""
-        # save an image with drawn lines for debugging
+        """Draw body lines with improved accuracy and validation."""
         draw = ImageDraw.Draw(thumbnail)
-        path = None
         body_lines_drawn = 0
-
+        
         if pose_dix is None:
             return body_lines_drawn
 
+        # Improved confidence threshold for line drawing
+        confidence_threshold = 0.5
+        
+        # Draw left shoulder-hip line with validation
         if pose_dix.keys() >= {self.LEFT_SHOULDER, self.LEFT_HIP}:
-            body_line = [tuple(pose_dix[self.LEFT_SHOULDER]),
-                         tuple(pose_dix[self.LEFT_HIP])]
-            draw.line(body_line, fill='red')
-            body_lines_drawn += 1
+            left_shoulder_point = pose_dix[self.LEFT_SHOULDER]
+            left_hip_point = pose_dix[self.LEFT_HIP]
+            
+            # Validate keypoint quality (assuming keypoints have confidence scores)
+            left_shoulder_conf = getattr(left_shoulder_point, 'score', 1.0) if hasattr(left_shoulder_point, 'score') else 1.0
+            left_hip_conf = getattr(left_hip_point, 'score', 1.0) if hasattr(left_hip_point, 'score') else 1.0
+            
+            if left_shoulder_conf >= confidence_threshold and left_hip_conf >= confidence_threshold:
+                body_line = [tuple(left_shoulder_point.yx if hasattr(left_shoulder_point, 'yx') else left_shoulder_point),
+                           tuple(left_hip_point.yx if hasattr(left_hip_point, 'yx') else left_hip_point)]
+                
+                # Color and width based on confidence
+                line_color = 'lime' if min(left_shoulder_conf, left_hip_conf) > 0.7 else 'yellow' if min(left_shoulder_conf, left_hip_conf) > 0.6 else 'orange'
+                line_width = 4 if min(left_shoulder_conf, left_hip_conf) > 0.7 else 3
+                
+                draw.line(body_line, fill=line_color, width=line_width)
+                body_lines_drawn += 1
 
+        # Draw right shoulder-hip line with validation  
         if pose_dix.keys() >= {self.RIGHT_SHOULDER, self.RIGHT_HIP}:
-            body_line = [tuple(pose_dix[self.RIGHT_SHOULDER]),
-                         tuple(pose_dix[self.RIGHT_HIP])]
-            draw.line(body_line, fill='red')
-            body_lines_drawn += 1
+            right_shoulder_point = pose_dix[self.RIGHT_SHOULDER]
+            right_hip_point = pose_dix[self.RIGHT_HIP]
+            
+            # Validate keypoint quality
+            right_shoulder_conf = getattr(right_shoulder_point, 'score', 1.0) if hasattr(right_shoulder_point, 'score') else 1.0
+            right_hip_conf = getattr(right_hip_point, 'score', 1.0) if hasattr(right_hip_point, 'score') else 1.0
+            
+            if right_shoulder_conf >= confidence_threshold and right_hip_conf >= confidence_threshold:
+                body_line = [tuple(right_shoulder_point.yx if hasattr(right_shoulder_point, 'yx') else right_shoulder_point),
+                           tuple(right_hip_point.yx if hasattr(right_hip_point, 'yx') else right_hip_point)]
+                
+                # Color and width based on confidence
+                line_color = 'lime' if min(right_shoulder_conf, right_hip_conf) > 0.7 else 'yellow' if min(right_shoulder_conf, right_hip_conf) > 0.6 else 'orange'
+                line_width = 4 if min(right_shoulder_conf, right_hip_conf) > 0.7 else 3
+                
+                draw.line(body_line, fill=line_color, width=line_width)
+                body_lines_drawn += 1
 
-        # save a thumbnail for debugging
-        timestr = int(time.monotonic()*1000)
-        debug_image_file_name = \
-            f'tmp-fall-detect-thumbnail-{timestr}-score-{score}.jpg'
-        # thumbnail.save(
-        #                Path(self._sys_data_dir, debug_image_file_name),
-        #                format='JPEG')
-        print(Path(self._sys_data_dir, debug_image_file_name))
+        # Enhanced debug saving with quality info
+        if body_lines_drawn > 0:
+            timestr = int(time.monotonic()*1000)
+            quality_info = f"lines-{body_lines_drawn}"
+            debug_image_file_name = f'tmp-fall-detect-thumbnail-{timestr}-score-{score}-{quality_info}.jpg'
+            
+            # Optional: Save debug image (currently commented out)
+            # thumbnail.save(Path(self._sys_data_dir, debug_image_file_name), format='JPEG')
+            log.debug(f"Body lines drawn: {body_lines_drawn}, Debug file: {debug_image_file_name}")
+        
         return body_lines_drawn
 
     def get_line_angles_with_yaxis(self, pose_dix):
