@@ -52,15 +52,41 @@ class ProfessionalVietnameseCaptionPipeline:
             
             logger.info("📥 Loading translation model...")
             
-            # Option 1: Helsinki-NLP English → Vietnamese
-            self.translator = pipeline(
-                "translation", 
-                model="Helsinki-NLP/opus-mt-en-vi",
-                device=0 if torch.cuda.is_available() else -1
-            )
+            # Try better models in order of preference
+            models_to_try = [
+                "facebook/nllb-200-distilled-600M",  # NLLB model - better quality
+                "Helsinki-NLP/opus-mt-en-vi",         # Fallback
+            ]
             
-            self.translator_loaded = True
-            logger.info("✅ EN→VI translation model loaded")
+            for model_name in models_to_try:
+                try:
+                    if "nllb" in model_name:
+                        # NLLB model requires specific parameters
+                        self.translator = pipeline(
+                            "translation",
+                            model=model_name,
+                            src_lang="eng_Latn",
+                            tgt_lang="vie_Latn",
+                            device=0 if torch.cuda.is_available() else -1
+                        )
+                    else:
+                        # Standard translation pipeline
+                        self.translator = pipeline(
+                            "translation", 
+                            model=model_name,
+                            device=0 if torch.cuda.is_available() else -1
+                        )
+                    
+                    self.translator_loaded = True
+                    logger.info(f"✅ EN→VI translation model loaded: {model_name}")
+                    return
+                    
+                except Exception as model_error:
+                    logger.warning(f"⚠️ Failed to load {model_name}: {model_error}")
+                    continue
+            
+            # If all models fail, try alternative
+            raise Exception("All primary translation models failed")
             
         except Exception as e:
             logger.warning(f"⚠️ Could not load translation model: {e}")
@@ -116,10 +142,19 @@ class ProfessionalVietnameseCaptionPipeline:
                 return self._rule_based_translation(english_text), "rule_based"
             
             # Use AI translation model
-            result = self.translator(english_text)
+            if hasattr(self.translator, 'model') and "nllb" in str(self.translator.model.name_or_path):
+                # NLLB model
+                result = self.translator(english_text, src_lang="eng_Latn", tgt_lang="vie_Latn")
+            else:
+                # Standard translation model
+                result = self.translator(english_text)
             
             if isinstance(result, list) and len(result) > 0:
                 vietnamese_text = result[0]['translation_text']
+                
+                # Clean up any weird symbols from translation
+                vietnamese_text = vietnamese_text.replace('♪', '').replace('_', '').strip()
+                
                 return vietnamese_text, "ai_model"
             else:
                 return self._rule_based_translation(english_text), "fallback"
