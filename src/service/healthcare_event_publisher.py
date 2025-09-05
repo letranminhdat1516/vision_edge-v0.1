@@ -353,7 +353,7 @@ class HealthcareEventPublisher:
             # Always create event detection (for audit trail)
             event_data = {
                 'event_type': 'fall',
-                'description': f'Fall detected with {confidence:.1%} confidence',
+                'description': context.get('description') if context and context.get('description') else f'Fall detected with {confidence:.1%} confidence',
                 'detection_data': {
                     'algorithm': 'yolo_fall_detection',
                     'model_version': 'v1.0',
@@ -395,6 +395,7 @@ class HealthcareEventPublisher:
             response['alert_created'] = should_create_alert
             response['severity'] = severity
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
+            response['event_id'] = event_id  # Add event_id to response
             
             # Create alert only if priority check passed
             if should_create_alert:
@@ -468,7 +469,7 @@ class HealthcareEventPublisher:
             # Always create event detection (for audit trail)
             event_data = {
                 'event_type': 'abnormal_behavior',
-                'description': f'Seizure activity detected with {confidence:.1%} confidence',
+                'description': context.get('description') if context and context.get('description') else f'Seizure activity detected with {confidence:.1%} confidence',
                 'detection_data': {
                     'algorithm': 'seizure_detection',
                     'behavior_type': 'seizure',
@@ -511,6 +512,7 @@ class HealthcareEventPublisher:
             response['alert_created'] = should_create_alert
             response['severity'] = severity
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
+            response['event_id'] = event_id  # Add event_id to response for seizure
             
             # Create alert only if priority check passed
             if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):

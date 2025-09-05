@@ -201,14 +201,16 @@ if __name__ == "__main__":
             else:
                 print(f"\n📝 Static action messages only - Install 'transformers torch pillow' for intelligent actions")
         elif key == ord('e'):
-            # Create random event for testing
+            # Create random event and save directly to database
             print("\n🎲 Creating random test event...")
             try:
                 import random
+                import uuid
+                import json
                 from datetime import datetime, timezone
                 
                 # Random event types and data
-                event_types = ['fall', 'seizure', 'abnormal_behavior']
+                event_types = ['fall', 'abnormal_behavior']
                 event_type = random.choice(event_types)
                 confidence = random.uniform(0.3, 0.95)
                 
@@ -227,20 +229,26 @@ if __name__ == "__main__":
                 random_description = random.choice(test_descriptions)
                 
                 # Generate intelligent action for console
-                if event_type in ['abnormal_behavior', 'seizure']:
+                if event_type == 'abnormal_behavior':
                     if confidence >= 0.50:
                         intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                        status = 'danger'
                     elif confidence >= 0.30:
                         intelligent_action = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                        status = 'warning'
                     else:
                         intelligent_action = f"📊 QUAN SÁT: {random_description} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                        status = 'normal'
                 elif event_type == 'fall':
                     if confidence >= 0.60:
                         intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                        status = 'danger'
                     elif confidence >= 0.40:
                         intelligent_action = f"⚠️ CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                        status = 'warning'
                     else:
                         intelligent_action = f"📊 THEO DÕI: {random_description} - Quan sát (Tin cậy: {confidence:.0%})"
+                        status = 'normal'
                 
                 print(f"🎯 Test Event Details:")
                 print(f"   Type: {event_type.upper()}")
@@ -248,45 +256,116 @@ if __name__ == "__main__":
                 print(f"   Description: {random_description}")
                 print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
                 
-                # Create test event data
-                test_event_data = {
-                    'bounding_boxes': [
-                        {
-                            'x': random.randint(100, 400),
-                            'y': random.randint(100, 300),
-                            'width': random.randint(50, 200),
-                            'height': random.randint(50, 200),
-                            'confidence': confidence,
-                            'class': 'person'
+                # Save directly to database
+                try:
+                    # Get database service from pipeline
+                    db_service = pipeline.event_publisher.postgresql_service
+                    
+                    # Generate new event ID
+                    event_id = str(uuid.uuid4())
+                    
+                    # Get database connection
+                    conn = db_service.get_connection()
+                    if conn:
+                        cursor = conn.cursor()
+                        
+                        # Insert directly into event_detections table
+                        insert_query = """
+                            INSERT INTO event_detections (
+                                event_id, event_type, event_description, confidence_score, 
+                                status, detected_at, created_at, detection_data
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        
+                        current_time = datetime.now(timezone.utc)
+                        detection_data = {
+                            'test_event': True,
+                            'manual_trigger': True,
+                            'original_description': random_description,
+                            'bounding_boxes': [{
+                                'x': random.randint(100, 400),
+                                'y': random.randint(100, 300),
+                                'width': random.randint(50, 200),
+                                'height': random.randint(50, 200),
+                                'confidence': confidence,
+                                'class': 'person'
+                            }]
                         }
-                    ],
-                    'context': {
-                        'room': 'Test Room',
-                        'camera': 'Test Camera',
-                        'manual_trigger': True,
-                        'test_description': random_description
-                    }
-                }
-                
-                # Publish to healthcare system
-                if event_type == 'fall':
-                    alert_result = pipeline.event_publisher.publish_fall_detection(
-                        confidence=confidence,
-                        bounding_boxes=test_event_data['bounding_boxes'],
-                        context=test_event_data['context']
-                    )
-                elif event_type in ['seizure', 'abnormal_behavior']:
-                    alert_result = pipeline.event_publisher.publish_seizure_detection(
-                        confidence=confidence,
-                        bounding_boxes=test_event_data['bounding_boxes'],
-                        context=test_event_data['context']
-                    )
-                
-                print(f"✅ Random {event_type} event created and saved to database!")
-                print(f"   💬 Action saved: {intelligent_action[:50]}...")
+                        
+                        cursor.execute(insert_query, (
+                            event_id,
+                            event_type,
+                            intelligent_action,  # Use full intelligent action as description
+                            confidence,
+                            status,
+                            current_time,
+                            current_time,
+                            json.dumps(detection_data)  # Use json.dumps instead
+                        ))
+                        
+                        conn.commit()
+                        db_service.return_connection(conn)
+                        
+                        print(f"✅ Event saved successfully to database!")
+                        print(f"   🆔 Event ID: {event_id}")
+                        print(f"   📊 Status: {status}")
+                        print(f"   💾 Database: PostgreSQL")
+                        print(f"   ⏰ Time: {current_time.strftime('%H:%M:%S')}")
+                        
+                    else:
+                        print(f"❌ Failed to get database connection!")
+                        
+                except Exception as db_error:
+                    print(f"❌ Database error: {db_error}")
+                    # Try alternative method
+                    print("🔄 Trying alternative saving method...")
+                    
+                    # Fallback: use the existing event publisher
+                    if event_type == 'fall':
+                        alert_result = pipeline.event_publisher.publish_fall_detection(
+                            confidence=confidence,
+                            bounding_boxes=[{
+                                'x': random.randint(100, 400),
+                                'y': random.randint(100, 300),
+                                'width': random.randint(50, 200),
+                                'height': random.randint(50, 200),
+                                'confidence': confidence,
+                                'class': 'person'
+                            }],
+                            context={
+                                'description': random_description,
+                                'manual_trigger': True,
+                                'test_event': True
+                            }
+                        )
+                    else:
+                        alert_result = pipeline.event_publisher.publish_seizure_detection(
+                            confidence=confidence,
+                            bounding_boxes=[{
+                                'x': random.randint(100, 400),
+                                'y': random.randint(100, 300),
+                                'width': random.randint(50, 200),
+                                'height': random.randint(50, 200),
+                                'confidence': confidence,
+                                'class': 'person'
+                            }],
+                            context={
+                                'description': random_description,
+                                'manual_trigger': True,
+                                'test_event': True
+                            }
+                        )
+                    
+                    if alert_result and isinstance(alert_result, dict):
+                        event_id = alert_result.get('event_id', 'unknown')
+                        print(f"✅ Event saved via fallback method!")
+                        print(f"   🆔 Event ID: {event_id}")
+                        print(f"   � Result: {alert_result}")
                 
             except Exception as e:
                 print(f"❌ Error creating random event: {e}")
+                import traceback
+                print(f"   🔍 Traceback: {traceback.format_exc()}")
         # ...các xử lý khác như lưu ảnh, cập nhật thống kê...
 
     print("📱 Notifications stopped")
