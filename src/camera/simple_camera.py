@@ -32,40 +32,79 @@ class SimpleIMOUCamera:
         self.failed_frames = 0
         
     def connect(self) -> bool:
-        """Kết nối tới camera IMOU"""
+        """Kết nối tới camera IMOU với enhanced error handling"""
         try:
-            url = self.config.get('url', self.config) if hasattr(self.config, 'get') else self.config
+            # Extract URL properly
+            if hasattr(self.config, 'get'):
+                url = self.config.get('url', '')
+            else:
+                url = str(self.config) if self.config else ''
+                
+            if not url:
+                print("❌ No camera URL provided")
+                return False
+                
             print(f"📹 Connecting to camera: {url}")
             
-            # Kết nối camera
+            # Enhanced RTSP connection with proper type handling
             self.cap = cv2.VideoCapture(url)
             
-            # Thiết lập buffer size để giảm delay
-            if hasattr(self.cap, 'set'):
+            # Thiết lập timeout cho RTSP connection
+            if self.cap and hasattr(self.cap, 'set'):
                 self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                # Note: Timeout properties may not be available in all OpenCV versions
+                try:
+                    self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)  # 5 second timeout
+                    self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 3000)  # 3 second read timeout
+                except:
+                    pass  # Ignore if timeout properties not available
                 
                 # Thiết lập FPS nếu có
-                if hasattr(self.config, 'get') and self.config.get('fps'):
-                    self.cap.set(cv2.CAP_PROP_FPS, self.config.get('fps'))
+                if hasattr(self.config, 'get'):
+                    fps = self.config.get('fps')
+                    if fps and isinstance(fps, (int, float)):
+                        self.cap.set(cv2.CAP_PROP_FPS, float(fps))
                 
                 # Thiết lập resolution nếu có
-                if hasattr(self.config, 'get') and self.config.get('resolution'):
-                    res = self.config.get('resolution')
-                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
-                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
+                if hasattr(self.config, 'get'):
+                    resolution = self.config.get('resolution')
+                    if resolution and isinstance(resolution, (list, tuple)) and len(resolution) >= 2:
+                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(resolution[0]))
+                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(resolution[1]))
             
-            # Kiểm tra kết nối
-            if not self.cap.isOpened():
+            # Kiểm tra kết nối với detailed error reporting
+            if not self.cap or not self.cap.isOpened():
                 print("❌ Cannot connect to camera")
+                print("   💡 Possible issues:")
+                print("   - Wrong IP address or credentials")
+                print("   - Camera is offline or unreachable")
+                print("   - RTSP port is blocked")
+                print("   - Authentication failed (401 Unauthorized)")
+                print(f"   📝 URL used: {url}")
+                self._suggest_troubleshooting(url)
                 return False
             
-            # Test đọc frame
-            ret, frame = self.cap.read()
+            # Test đọc frame với timeout
+            import time
+            timeout_start = time.time()
+            timeout_duration = 10  # 10 seconds
+            
+            ret, frame = None, None
+            while time.time() < timeout_start + timeout_duration:
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    break
+                time.sleep(0.1)
+            
             if not ret or frame is None:
                 print("❌ Cannot read frame from camera")
+                print("   💡 Camera connected but no video stream available")
+                print("   - Check camera stream settings")
+                print("   - Verify RTSP stream path")
                 return False
             
             print("✅ Camera connected successfully!")
+            print(f"   📐 Frame resolution: {frame.shape[1]}x{frame.shape[0]}")
             self.connected = True
             
             # Start streaming thread
@@ -75,7 +114,23 @@ class SimpleIMOUCamera:
             
         except Exception as e:
             print(f"❌ Camera connection error: {e}")
+            print("   💡 Troubleshooting:")
+            print("   - Check network connectivity")
+            print("   - Verify camera credentials")
+            print("   - Test camera URL in VLC player")
             return False
+    
+    def _suggest_troubleshooting(self, url: str):
+        """Suggest specific troubleshooting based on URL"""
+        if "401" in str(url) or "Unauthorized" in str(url):
+            print("   🔐 Authentication Issue:")
+            print("   - Check username and password")
+            print("   - Verify camera login credentials")
+        if "192.168" in url:
+            print("   🌐 Network Issue:")
+            print("   - Ping the camera IP address")
+            print("   - Check if camera is on same network")
+        print(f"   🧪 Test in VLC: Open Network Stream -> {url}")
     
     def start_stream(self):
         """Bắt đầu stream camera"""

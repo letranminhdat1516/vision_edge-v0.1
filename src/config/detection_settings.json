@@ -56,14 +56,7 @@
       "seizure_sensitivity_multiplier": 1.10,
       "confidence_boost": 0.03,
       "enabled": true,
-      "description": "Bathroom - Reduced sensitivity for movement-heavy area"
-    },
-    "camera_03": {
-      "fall_sensitivity_multiplier": 0.95,
-      "seizure_sensitivity_multiplier": 0.90,
-      "confidence_boost": 0.06,
-      "enabled": true,
-      "description": "Bedroom - Optimized for sleep monitoring"
+      "description": "Bedroom - Reduced sensitivity for movement-heavy area"
     }
   },
   "advanced_settings": {

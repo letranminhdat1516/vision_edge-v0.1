@@ -7,7 +7,7 @@ import os
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from service.healthcare_event_publisher import healthcare_publisher
+from service.emergency_notification_dispatcher import healthcare_publisher
 
 def test_fall_detection():
     """Test fall detection event publishing"""

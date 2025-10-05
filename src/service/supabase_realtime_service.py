@@ -32,7 +32,7 @@ class SupabaseRealtimeService:
         # Initialize Vietnamese caption service for intelligent actions
         self.vietnamese_caption_service = None
         try:
-            from service.image_caption_service import ProfessionalVietnameseCaptionPipeline
+            from service.ai_vision_description_service import ProfessionalVietnameseCaptionPipeline
             self.vietnamese_caption_service = ProfessionalVietnameseCaptionPipeline()
             logger.info("✅ Vietnamese caption service initialized in Supabase service")
         except Exception as e:

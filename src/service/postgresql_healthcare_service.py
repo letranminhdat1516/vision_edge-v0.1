@@ -48,7 +48,7 @@ class PostgreSQLHealthcareService:
         
         # Initialize Vietnamese Caption Service for alert messages
         try:
-            from service.image_caption_service import ProfessionalVietnameseCaptionPipeline
+            from service.ai_vision_description_service import ProfessionalVietnameseCaptionPipeline
             self.vietnamese_caption = ProfessionalVietnameseCaptionPipeline()
             logger.info("📝 Vietnamese Caption Service: Enabled for alert messages")
         except ImportError as e:

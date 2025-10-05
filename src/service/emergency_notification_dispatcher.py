@@ -13,7 +13,7 @@ from service.config_loader import config_loader
 
 # Import image caption service for intelligent action generation
 try:
-    from service.image_caption_service import get_professional_caption_pipeline
+    from service.ai_vision_description_service import get_professional_caption_pipeline
     IMAGE_CAPTION_AVAILABLE = True
 except ImportError:
     IMAGE_CAPTION_AVAILABLE = False
@@ -32,7 +32,7 @@ except Exception as e:
     MOCK_MODE = True
 
 if MOCK_MODE:
-    from service.mock_supabase_service import mock_supabase_service as realtime_service
+    from service.database_mock_adapter import mock_supabase_service as realtime_service
 
 logger = logging.getLogger(__name__)
 

@@ -557,6 +557,15 @@ class IntegratedVideoProcessor:
             self.fall_detector = None
             print("⚠️ Fall detection not available")
         
+        # Pose detection (for keypoints)
+        try:
+            from seizure_detection.yolov8_pose_estimator import YOLOv8PoseEstimator
+            self.pose_estimator = YOLOv8PoseEstimator(model_size='n')
+            print("🦴 Pose detection initialized")
+        except Exception as e:
+            self.pose_estimator = None
+            print(f"⚠️ Pose detection not available: {e}")
+        
         # Frame saver (optional)
         self.frame_saver = SimpleFrameSaver(base_save_path) if save_frames else None
         self.save_frames = save_frames
@@ -609,6 +618,23 @@ class IntegratedVideoProcessor:
                 yolo_result = self.yolo_detector.detect(frame)
                 detections = yolo_result.get('detections', [])
                 self.stats['yolo_processed'] += 1
+                
+                # Stage 3.1: Pose Detection (add keypoints to person detections)
+                if self.pose_estimator and detections:
+                    person_detections = [d for d in detections if d.get('class_name') == 'person']
+                    for person_detection in person_detections:
+                        try:
+                            # Extract keypoints using pose estimator
+                            keypoints = self.pose_estimator.extract_keypoints(frame, confidence_threshold=0.3)
+                            if keypoints is not None:
+                                # Convert keypoints to flat list [x1, y1, conf1, x2, y2, conf2, ...]
+                                keypoints_flat = []
+                                for i in range(len(keypoints)):
+                                    keypoints_flat.extend([float(keypoints[i][0]), float(keypoints[i][1]), float(keypoints[i][2])])
+                                person_detection['keypoints'] = keypoints_flat
+                        except Exception as e:
+                            print(f"⚠️ Pose detection error: {e}")
+                            continue
                 
                 # Stage 3.5: Fall Detection (if persons detected and available)
                 fall_detected = False
