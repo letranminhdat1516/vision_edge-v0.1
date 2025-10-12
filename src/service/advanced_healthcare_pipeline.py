@@ -20,6 +20,21 @@ class AdvancedHealthcarePipeline:
         # Initialize Supabase event publisher
         self.event_publisher = HealthcareEventPublisher()
         
+        # Initialize database service
+        try:
+            from service.postgresql_healthcare_service import postgresql_service
+            self.db_service = postgresql_service
+        except ImportError:
+            try:
+                from service.supabase_realtime_service import realtime_service
+                self.db_service = realtime_service
+            except ImportError:
+                self.db_service = None
+                print("⚠️ No database service available")
+        
+        # Default user and camera IDs
+        self.user_id = 'user_001'  # Can be configurable
+        
         # Create alert save directory
         Path(self.alert_save_path).mkdir(parents=True, exist_ok=True)
         
@@ -429,14 +444,47 @@ class AdvancedHealthcarePipeline:
         return np.mean(self.detection_history[history_key])
 
     def save_alert_image(self, frame, alert_type, confidence=None):
-        """Save alert image with optional confidence như file mẫu"""
+        """Save alert image with database integration"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             confidence_str = f"_conf_{confidence:.2f}" if confidence is not None else ""
             filename = f"{alert_type}_{timestamp}{confidence_str}.jpg"
             filepath = os.path.join(self.alert_save_path, filename)
+            
+            # Save image file
             cv2.imwrite(filepath, frame)
             print(f"Alert image saved: {filepath}")
+            
+            # Create snapshot and image records in database
+            if self.db_service:
+                try:
+                    # Create snapshot record
+                    snapshot_data = {
+                        'camera_id': getattr(self.camera, 'camera_id', 'camera_001'),
+                        'user_id': self.user_id,
+                        'metadata': {
+                            'alert_type': alert_type,
+                            'confidence': confidence,
+                            'timestamp': timestamp
+                        },
+                        'capture_type': 'alert_triggered'
+                    }
+                    
+                    if hasattr(self.db_service, 'publish_snapshot'):
+                        snapshot_record = self.db_service.publish_snapshot(snapshot_data)
+                        if snapshot_record:
+                            # Create image record
+                            image_data = {
+                                'image_path': filepath,
+                                'file_size': os.path.getsize(filepath) if os.path.exists(filepath) else None
+                            }
+                            if hasattr(self.db_service, 'publish_snapshot_image'):
+                                snapshot_id = snapshot_record.get('snapshot_id')
+                                if snapshot_id:
+                                    self.db_service.publish_snapshot_image(snapshot_id, image_data)
+                except Exception as db_error:
+                    print(f"⚠️ Database snapshot creation failed: {db_error}")
+            
         except Exception as e:
             print(f"Error saving alert image: {e}")
 
@@ -746,7 +794,41 @@ class AdvancedHealthcarePipeline:
                     'detection_time': datetime.now().strftime('%H:%M:%S')
                 }
                 
-                # Log emergency event (FCM removed - handled by NestJS backend)
+                # Log emergency event to database
+                event_data = {
+                    'event_type': event_type,
+                    'confidence': confidence,
+                    'camera_id': getattr(self.camera, 'camera_id', 'camera_001'),
+                    'user_id': getattr(self, 'user_id', 'user_001'),  # Default user
+                    'detection_data': detection_result,
+                    'ai_analysis': additional_data,
+                    'context': {
+                        'alert_level': alert_level,
+                        'emergency_type': emergency_type,
+                        'location': 'Healthcare Room'
+                    }
+                }
+                
+                # Try to publish to database
+                try:
+                    # Use PostgreSQL service if available
+                    if hasattr(self, 'db_service') and self.db_service:
+                        event_record = self.db_service.publish_event_detection(event_data)
+                        if event_record:
+                            # Create alert record
+                            alert_data = {
+                                'event_id': event_record.get('event_id'),
+                                'user_id': event_data['user_id'],
+                                'alert_type': event_type,
+                                'severity': 'critical' if alert_level == 'critical' else 'high',
+                                'message': f"{event_type.capitalize()} detected with {confidence:.2f} confidence",
+                                'alert_data': additional_data
+                            }
+                            self.db_service.publish_alert(alert_data)
+                            print(f"✅ Event saved to database: {event_record.get('event_id')}")
+                except Exception as db_error:
+                    print(f"⚠️ Database logging failed: {db_error}")
+                
                 print(f"🚨 Emergency Event Detected: {event_type} (confidence: {confidence:.2f})")
                 print(f"   Alert Level: {alert_level}")
                 print(f"   Location: {additional_data['location']}")

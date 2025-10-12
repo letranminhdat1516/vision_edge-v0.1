@@ -207,7 +207,6 @@ class SupabaseRealtimeService:
                 'event_id': str(uuid.uuid4()),
                 'user_id': event_data.get('user_id'),
                 'camera_id': event_data.get('camera_id'),
-                'room_id': event_data.get('room_id'),
                 'snapshot_id': event_data.get('snapshot_id'),
                 'event_type': event_data.get('event_type'),
                 'event_description': intelligent_action,  # Use intelligent action with Vietnamese caption
@@ -215,10 +214,13 @@ class SupabaseRealtimeService:
                 'ai_analysis_result': event_data.get('ai_analysis', {}),
                 'confidence_score': event_data.get('confidence', 0.0),
                 'bounding_boxes': event_data.get('bounding_boxes', []),
-                'status': 'detected',
                 'context_data': event_data.get('context', {}),
                 'detected_at': datetime.now(timezone.utc).isoformat(),
-                'created_at': datetime.now(timezone.utc).isoformat()
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                # Match database schema
+                'confirmation_state': 'DETECTED',
+                'status': 'active',
+                'notes': event_data.get('notes', '')
             }
             
             # Insert into database
@@ -296,10 +298,7 @@ class SupabaseRealtimeService:
             record = {
                 'snapshot_id': str(uuid.uuid4()),
                 'camera_id': snapshot_data.get('camera_id'),
-                'room_id': snapshot_data.get('room_id'),
                 'user_id': snapshot_data.get('user_id'),
-                'image_path': snapshot_data.get('image_path'),
-                'cloud_url': snapshot_data.get('cloud_url'),
                 'metadata': snapshot_data.get('metadata', {}),
                 'capture_type': snapshot_data.get('capture_type', 'alert'),
                 'captured_at': datetime.now(timezone.utc).isoformat(),
@@ -318,6 +317,46 @@ class SupabaseRealtimeService:
                 
         except Exception as e:
             logger.error(f"Error publishing snapshot: {e}")
+            return None
+    
+    def publish_snapshot_image(self, snapshot_id: str, image_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Publish snapshot image record separately
+        
+        Args:
+            snapshot_id: ID of the parent snapshot
+            image_data: Image data containing path and metadata
+            
+        Returns:
+            Inserted image record or None if failed
+        """
+        if not self.service_client:
+            logger.error("Service client not initialized")
+            return None
+        
+        try:
+            # Prepare snapshot image record
+            record = {
+                'image_id': str(uuid.uuid4()),
+                'snapshot_id': snapshot_id,
+                'image_path': image_data.get('image_path'),
+                'cloud_url': image_data.get('cloud_url'),
+                'file_size': image_data.get('file_size'),
+                'created_at': datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Insert into snapshot_images table
+            result = self.service_client.table('snapshot_images').insert(record).execute()
+            
+            if result.data:
+                logger.info(f"Snapshot image published: {record['image_path']}")
+                return result.data[0]
+            else:
+                logger.error("Failed to publish snapshot image")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error publishing snapshot image: {e}")
             return None
     
     def get_recent_events(self, limit: int = 10) -> List[Dict[str, Any]]:

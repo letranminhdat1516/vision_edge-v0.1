@@ -278,7 +278,7 @@ class PostgreSQLHealthcareService:
                 logger.error(f"Error polling {table}: {e}")
                 time.sleep(5)
     
-    def _create_default_snapshot(self, camera_id: Optional[str] = None, room_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[str]:
+    def _create_default_snapshot(self, camera_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[str]:
         """Create a default snapshot record with proper fallback values"""
         conn = self.get_connection()
         if not conn:
@@ -290,11 +290,10 @@ class PostgreSQLHealthcareService:
         
         # Use provided IDs or fallback to config values, validate not None
         final_camera_id = camera_id or fall_defaults.get('camera_id')
-        final_room_id = room_id or fall_defaults.get('room_id')
         final_user_id = user_id or fall_defaults.get('user_id')
         
         # Validate UUIDs - if any is None/empty, skip snapshot creation
-        if not all([final_camera_id, final_room_id, final_user_id]):
+        if not all([final_camera_id, final_user_id]):
             logger.warning("⚠️ Missing required IDs for snapshot creation, skipping...")
             return None
         
@@ -304,10 +303,10 @@ class PostgreSQLHealthcareService:
             with conn.cursor() as cursor:
                 insert_sql = """
                 INSERT INTO snapshots (
-                    snapshot_id, camera_id, room_id, user_id,
-                    image_path, metadata, capture_type, captured_at
+                    snapshot_id, camera_id, user_id,
+                    metadata, capture_type, captured_at, is_processed
                 ) VALUES (
-                    %s, %s, %s, %s,
+                    %s, %s, %s,
                     %s, %s, %s, %s
                 ) RETURNING snapshot_id
                 """
@@ -315,12 +314,11 @@ class PostgreSQLHealthcareService:
                 cursor.execute(insert_sql, (
                     snapshot_id,
                     final_camera_id,
-                    final_room_id, 
                     final_user_id,
-                    f'default_{snapshot_id}.jpg',  # Default image path
                     json.dumps({'type': 'default_snapshot', 'created_by': 'system'}),
                     'alert_triggered',
-                    datetime.now(timezone.utc)
+                    datetime.now(timezone.utc),
+                    False
                 ))
                 
                 result = cursor.fetchone()
@@ -594,7 +592,6 @@ class PostgreSQLHealthcareService:
             # Create snapshot first
             snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
                 camera_id=event_data.get('camera_id') or fall_defaults.get('camera_id'),
-                room_id=event_data.get('room_id') or fall_defaults.get('room_id'),
                 user_id=event_data.get('user_id') or fall_defaults.get('user_id')
             )
             
@@ -628,21 +625,18 @@ class PostgreSQLHealthcareService:
             # Get IDs with validation
             user_id = event_data.get('user_id') or event_defaults.get('user_id')
             camera_id = event_data.get('camera_id') or event_defaults.get('camera_id')
-            room_id = event_data.get('room_id') or event_defaults.get('room_id')
             
             # Validate all required IDs exist
-            if not all([user_id, camera_id, room_id]):
+            if not all([user_id, camera_id]):
                 logger.warning("⚠️ Missing required IDs for event detection, using dummy values...")
                 user_id = user_id or str(uuid.uuid4())
                 camera_id = camera_id or str(uuid.uuid4())
-                room_id = room_id or str(uuid.uuid4())
             
             # Prepare record with validated values
             record = {
                 'event_id': str(uuid.uuid4()),
                 'user_id': user_id,
                 'camera_id': camera_id,
-                'room_id': room_id,
                 'snapshot_id': snapshot_id,
                 'event_type': event_data.get('event_type'),
                 'event_description': vietnamese_description,  # Use Vietnamese description
@@ -655,6 +649,7 @@ class PostgreSQLHealthcareService:
                     event_data.get('event_type', '')
                 ),
                 'context_data': json.dumps(event_data.get('context', {})),
+                'notes': event_data.get('notes', f'Auto-detected {event_data.get("event_type", "event")} at {datetime.now().strftime("%H:%M:%S")}'),
                 'detected_at': datetime.now(timezone.utc),
                 'created_at': datetime.now(timezone.utc)
             }
@@ -662,15 +657,15 @@ class PostgreSQLHealthcareService:
             with conn.cursor() as cursor:
                 insert_sql = """
                 INSERT INTO event_detections (
-                    event_id, user_id, camera_id, room_id, snapshot_id,
+                    event_id, user_id, camera_id, snapshot_id,
                     event_type, event_description, detection_data, ai_analysis_result,
                     confidence_score, bounding_boxes, status, context_data,
-                    detected_at, created_at
+                    notes, detected_at, created_at, confirmation_state
                 ) VALUES (
-                    %(event_id)s, %(user_id)s, %(camera_id)s, %(room_id)s, %(snapshot_id)s,
+                    %(event_id)s, %(user_id)s, %(camera_id)s, %(snapshot_id)s,
                     %(event_type)s, %(event_description)s, %(detection_data)s, %(ai_analysis_result)s,
                     %(confidence_score)s, %(bounding_boxes)s, %(status)s, %(context_data)s,
-                    %(detected_at)s, %(created_at)s
+                    %(notes)s, %(detected_at)s, %(created_at)s, 'DETECTED'
                 ) RETURNING *
                 """
                 
@@ -755,10 +750,7 @@ class PostgreSQLHealthcareService:
             record = {
                 'snapshot_id': str(uuid.uuid4()),
                 'camera_id': snapshot_data.get('camera_id', str(uuid.uuid4())),
-                'room_id': snapshot_data.get('room_id', str(uuid.uuid4())),
                 'user_id': snapshot_data.get('user_id'),
-                'image_path': snapshot_data.get('image_path'),
-                'cloud_url': snapshot_data.get('cloud_url'),
                 'metadata': json.dumps(snapshot_data.get('metadata', {})),
                 'capture_type': snapshot_data.get('capture_type', 'alert'),
                 'captured_at': datetime.now(timezone.utc),
@@ -768,11 +760,11 @@ class PostgreSQLHealthcareService:
             with conn.cursor() as cursor:
                 insert_sql = """
                 INSERT INTO snapshots (
-                    snapshot_id, camera_id, room_id, user_id, image_path,
-                    cloud_url, metadata, capture_type, captured_at, is_processed
+                    snapshot_id, camera_id, user_id, metadata, 
+                    capture_type, captured_at, is_processed
                 ) VALUES (
-                    %(snapshot_id)s, %(camera_id)s, %(room_id)s, %(user_id)s, %(image_path)s,
-                    %(cloud_url)s, %(metadata)s, %(capture_type)s, %(captured_at)s, %(is_processed)s
+                    %(snapshot_id)s, %(camera_id)s, %(user_id)s, %(metadata)s,
+                    %(capture_type)s, %(captured_at)s, %(is_processed)s
                 ) RETURNING *
                 """
                 
@@ -849,8 +841,9 @@ class PostgreSQLHealthcareService:
             for defaults in all_defaults:
                 if defaults:
                     self._create_default_user(defaults.get('user_id'))
-                    self._create_default_room(defaults.get('room_id'))
-                    self._create_default_camera(defaults.get('camera_id'), defaults.get('room_id'))
+                # Skip room creation - rooms table doesn't exist in new schema
+                # self._create_default_room(defaults.get('room_id'))
+                self._create_default_camera(defaults.get('camera_id'), defaults.get('user_id'))
                     
             logger.info("✅ Default entities verified/created")
             
@@ -892,45 +885,9 @@ class PostgreSQLHealthcareService:
         finally:
             self.return_connection(conn)
     
-    def _create_default_room(self, room_id: str):
-        """Create default room if not exists"""
-        if not room_id:
-            return
-            
-        conn = self.get_connection()
-        if not conn:
-            return
-            
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT room_id FROM rooms WHERE room_id = %s", (room_id,))
-                if cursor.fetchone():
-                    return  # Room already exists
-                
-                # Create default room
-                cursor.execute("""
-                    INSERT INTO rooms (room_id, room_name, location, capacity, room_type, created_at) 
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (room_id) DO NOTHING
-                """, (
-                    room_id,
-                    'Healthcare Room A101',
-                    'First Floor - Healthcare Wing',
-                    4,
-                    'patient_room',
-                    datetime.now(timezone.utc)
-                ))
-                conn.commit()
-                logger.info(f"✅ Created default room: {room_id}")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Could not create default room {room_id}: {e}")
-        finally:
-            self.return_connection(conn)
-    
-    def _create_default_camera(self, camera_id: str, room_id: str):
+    def _create_default_camera(self, camera_id: str, user_id: str):
         """Create default camera if not exists"""
-        if not camera_id or not room_id:
+        if not camera_id:
             return
             
         conn = self.get_connection()
@@ -938,9 +895,9 @@ class PostgreSQLHealthcareService:
             return
             
         try:
-            # Get default user_id from config
+            # Get default user_id from config or use provided
             db_config = config_loader.get_database_config()
-            default_user_id = db_config.get('default_ids', {}).get('fall_detection', {}).get('user_id')
+            default_user_id = user_id or db_config.get('default_ids', {}).get('fall_detection', {}).get('user_id')
             
             if not default_user_id:
                 logger.warning(f"⚠️ No default user_id found for camera creation")
@@ -951,17 +908,19 @@ class PostgreSQLHealthcareService:
                 if cursor.fetchone():
                     return  # Camera already exists
                 
-                # Create default camera
+                # Create default camera (without room_id)
                 cursor.execute("""
-                    INSERT INTO cameras (camera_id, user_id, room_id, camera_name, camera_type, ip_address, status, created_at) 
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO cameras (
+                        camera_id, user_id, camera_name, camera_type, 
+                        ip_address, status, created_at
+                    ) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (camera_id) DO NOTHING
                 """, (
                     camera_id,
-                    default_user_id,  # Add user_id
-                    room_id,
-                    f'Healthcare Camera - Room {room_id[-3:]}',
-                    'rtsp',  # Use valid enum value for RTSP cameras
+                    default_user_id,
+                    f'Healthcare Camera {camera_id[-3:]}',
+                    'ip',  # Use valid enum value
                     '192.168.8.122',
                     'active',
                     datetime.now(timezone.utc)
@@ -971,6 +930,51 @@ class PostgreSQLHealthcareService:
                 
         except Exception as e:
             logger.warning(f"⚠️ Could not create default camera {camera_id}: {e}")
+        finally:
+            self.return_connection(conn)
+    
+    def publish_snapshot_image(self, snapshot_id: str, image_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Insert snapshot image into database"""
+        if not self.is_connected:
+            logger.error("PostgreSQL not connected")
+            return None
+        
+        conn = self.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            record = {
+                'image_id': str(uuid.uuid4()),
+                'snapshot_id': snapshot_id,
+                'image_path': image_data.get('image_path'),
+                'cloud_url': image_data.get('cloud_url'),
+                'file_size': image_data.get('file_size'),
+                'created_at': datetime.now(timezone.utc)
+            }
+            
+            with conn.cursor() as cursor:
+                insert_sql = """
+                INSERT INTO snapshot_images (
+                    image_id, snapshot_id, image_path, cloud_url, file_size, created_at
+                ) VALUES (
+                    %(image_id)s, %(snapshot_id)s, %(image_path)s, 
+                    %(cloud_url)s, %(file_size)s, %(created_at)s
+                ) RETURNING *
+                """
+                
+                cursor.execute(insert_sql, record)
+                result = cursor.fetchone()
+                conn.commit()
+                
+                if result:
+                    logger.info(f"✅ Snapshot image published: {record['image_path']}")
+                    return dict(result)
+                    
+        except Exception as e:
+            logger.error(f"Error publishing snapshot image: {e}")
+            conn.rollback()
+            return None
         finally:
             self.return_connection(conn)
 
