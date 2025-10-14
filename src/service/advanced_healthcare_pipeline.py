@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Import Supabase integration
-from service.healthcare_event_publisher import HealthcareEventPublisher
+from service.emergency_notification_dispatcher import HealthcareEventPublisher
 
 class AdvancedHealthcarePipeline:
     def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder):

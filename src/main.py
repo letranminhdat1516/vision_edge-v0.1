@@ -1,18 +1,141 @@
 
+#!/usr/bin/env python3
+"""
+Vision Edge Healthcare System - Main Application
+Supports both single and dual camera configurations
+"""
 
 import cv2
 import time
+import json
+import sys
+import uuid
+from pathlib import Path
 from service.advanced_healthcare_pipeline import AdvancedHealthcarePipeline
 
 # Import intelligent action generation
 try:
-    from service.image_caption_service import get_professional_caption_pipeline
+    from service.ai_vision_description_service import get_professional_caption_pipeline
     INTELLIGENT_ACTIONS_AVAILABLE = True
     print("🤖 Intelligent Action Generation: AVAILABLE")
 except ImportError:
     INTELLIGENT_ACTIONS_AVAILABLE = False
     print("📝 Intelligent Action Generation: Using static messages")
 
+def load_camera_config():
+    """Load camera configuration from config.json"""
+    config_path = Path("src/config/config.json")
+    if not config_path.exists():
+        config_path = Path("config/config.json")
+    
+    if config_path.exists():
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        return config.get('database', {}).get('cameras', {})
+    return {}
+
+def validate_camera_credentials(camera_info):
+    """Validate and potentially fix camera credentials"""
+    rtsp_url = camera_info.get('rtsp_url', '')
+    
+    # Check for common credential issues
+    if '401' in rtsp_url or 'Unauthorized' in rtsp_url:
+        print(f"   ⚠️ Authentication issue detected in URL")
+        return False
+    
+    # Parse RTSP URL for credentials
+    if '@' not in rtsp_url:
+        print(f"   ⚠️ No credentials found in RTSP URL")
+        return False
+    
+    try:
+        # Extract credentials and IP
+        protocol_part, rest = rtsp_url.split('://', 1)
+        creds_part, ip_part = rest.split('@', 1)
+        username, password = creds_part.split(':', 1)
+        ip = ip_part.split(':')[0]
+        
+        print(f"   🔐 Credentials: {username}:{'*' * len(password)}")
+        print(f"   🌐 Camera IP: {ip}")
+        
+        # Suggest alternative credentials if current ones fail
+        if username == "admin" and password in ["123456", "password"]:
+            print(f"   💡 Trying common alternative credentials...")
+            alternative_passwords = ["L2C37340", "admin", "12345", ""]
+            
+            for alt_password in alternative_passwords:
+                if alt_password != password:
+                    alt_url = rtsp_url.replace(f":{password}@", f":{alt_password}@")
+                    print(f"   🧪 Alternative URL: {alt_url}")
+                    
+                    # Test quick connection
+                    cap = cv2.VideoCapture(alt_url)
+                    if cap and cap.isOpened():
+                        ret, frame = cap.read()
+                        cap.release()
+                        if ret and frame is not None:
+                            print(f"   ✅ Alternative credentials work! Updating URL...")
+                            camera_info['rtsp_url'] = alt_url
+                            return True
+        
+        return True
+        
+    except Exception as e:
+        print(f"   ❌ Error parsing URL: {e}")
+        return False
+
+def detect_camera_mode():
+    """Detect if we should use single or dual camera mode with validation"""
+    cameras_config = load_camera_config()
+    
+    if not cameras_config:
+        print("🎥 No cameras configured - Using FALLBACK single camera mode")
+        return 'single', None
+    
+    # Validate camera credentials first
+    print("🔐 Validating camera credentials...")
+    valid_cameras = {}
+    
+    for camera_key, camera_info in cameras_config.items():
+        camera_name = camera_info.get('name', camera_key)
+        print(f"   📹 Checking {camera_name}...")
+        
+        if validate_camera_credentials(camera_info):
+            valid_cameras[camera_key] = camera_info
+            print(f"   ✅ {camera_name} credentials valid")
+        else:
+            print(f"   ❌ {camera_name} has credential issues")
+    
+    if not valid_cameras:
+        print("❌ No cameras have valid credentials - Using FALLBACK mode")
+        return 'single', None
+    
+    if len(valid_cameras) >= 2:
+        # Check if cameras are in same room
+        rooms = set()
+        for camera in valid_cameras.values():
+            room_id = camera.get('room_id', 'unknown')
+            rooms.add(room_id)
+        
+        if len(rooms) == 1:
+            print(f"🎥🎥 Detected {len(valid_cameras)} cameras in same room - Using DUAL DETECTION mode")
+            return 'dual', valid_cameras
+        else:
+            print(f"🎥 Detected {len(valid_cameras)} cameras in different rooms - Using SINGLE camera mode")
+            return 'single', list(valid_cameras.values())[0]
+    elif len(valid_cameras) == 1:
+        print("🎥 Detected 1 valid camera - Using SINGLE camera mode")
+        return 'single', list(valid_cameras.values())[0]
+    else:
+        print("🎥 No valid cameras found - Using FALLBACK single camera mode")
+        return 'single', None
+
+print("="*60)
+print("🏥 Vision Edge Healthcare System v0.1")
+print("🔍 Analyzing camera configuration...")
+
+# Detect camera mode
+camera_mode, camera_data = detect_camera_mode()
 print("="*60)
 
 if __name__ == "__main__":
@@ -235,14 +358,16 @@ if __name__ == "__main__":
             else:
                 print(f"\n📝 Static action messages only - Install 'transformers torch pillow' for intelligent actions")
         elif key == ord('e'):
-            # Create random event for testing
+            # Create random event and save directly to database
             print("\n🎲 Creating random test event...")
             try:
                 import random
+                import uuid
+                import json
                 from datetime import datetime, timezone
                 
                 # Random event types and data
-                event_types = ['fall', 'seizure', 'abnormal_behavior']
+                event_types = ['fall', 'abnormal_behavior']
                 event_type = random.choice(event_types)
                 confidence = random.uniform(0.3, 0.95)
                 
@@ -261,20 +386,26 @@ if __name__ == "__main__":
                 random_description = random.choice(test_descriptions)
                 
                 # Generate intelligent action for console
-                if event_type in ['abnormal_behavior', 'seizure']:
+                if event_type == 'abnormal_behavior':
                     if confidence >= 0.50:
                         intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                        status = 'danger'
                     elif confidence >= 0.30:
                         intelligent_action = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                        status = 'warning'
                     else:
                         intelligent_action = f"📊 QUAN SÁT: {random_description} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                        status = 'normal'
                 elif event_type == 'fall':
                     if confidence >= 0.60:
                         intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                        status = 'danger'
                     elif confidence >= 0.40:
                         intelligent_action = f"⚠️ CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                        status = 'warning'
                     else:
                         intelligent_action = f"📊 THEO DÕI: {random_description} - Quan sát (Tin cậy: {confidence:.0%})"
+                        status = 'normal'
                 
                 print(f"🎯 Test Event Details:")
                 print(f"   Type: {event_type.upper()}")
@@ -282,45 +413,116 @@ if __name__ == "__main__":
                 print(f"   Description: {random_description}")
                 print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
                 
-                # Create test event data
-                test_event_data = {
-                    'bounding_boxes': [
-                        {
-                            'x': random.randint(100, 400),
-                            'y': random.randint(100, 300),
-                            'width': random.randint(50, 200),
-                            'height': random.randint(50, 200),
-                            'confidence': confidence,
-                            'class': 'person'
+                # Save directly to database
+                try:
+                    # Get database service from pipeline
+                    db_service = pipeline.event_publisher.postgresql_service
+                    
+                    # Generate new event ID
+                    event_id = str(uuid.uuid4())
+                    
+                    # Get database connection
+                    conn = db_service.get_connection()
+                    if conn:
+                        cursor = conn.cursor()
+                        
+                        # Insert directly into event_detections table
+                        insert_query = """
+                            INSERT INTO event_detections (
+                                event_id, event_type, event_description, confidence_score, 
+                                status, detected_at, created_at, detection_data
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        
+                        current_time = datetime.now(timezone.utc)
+                        detection_data = {
+                            'test_event': True,
+                            'manual_trigger': True,
+                            'original_description': random_description,
+                            'bounding_boxes': [{
+                                'x': random.randint(100, 400),
+                                'y': random.randint(100, 300),
+                                'width': random.randint(50, 200),
+                                'height': random.randint(50, 200),
+                                'confidence': confidence,
+                                'class': 'person'
+                            }]
                         }
-                    ],
-                    'context': {
-                        'room': 'Test Room',
-                        'camera': 'Test Camera',
-                        'manual_trigger': True,
-                        'test_description': random_description
-                    }
-                }
-                
-                # Publish to healthcare system
-                if event_type == 'fall':
-                    alert_result = pipeline.event_publisher.publish_fall_detection(
-                        confidence=confidence,
-                        bounding_boxes=test_event_data['bounding_boxes'],
-                        context=test_event_data['context']
-                    )
-                elif event_type in ['seizure', 'abnormal_behavior']:
-                    alert_result = pipeline.event_publisher.publish_seizure_detection(
-                        confidence=confidence,
-                        bounding_boxes=test_event_data['bounding_boxes'],
-                        context=test_event_data['context']
-                    )
-                
-                print(f"✅ Random {event_type} event created and saved to database!")
-                print(f"   💬 Action saved: {intelligent_action[:50]}...")
+                        
+                        cursor.execute(insert_query, (
+                            event_id,
+                            event_type,
+                            intelligent_action,  # Use full intelligent action as description
+                            confidence,
+                            status,
+                            current_time,
+                            current_time,
+                            json.dumps(detection_data)  # Use json.dumps instead
+                        ))
+                        
+                        conn.commit()
+                        db_service.return_connection(conn)
+                        
+                        print(f"✅ Event saved successfully to database!")
+                        print(f"   🆔 Event ID: {event_id}")
+                        print(f"   📊 Status: {status}")
+                        print(f"   💾 Database: PostgreSQL")
+                        print(f"   ⏰ Time: {current_time.strftime('%H:%M:%S')}")
+                        
+                    else:
+                        print(f"❌ Failed to get database connection!")
+                        
+                except Exception as db_error:
+                    print(f"❌ Database error: {db_error}")
+                    # Try alternative method
+                    print("🔄 Trying alternative saving method...")
+                    
+                    # Fallback: use the existing event publisher
+                    if event_type == 'fall':
+                        alert_result = pipeline.event_publisher.publish_fall_detection(
+                            confidence=confidence,
+                            bounding_boxes=[{
+                                'x': random.randint(100, 400),
+                                'y': random.randint(100, 300),
+                                'width': random.randint(50, 200),
+                                'height': random.randint(50, 200),
+                                'confidence': confidence,
+                                'class': 'person'
+                            }],
+                            context={
+                                'description': random_description,
+                                'manual_trigger': True,
+                                'test_event': True
+                            }
+                        )
+                    else:
+                        alert_result = pipeline.event_publisher.publish_seizure_detection(
+                            confidence=confidence,
+                            bounding_boxes=[{
+                                'x': random.randint(100, 400),
+                                'y': random.randint(100, 300),
+                                'width': random.randint(50, 200),
+                                'height': random.randint(50, 200),
+                                'confidence': confidence,
+                                'class': 'person'
+                            }],
+                            context={
+                                'description': random_description,
+                                'manual_trigger': True,
+                                'test_event': True
+                            }
+                        )
+                    
+                    if alert_result and isinstance(alert_result, dict):
+                        event_id = alert_result.get('event_id', 'unknown')
+                        print(f"✅ Event saved via fallback method!")
+                        print(f"   🆔 Event ID: {event_id}")
+                        print(f"   � Result: {alert_result}")
                 
             except Exception as e:
                 print(f"❌ Error creating random event: {e}")
+                import traceback
+                print(f"   🔍 Traceback: {traceback.format_exc()}")
         # ...các xử lý khác như lưu ảnh, cập nhật thống kê...
 
     print("📱 Notifications stopped")

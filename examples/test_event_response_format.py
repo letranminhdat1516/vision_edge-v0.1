@@ -5,7 +5,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from service.healthcare_event_publisher import healthcare_publisher
+from service.emergency_notification_dispatcher import healthcare_publisher
 import json
 
 def test_fall_detection_response():

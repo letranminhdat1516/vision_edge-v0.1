@@ -18,7 +18,9 @@ class YOLOv8PoseEstimator:
         Args:
             model_size: 'n' (nano), 's' (small), 'm' (medium), 'l' (large), 'x' (xlarge)
         """
-        self.logger = logging.getLogger(__name__)
+        # Setup logging
+        self.logger = logging.getLogger(f'{__name__}.{model_size}')
+        self.logger.setLevel(logging.DEBUG)  # Enable debug logging temporarily
         self.model_size = model_size
         
         # Load YOLOv8-Pose model
@@ -117,7 +119,10 @@ class YOLOv8PoseEstimator:
             start_time = time.time()
             
             # Handle compatibility: if second parameter looks like a bbox, use default confidence
-            if isinstance(confidence_threshold, (list, tuple, np.ndarray)) and len(confidence_threshold) >= 4:
+            if isinstance(confidence_threshold, (list, tuple, np.ndarray, dict)) and (
+                (isinstance(confidence_threshold, (list, tuple, np.ndarray)) and len(confidence_threshold) >= 4) or
+                isinstance(confidence_threshold, dict)
+            ):
                 # Second parameter is actually person_bbox, use default confidence
                 actual_confidence_threshold = 0.5
                 person_bbox = confidence_threshold
@@ -151,10 +156,31 @@ class YOLOv8PoseEstimator:
                     # Safely extract confidence
                     if hasattr(box, 'conf') and box.conf is not None:
                         conf_tensor = box.conf
-                        if hasattr(conf_tensor, 'item'):
-                            conf_value = conf_tensor.item()
-                        else:
-                            conf_value = float(conf_tensor[0]) if len(conf_tensor) > 0 else 0.0
+                        try:
+                            if hasattr(conf_tensor, 'item'):
+                                conf_value = conf_tensor.item()
+                            elif isinstance(conf_tensor, (list, tuple)) and len(conf_tensor) > 0:
+                                conf_value = float(conf_tensor[0])
+                            elif isinstance(conf_tensor, dict):
+                                # Handle dict case - try common keys
+                                self.logger.debug(f"Confidence tensor is dict: {conf_tensor}")
+                                conf_value = conf_tensor.get('confidence', conf_tensor.get('conf', conf_tensor.get(0, 0.0)))
+                                conf_value = float(conf_value) if not isinstance(conf_value, dict) else 0.0
+                            else:
+                                try:
+                                    if isinstance(conf_tensor, (int, float)):
+                                        conf_value = float(conf_tensor)
+                                    elif hasattr(conf_tensor, '__float__'):
+                                        conf_value = float(conf_tensor)
+                                    else:
+                                        self.logger.debug(f"Unknown conf_tensor type: {type(conf_tensor)}, value: {conf_tensor}")
+                                        conf_value = 0.0
+                                except (TypeError, ValueError):
+                                    self.logger.debug(f"Failed to convert conf_tensor: {type(conf_tensor)}, value: {conf_tensor}")
+                                    conf_value = 0.0
+                        except (TypeError, ValueError, KeyError) as e:
+                            self.logger.debug(f"Failed to extract confidence: {e}, tensor: {conf_tensor}")
+                            conf_value = 0.0
                         
                         if conf_value > best_confidence:
                             best_confidence = conf_value
@@ -171,10 +197,19 @@ class YOLOv8PoseEstimator:
                         keypoints_data = keypoints_tensor[best_person_idx]  # Shape: (17, 3)
                         
                         # Convert to numpy array safely
-                        if hasattr(keypoints_data, 'cpu'):
-                            keypoints = keypoints_data.cpu().numpy()
-                        else:
-                            keypoints = np.array(keypoints_data)
+                        try:
+                            if hasattr(keypoints_data, 'cpu'):
+                                keypoints = keypoints_data.cpu().numpy()
+                            elif hasattr(keypoints_data, 'numpy'):
+                                keypoints = keypoints_data.numpy()
+                            elif isinstance(keypoints_data, dict):
+                                self.logger.debug(f"Keypoints data is dict: {keypoints_data}")
+                                return None
+                            else:
+                                keypoints = np.array(keypoints_data)
+                        except Exception as conv_e:
+                            self.logger.debug(f"Failed to convert keypoints: {conv_e}, type: {type(keypoints_data)}")
+                            return None
                         
                         # Validate keypoints
                         if self._validate_keypoints(keypoints):
@@ -184,22 +219,53 @@ class YOLOv8PoseEstimator:
             return None
             
         except Exception as e:
+            print(f"🔍 YOLOv8-Pose DEBUG: Exception {type(e).__name__}: {e}")
+            import traceback
+            print(f"🔍 YOLOv8-Pose DEBUG: Traceback:")
+            traceback.print_exc()
             self.logger.warning(f"YOLOv8-Pose extraction failed: {e}")
+            self.logger.debug(f"Error details: {type(e).__name__}: {str(e)}")
+            self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return None
     
     def _validate_keypoints(self, keypoints: np.ndarray, min_visible_points: int = 5) -> bool:
         """Validate keypoints quality"""
-        if keypoints is None or keypoints.shape[0] != 17:
+        try:
+            if keypoints is None:
+                return False
+            
+            if not isinstance(keypoints, np.ndarray):
+                self.logger.debug(f"Keypoints not numpy array: {type(keypoints)}")
+                return False
+                
+            if keypoints.shape[0] != 17:
+                self.logger.debug(f"Keypoints wrong shape: {keypoints.shape}, expected (17, 3)")
+                return False
+            
+            if len(keypoints.shape) < 2 or keypoints.shape[1] != 3:
+                self.logger.debug(f"Keypoints wrong dimensions: {keypoints.shape}, expected (17, 3)")
+                return False
+
+            # Count visible keypoints (confidence > 0.3)
+            try:
+                visible_points = np.sum(keypoints[:, 2] > 0.3)
+            except Exception as e:
+                self.logger.debug(f"Error calculating visible points: {e}")
+                return False
+
+            # Must have essential body parts
+            essential_points = [5, 6, 11, 12]  # shoulders and hips
+            try:
+                essential_visible = np.sum(keypoints[essential_points, 2] > 0.3)
+            except Exception as e:
+                self.logger.debug(f"Error calculating essential points: {e}")
+                return False
+
+            return bool(visible_points >= min_visible_points and essential_visible >= 2)
+            
+        except Exception as e:
+            self.logger.debug(f"Keypoints validation error: {e}")
             return False
-        
-        # Count visible keypoints (confidence > 0.3)
-        visible_points = np.sum(keypoints[:, 2] > 0.3)
-        
-        # Must have essential body parts
-        essential_points = [5, 6, 11, 12]  # shoulders and hips
-        essential_visible = np.sum(keypoints[essential_points, 2] > 0.3)
-        
-        return visible_points >= min_visible_points and essential_visible >= 2
     
     def validate_keypoints(self, keypoints: np.ndarray, min_confidence: float = 0.3) -> bool:
         """Public method for keypoints validation (compatibility with VSViG)"""

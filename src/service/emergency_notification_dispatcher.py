@@ -13,7 +13,7 @@ from service.database_config_service import config_loader
 
 # Import image caption service for intelligent action generation
 try:
-    from service.image_caption_service import get_professional_caption_pipeline
+    from service.ai_vision_description_service import get_professional_caption_pipeline
     IMAGE_CAPTION_AVAILABLE = True
 except ImportError:
     IMAGE_CAPTION_AVAILABLE = False
@@ -32,7 +32,7 @@ except Exception as e:
     MOCK_MODE = True
 
 if MOCK_MODE:
-    from service.mock_supabase_service import mock_supabase_service as realtime_service
+    from service.database_mock_adapter import mock_supabase_service as realtime_service
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,7 @@ class HealthcareEventPublisher:
             # Always create event detection (for audit trail)
             event_data = {
                 'event_type': 'fall',
-                'description': f'Fall detected with {confidence:.1%} confidence',
+                'description': context.get('description') if context and context.get('description') else f'Fall detected with {confidence:.1%} confidence',
                 'detection_data': {
                     'algorithm': 'yolo_fall_detection',
                     'model_version': 'v1.0',
@@ -394,6 +394,7 @@ class HealthcareEventPublisher:
             response['alert_created'] = should_create_alert
             response['severity'] = severity
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
+            response['event_id'] = event_id  # Add event_id to response
             
             # Create alert only if priority check passed
             if should_create_alert:
@@ -466,7 +467,7 @@ class HealthcareEventPublisher:
             # Always create event detection (for audit trail)
             event_data = {
                 'event_type': 'abnormal_behavior',
-                'description': f'Seizure activity detected with {confidence:.1%} confidence',
+                'description': context.get('description') if context and context.get('description') else f'Seizure activity detected with {confidence:.1%} confidence',
                 'detection_data': {
                     'algorithm': 'seizure_detection',
                     'behavior_type': 'seizure',
@@ -509,6 +510,7 @@ class HealthcareEventPublisher:
             response['alert_created'] = should_create_alert
             response['severity'] = severity
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
+            response['event_id'] = event_id  # Add event_id to response for seizure
             
             # Create alert only if priority check passed
             if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):

@@ -11,7 +11,7 @@ from datetime import datetime
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from service.healthcare_event_publisher import healthcare_publisher
+from service.emergency_notification_dispatcher import healthcare_publisher
 
 def demo_fall_detection():
     """Demo fall detection event"""
