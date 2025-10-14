@@ -1,82 +1,56 @@
-from typing import Dict, Optional, List, Callable
-import numpy as np
-from .camera_device import CameraDevice, CameraConfig
-from .frame_processor import FrameProcessor
+# infrastructure/camera/camera_manager.py
+import threading
+import time
+from datetime import datetime
+from typing import Callable, Dict, List, Any
+from models.generated_all import Cameras
+from .camera_device import CameraDevice
 
 class CameraManager:
-    def __init__(self):
-        self.cameras: Dict[str, CameraDevice] = {}
-        self.frame_processor = FrameProcessor()
-        self.frame_callbacks: Dict[str, List[Callable]] = {}
-    
-    def add_camera(self, camera_id: str, source: str, fps: int = 30) -> bool:
-        config = CameraConfig(camera_id, source, fps)
-        camera = CameraDevice(config)
-        
-        if camera.start():
-            self.cameras[camera_id] = camera
-            self.frame_callbacks[camera_id] = []
-            return True
-        return False
-    
-    def remove_camera(self, camera_id: str) -> bool:
-        if camera_id in self.cameras:
-            self.cameras[camera_id].stop()
-            del self.cameras[camera_id]
-            if camera_id in self.frame_callbacks:
-                del self.frame_callbacks[camera_id]
-            return True
-        return False
-    
-    def get_frame(self, camera_id: str, preprocess: bool = True) -> Optional[np.ndarray]:
-        if camera_id not in self.cameras:
-            return None
-            
-        frame = self.cameras[camera_id].get_frame()
-        if frame is not None and preprocess:
-            frame = self.frame_processor.preprocess(frame)
-            
-        return frame
-    
-    def get_all_frames(self, preprocess: bool = True) -> Dict[str, np.ndarray]:
-        frames = {}
-        for camera_id in self.cameras.keys():
-            frame = self.get_frame(camera_id, preprocess)
-            if frame is not None:
-                frames[camera_id] = frame
-        return frames
-    
-    def get_keyframe(self, camera_id: str, frame_count: int = 5) -> Optional[np.ndarray]:
-        if camera_id not in self.cameras:
-            return None
-            
-        frames = []
-        for _ in range(frame_count):
-            frame = self.get_frame(camera_id, preprocess=False)
-            if frame is not None:
-                frames.append(frame)
-        
-        if frames:
-            keyframe = self.frame_processor.extract_keyframe(frames)
-            return self.frame_processor.preprocess(keyframe)
-        return None
-    
-    def add_frame_callback(self, camera_id: str, callback: Callable[[str, np.ndarray], None]):
-        if camera_id in self.frame_callbacks:
-            self.frame_callbacks[camera_id].append(callback)
-    
-    def get_camera_ids(self) -> List[str]:
-        return list(self.cameras.keys())
-    
-    def is_camera_active(self, camera_id: str) -> bool:
-        return camera_id in self.cameras and self.cameras[camera_id].is_running
-    
-    def stop_all_cameras(self) -> bool:
-        try:
-            for camera in self.cameras.values():
-                camera.stop()
-            self.cameras.clear()
-            self.frame_callbacks.clear()
-            return True
-        except Exception:
-            return False
+    """Manage multiple cameras concurrently"""
+
+    def __init__(self, on_frame: Callable[[str, Any, datetime], None]):
+        self.on_frame = on_frame
+        self._threads: Dict[str, threading.Thread] = {}
+        self._devices: Dict[str, CameraDevice] = {}
+        self._stop = threading.Event()
+
+    def load_from_list(self, cams: List[Cameras]):
+        """Create device for each camera"""
+        for cam in cams:
+            self._devices[str(cam.camera_id)] = CameraDevice(cam)
+
+    def start_all(self):
+        """Run all cameras in separate threads"""
+        for dev in self._devices.values():
+            print(f"Starting thread for {dev.meta.camera_name}")
+            t = threading.Thread(target=self._loop, args=(dev,), daemon=True)
+            t.start()
+            self._threads[str(dev.meta.camera_id)] = t
+
+    def _loop(self, dev: CameraDevice):
+        if not dev.open():
+            dev.reopen_with_backoff()
+        frames = 0; t0 = time.time()
+        while not self._stop.is_set():
+            ok, frame = dev.read()
+            if not ok:
+                dev.reopen_with_backoff()
+                continue
+            frames += 1
+            ts = datetime.utcnow()
+            self.on_frame(str(dev.meta.camera_id), frame, ts)
+        dev.release()
+
+    def stop_all(self):
+        """Stop all cameras"""
+        self._stop.set()
+        for t in self._threads.values():
+            if t.is_alive():
+                try:
+                    t.join(timeout=1)
+                except KeyboardInterrupt:
+                    break
+        self._threads.clear()
+        for dev in self._devices.values():
+            dev.release()

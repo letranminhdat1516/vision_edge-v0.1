@@ -1,34 +1,28 @@
-from typing import Dict, Optional
-import numpy as np
-from ...domain.repositories.camera_repository import ICameraRepository
-from ..camera.camera_manager import CameraManager
+# infrastructure/persistence/camera_repository.py
 
-class CameraRepository(ICameraRepository):
-    """Infrastructure implementation of camera repository"""
-    
-    def __init__(self):
-        self.camera_manager = CameraManager()
-    
-    def add_camera(self, camera_id: str, source, fps: int = 30) -> bool:
-        """Add camera implementation"""
-        return self.camera_manager.add_camera(camera_id, source, fps)
-    
-    def remove_camera(self, camera_id: str) -> bool:
-        """Remove camera implementation"""
-        return self.camera_manager.remove_camera(camera_id)
-    
-    def get_frame(self, camera_id: str) -> Optional[np.ndarray]:
-        """Get frame implementation"""
-        return self.camera_manager.get_frame(camera_id)
-    
-    def get_all_frames(self) -> Dict[str, np.ndarray]:
-        """Get all frames implementation"""
-        return self.camera_manager.get_all_frames()
-    
-    def is_camera_active(self, camera_id: str) -> bool:
-        """Check if camera is active implementation"""
-        return self.camera_manager.is_camera_active(camera_id)
-    
-    def stop_all_cameras(self) -> bool:
-        """Stop all cameras implementation"""
-        return self.camera_manager.stop_all_cameras()
+from typing import List
+from models.generated_all import Cameras as CameraModel  # Import from generated_all instead
+from sqlalchemy.orm import Session
+
+class SqlCameraRepository:
+    """Triển khai repository để tương tác DB thật."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_all(self) -> List[CameraModel]:
+        """Lấy toàn bộ camera trong DB."""
+        return self.session.query(CameraModel).all()
+
+    def get_all_active(self) -> List[CameraModel]:
+        """Lấy toàn bộ camera active trong DB."""
+        return self.session.query(CameraModel).filter(CameraModel.status == 'active').all()
+
+    def get_by_user_id(self, user_id: str) -> List[CameraModel]:
+        """Lấy camera theo user_id."""
+        return self.session.query(CameraModel).filter(CameraModel.user_id == user_id).all()
+
+    def update_status(self, camera_id: str, status: str):
+        """Cập nhật trạng thái camera (active/offline)."""
+        self.session.query(CameraModel).filter(CameraModel.camera_id == camera_id).update({"status": status})
+        self.session.commit()
