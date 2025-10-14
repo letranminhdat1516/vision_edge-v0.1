@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import configuration
-from service.config_loader import config_loader
+from service.database_config_service import config_loader
 
 try:
     from config.supabase_config import supabase_config
@@ -655,7 +655,7 @@ class PostgreSQLHealthcareService:
             self.return_connection(conn)
     
     def publish_alert(self, alert_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Insert alert into database"""
+        """Insert alert into event_detections table instead of alerts"""
         if not self.is_connected:
             logger.error("PostgreSQL not connected")
             return None
@@ -665,26 +665,32 @@ class PostgreSQLHealthcareService:
             return None
         
         try:
+            # Convert alert data to event_detection format
             record = {
-                'alert_id': str(uuid.uuid4()),
-                'event_id': alert_data.get('event_id'),
+                'event_id': str(uuid.uuid4()),
                 'user_id': alert_data.get('user_id', str(uuid.uuid4())),
-                'alert_type': alert_data.get('alert_type'),
-                'severity': alert_data.get('severity', 'medium'),
-                'alert_message': alert_data.get('message'),
-                'alert_data': json.dumps(alert_data.get('alert_data', {})),
-                'status': 'active',
-                'created_at': datetime.now(timezone.utc)
+                'camera_id': alert_data.get('camera_id'),
+                'event_type': alert_data.get('alert_type', 'alert'),
+                'detection_confidence': alert_data.get('confidence', 0.8),
+                'event_metadata': json.dumps({
+                    'alert_type': alert_data.get('alert_type'),
+                    'severity': alert_data.get('severity', 'medium'),
+                    'alert_message': alert_data.get('message'),
+                    'alert_data': alert_data.get('alert_data', {})
+                }),
+                'image_path': alert_data.get('image_path'),
+                'created_at': datetime.now(timezone.utc),
+                'updated_at': datetime.now(timezone.utc)
             }
             
             with conn.cursor() as cursor:
                 insert_sql = """
-                INSERT INTO alerts (
-                    alert_id, event_id, user_id, alert_type, severity,
-                    alert_message, alert_data, status, created_at
+                INSERT INTO event_detections (
+                    event_id, user_id, camera_id, event_type, detection_confidence,
+                    event_metadata, image_path, created_at, updated_at
                 ) VALUES (
-                    %(alert_id)s, %(event_id)s, %(user_id)s, %(alert_type)s, %(severity)s,
-                    %(alert_message)s, %(alert_data)s, %(status)s, %(created_at)s
+                    %(event_id)s, %(user_id)s, %(camera_id)s, %(event_type)s, %(detection_confidence)s,
+                    %(event_metadata)s, %(image_path)s, %(created_at)s, %(updated_at)s
                 ) RETURNING *
                 """
                 
@@ -693,11 +699,11 @@ class PostgreSQLHealthcareService:
                 conn.commit()
                 
                 if result:
-                    logger.info(f"✅ Alert published: {record['alert_type']} - {record['severity']}")
+                    logger.info(f"✅ Alert published to event_detections: {record['event_type']} - {alert_data.get('severity', 'medium')}")
                     return dict(result)
                     
         except Exception as e:
-            logger.error(f"Error publishing alert: {e}")
+            logger.error(f"Error publishing alert to event_detections: {e}")
             conn.rollback()
             return None
         finally:

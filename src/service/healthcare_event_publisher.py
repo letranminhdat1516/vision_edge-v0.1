@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 import logging
 
 # Import config loader
-from service.config_loader import config_loader
+from service.database_config_service import config_loader
 
 # Import image caption service for intelligent action generation
 try:
@@ -138,7 +138,7 @@ class HealthcareEventPublisher:
             # Simplified setup - only if service supports it
             if hasattr(realtime_service, 'subscribe_to_events'):
                 realtime_service.subscribe_to_events('event_detections', 'INSERT', self._handle_event_detection)
-                realtime_service.subscribe_to_events('alerts', 'INSERT', self._handle_alert)
+                realtime_service.subscribe_to_events('event_detections', 'INSERT', self._handle_alert)
                 logger.info("Healthcare event listeners setup successfully")
             else:
                 logger.info("Event listeners not supported in current service mode")
@@ -337,13 +337,12 @@ class HealthcareEventPublisher:
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish fall detection with priority-based alert system"""
         try:
-            # Extract IDs from context if provided, with fallback to config default IDs
-            db_config = self.config.get('database', {}).get('default_ids', {})
-            fall_defaults = db_config.get('fall_detection', {})
+            # Use environment-based default IDs instead of config file
+            import os
             
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or fall_defaults.get('camera_id', str(uuid.uuid4()))
-            final_room_id = room_id or (context.get('room_id') if context else None) or fall_defaults.get('room_id', str(uuid.uuid4()))
-            final_user_id = user_id or (context.get('user_id') if context else None) or fall_defaults.get('user_id', str(uuid.uuid4()))
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or os.getenv('DEFAULT_CAMERA_ID', str(uuid.uuid4()))
+            final_room_id = room_id or (context.get('room_id') if context else None) or os.getenv('DEFAULT_ROOM_ID', str(uuid.uuid4()))
+            final_user_id = user_id or (context.get('user_id') if context else None) or os.getenv('DEFAULT_USER_ID', str(uuid.uuid4()))
             
             current_time = datetime.now()
             
@@ -452,13 +451,12 @@ class HealthcareEventPublisher:
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish seizure detection with priority-based alert system"""
         try:
-            # Extract IDs from context if provided, with fallback to config default IDs
-            db_config = self.config.get('database', {}).get('default_ids', {})
-            seizure_defaults = db_config.get('seizure_detection', {})
+            # Use environment-based default IDs instead of config file
+            import os
             
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or seizure_defaults.get('camera_id', str(uuid.uuid4()))
-            final_room_id = room_id or (context.get('room_id') if context else None) or seizure_defaults.get('room_id', str(uuid.uuid4()))
-            final_user_id = user_id or (context.get('user_id') if context else None) or seizure_defaults.get('user_id', str(uuid.uuid4()))
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or os.getenv('DEFAULT_CAMERA_ID', str(uuid.uuid4()))
+            final_room_id = room_id or (context.get('room_id') if context else None) or os.getenv('DEFAULT_ROOM_ID', str(uuid.uuid4()))
+            final_user_id = user_id or (context.get('user_id') if context else None) or os.getenv('DEFAULT_USER_ID', str(uuid.uuid4()))
             
             current_time = datetime.now()
             

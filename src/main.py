@@ -16,13 +16,47 @@ except ImportError:
 print("="*60)
 
 if __name__ == "__main__":
+    # Load user ID from environment
+    import os
+    user_id = os.getenv('DEFAULT_USER_ID')
+    if not user_id:
+        print("❌ DEFAULT_USER_ID not found in .env file")
+        exit(1)
+    
+    # Load camera from database using clean service
+    from service.clean_camera_service import camera_service
+    
+    print("📹 Loading camera configuration from database...")
+    primary_camera = camera_service.get_primary_camera(user_id)
+    
+    if not primary_camera:
+        print("❌ No cameras found for this user")
+        print("💡 Please check database or user ID")
+        exit(1)
+    
+    print(f"✅ Using camera: {primary_camera['name']} ({primary_camera['id']})")
+    print(f"📍 Location: {primary_camera['location']}")
+    print(f"🔗 RTSP URL: {primary_camera['rtsp_url']}")
+    
+    # Parse resolution from database
+    resolution_str = primary_camera.get('resolution', '1920x1080')
+    try:
+        width, height = map(int, resolution_str.split('x'))
+        resolution = (width, height)
+    except:
+        resolution = (1920, 1080)
+    
+    # Configure camera from database data
     camera_config = {
-        'url': 'rtsp://admin:L2C37340@192.168.8.122:554/cam/realmonitor?channel=1&subtype=1',
+        'url': primary_camera['rtsp_url'],
         'buffer_size': 1,
-        'fps': 15,
-        'resolution': (640, 480),
-        'auto_reconnect': True
+        'fps': primary_camera.get('fps', 30),
+        'resolution': resolution,
+        'auto_reconnect': True,
+        'camera_id': primary_camera['id'],
+        'camera_name': primary_camera['name']
     }
+    
     processor_config = 120
     alerts_folder = "examples/data/saved_frames/alerts"
     # Khởi tạo các service thật sự

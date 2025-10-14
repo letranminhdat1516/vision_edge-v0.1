@@ -57,23 +57,22 @@ def check_database_records():
         print("\n🚨 2. ALERTS TABLE:")
         print("-" * 50)
         cur.execute("""
-            SELECT alert_id, event_id, alert_type, severity, alert_message, 
-                   status, created_at
-            FROM alerts 
+            SELECT event_id, event_type, detection_confidence, event_metadata, 
+                   image_path, created_at
+            FROM event_detections 
+            WHERE event_type LIKE '%alert%' OR event_metadata LIKE '%alert%'
             ORDER BY created_at DESC 
             LIMIT 5;
         """)
-        
         alerts = cur.fetchall()
         if alerts:
             for i, alert in enumerate(alerts, 1):
-                alert_id, event_id, alert_type, severity, message, status, created_at = alert
-                print(f"   {i}. Alert ID: {alert_id}")
-                print(f"      Event ID: {event_id}")
-                print(f"      Type: {alert_type}")
-                print(f"      Severity: {severity}")
-                print(f"      Message: {message}")
-                print(f"      Status: {status}")
+                event_id, event_type, confidence, metadata, image_path, created_at = alert
+                print(f"   {i}. Event ID: {event_id}")
+                print(f"      Type: {event_type}")
+                print(f"      Confidence: {confidence}")
+                print(f"      Metadata: {metadata}")
+                print(f"      Image: {image_path}")
                 print(f"      Created: {created_at}")
                 print()
         else:
@@ -120,7 +119,7 @@ def check_database_records():
         cur.execute("SELECT COUNT(*) FROM event_detections;")
         total_events = cur.fetchone()[0]
         
-        cur.execute("SELECT COUNT(*) FROM alerts;")
+        cur.execute("SELECT COUNT(*) FROM event_detections WHERE event_type LIKE '%alert%';")
         total_alerts = cur.fetchone()[0]
         
         cur.execute("SELECT COUNT(*) FROM snapshots;")

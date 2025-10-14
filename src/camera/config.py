@@ -38,13 +38,37 @@ class IMOUCameraConfig:
     confidence_threshold: float = 0.5
     
     @classmethod
-    def from_env(cls) -> 'IMOUCameraConfig':
-        """Tạo config từ environment variables"""
+    def from_database_camera(cls, camera_data: dict) -> 'IMOUCameraConfig':
+        """Tạo config từ database camera data - PRIMARY METHOD"""
+        # Parse resolution
+        resolution = camera_data.get('resolution', '640x480')
+        try:
+            width, height = map(int, resolution.split('x'))
+        except:
+            width, height = 640, 480
+        
         return cls(
-            rtsp_url=os.getenv('CAMERA_RTSP_URL', 'rtsp://admin:L2C37340@192.168.8.122:554/cam/realmonitor?channel=1&subtype=1'),
+            rtsp_url=camera_data.get('rtsp_url', ''),
+            username=camera_data.get('username', 'admin'),  # fallback only
+            password=camera_data.get('password', ''),
+            ip_address=camera_data.get('ip_address', ''),
+            port=camera_data.get('port', 554),
+            frame_width=width,
+            frame_height=height,
+            fps=camera_data.get('fps', 30),
+            motion_threshold=int(os.getenv('MOTION_DETECTION_THRESHOLD', '50')),
+            confidence_threshold=float(os.getenv('MODEL_CONFIDENCE_THRESHOLD', '0.5'))
+        )
+    
+    @classmethod
+    def from_env(cls) -> 'IMOUCameraConfig':
+        """DEPRECATED: Tạo config từ environment variables - use from_database_camera instead"""
+        print("⚠️ Warning: from_env() is deprecated. Use from_database_camera() instead.")
+        return cls(
+            rtsp_url='',  # No hardcoded values
             username=os.getenv('CAMERA_USERNAME', 'admin'),
-            password=os.getenv('CAMERA_PASSWORD', 'L2C37340'),
-            ip_address=os.getenv('CAMERA_IP', '192.168.8.122'),
+            password='',  # No hardcoded values
+            ip_address='',  # No hardcoded values
             port=int(os.getenv('CAMERA_PORT', '554')),
             frame_width=int(os.getenv('VIDEO_FRAME_WIDTH', '640')),
             frame_height=int(os.getenv('VIDEO_FRAME_HEIGHT', '480')),
@@ -55,15 +79,22 @@ class IMOUCameraConfig:
     
     def get_rtsp_url(self) -> str:
         """Lấy RTSP URL đầy đủ"""
-        if self.rtsp_url.startswith('rtsp://'):
+        if self.rtsp_url and self.rtsp_url.startswith('rtsp://'):
             return self.rtsp_url
         
-        # Tạo RTSP URL từ thông tin cơ bản
-        return f"rtsp://{self.username}:{self.password}@{self.ip_address}:{self.port}/cam/realmonitor?channel=1&subtype=0"
+        # Tạo RTSP URL từ thông tin cơ bản nếu có đủ thông tin
+        if self.username and self.password and self.ip_address:
+            return f"rtsp://{self.username}:{self.password}@{self.ip_address}:{self.port}/cam/realmonitor?channel=1&subtype=0"
+        
+        return ""
     
     def validate(self) -> bool:
         """Kiểm tra tính hợp lệ của config"""
-        if not self.ip_address or not self.username or not self.password:
+        # Kiểm tra có RTSP URL hoặc đủ thông tin để tạo URL
+        has_rtsp_url = self.rtsp_url and self.rtsp_url.startswith('rtsp://')
+        has_connection_info = self.ip_address and self.username and self.password
+        
+        if not (has_rtsp_url or has_connection_info):
             return False
         
         if self.frame_width <= 0 or self.frame_height <= 0:
@@ -74,5 +105,5 @@ class IMOUCameraConfig:
             
         return True
 
-# Tạo instance global config
+# Tạo instance global config từ environment (deprecated - use database)
 camera_config = IMOUCameraConfig.from_env()
