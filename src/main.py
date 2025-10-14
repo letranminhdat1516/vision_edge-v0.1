@@ -10,6 +10,7 @@ import time
 import json
 import sys
 import uuid
+import os
 from pathlib import Path
 from service.advanced_healthcare_pipeline import AdvancedHealthcarePipeline
 
@@ -426,12 +427,25 @@ if __name__ == "__main__":
                     if conn:
                         cursor = conn.cursor()
                         
+                        # Get required IDs for database constraints
+                        user_id = os.getenv('DEFAULT_USER_ID')
+                        camera_id = db_service._get_user_camera_id(user_id)
+                        if not camera_id:
+                            camera_id = db_service._get_any_camera_id()
+                        
+                        # Create snapshot_id
+                        snapshot_id = db_service._create_minimal_snapshot(camera_id, user_id)
+                        if not snapshot_id:
+                            snapshot_id = str(uuid.uuid4())
+                            print("⚠️ Using dummy snapshot_id")
+                        
                         # Insert directly into event_detections table
                         insert_query = """
                             INSERT INTO event_detections (
-                                event_id, event_type, event_description, confidence_score, 
-                                status, detected_at, created_at, detection_data
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                event_id, user_id, camera_id, snapshot_id, event_type, 
+                                event_description, confidence_score, status, detected_at, 
+                                created_at, detection_data
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """
                         
                         current_time = datetime.now(timezone.utc)
@@ -451,6 +465,9 @@ if __name__ == "__main__":
                         
                         cursor.execute(insert_query, (
                             event_id,
+                            user_id,
+                            camera_id,
+                            snapshot_id,
                             event_type,
                             intelligent_action,  # Use full intelligent action as description
                             confidence,
