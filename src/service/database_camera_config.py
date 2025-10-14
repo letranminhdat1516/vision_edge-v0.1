@@ -67,8 +67,19 @@ class DatabaseCameraConfig:
             camera_data = cameras[0] if cameras else None
         
         if not camera_data:
-            # Fallback to environment config
-            return IMOUCameraConfig.from_env()
+            # Fallback to default config (no deprecated from_env)
+            return IMOUCameraConfig(
+                rtsp_url='',
+                username='admin',
+                password='',
+                ip_address='',
+                port=554,
+                frame_width=640,
+                frame_height=480,
+                fps=30,
+                buffer_size=1,
+                confidence_threshold=0.5
+            )
         
         return IMOUCameraConfig.from_database_camera(camera_data)
     

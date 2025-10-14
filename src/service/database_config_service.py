@@ -86,32 +86,58 @@ class DatabaseConfigService:
         }
     
     def load_detection_settings(self) -> Dict[str, Any]:
-        """Load detection settings from JSON file (keep this as is)"""
+        """Load detection settings from environment variables"""
         if self._detection_settings is None:
-            # Import here to avoid circular imports
-            import json
-            from pathlib import Path
-            
-            config_dir = Path(os.getenv('VISION_CONFIG_DIR', Path(__file__).parent.parent / 'config'))
-            settings_path = config_dir / "detection_settings.json"
-            
-            try:
-                with open(settings_path, 'r', encoding='utf-8') as f:
-                    self._detection_settings = json.load(f)
-            except FileNotFoundError:
-                # Default fallback settings
-                self._detection_settings = {
-                    "detection_thresholds": {
-                        "fall": {
-                            "severity_mapping": {"high": 0.7, "medium": 0.5, "low": 0.3},
-                            "notification_threshold": 0.6
+            self._detection_settings = {
+                "detection_thresholds": {
+                    "fall": {
+                        "severity_mapping": {
+                            "high": float(os.getenv('FALL_THRESHOLD_HIGH', '0.35')),
+                            "medium": float(os.getenv('FALL_THRESHOLD_MEDIUM', '0.25')),
+                            "low": float(os.getenv('FALL_THRESHOLD_LOW', '0.15'))
                         },
-                        "seizure": {
-                            "severity_mapping": {"high": 0.6, "medium": 0.4, "low": 0.2},
-                            "notification_threshold": 0.5
-                        }
+                        "notification_threshold": float(os.getenv('FALL_NOTIFICATION_THRESHOLD', '0.40'))
+                    },
+                    "seizure": {
+                        "severity_mapping": {
+                            "high": float(os.getenv('SEIZURE_THRESHOLD_HIGH', '0.30')),
+                            "medium": float(os.getenv('SEIZURE_THRESHOLD_MEDIUM', '0.20')),
+                            "low": float(os.getenv('SEIZURE_THRESHOLD_LOW', '0.12'))
+                        },
+                        "notification_threshold": float(os.getenv('SEIZURE_NOTIFICATION_THRESHOLD', '0.35'))
+                    }
+                },
+                "priority_system": {
+                    "base_priorities": {
+                        "high": int(os.getenv('PRIORITY_HIGH', '5')),
+                        "medium": int(os.getenv('PRIORITY_MEDIUM', '3')),
+                        "low": int(os.getenv('PRIORITY_LOW', '2')),
+                        "resolved": int(os.getenv('PRIORITY_RESOLVED', '0'))
+                    },
+                    "priority_reduction": {
+                        "acknowledged": int(os.getenv('PRIORITY_REDUCTION_ACKNOWLEDGED', '1')),
+                        "resolved": int(os.getenv('PRIORITY_REDUCTION_RESOLVED', '5'))
+                    }
+                },
+                "camera_specific": {
+                    "default": {
+                        "fall_sensitivity_multiplier": float(os.getenv('DEFAULT_FALL_SENSITIVITY_MULTIPLIER', '1.0')),
+                        "seizure_sensitivity_multiplier": float(os.getenv('DEFAULT_SEIZURE_SENSITIVITY_MULTIPLIER', '1.0')),
+                        "confidence_boost": float(os.getenv('DEFAULT_CONFIDENCE_BOOST', '0.05')),
+                        "enabled": True
+                    }
+                },
+                "advanced_settings": {
+                    "temporal_filtering": {
+                        "fall_confirmation_frames": int(os.getenv('FALL_CONFIRMATION_FRAMES', '5')),
+                        "seizure_confirmation_frames": int(os.getenv('SEIZURE_CONFIRMATION_FRAMES', '8'))
+                    },
+                    "pose_quality_thresholds": {
+                        "min_keypoints_visible": int(os.getenv('MIN_KEYPOINTS_VISIBLE', '8')),
+                        "min_pose_confidence": float(os.getenv('MIN_POSE_CONFIDENCE', '0.35'))
                     }
                 }
+            }
         
         return self._detection_settings
     

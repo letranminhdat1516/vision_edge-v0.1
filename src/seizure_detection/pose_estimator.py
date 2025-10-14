@@ -13,9 +13,10 @@ import time
 try:
     from .professional_pose_estimator import ProfessionalPoseEstimator
     PROFESSIONAL_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ Professional Pose Estimator not available: {e}")
+except ImportError:
+    # Professional Pose Estimator module not found - using available alternatives
     PROFESSIONAL_AVAILABLE = False
+    ProfessionalPoseEstimator = None
 
 # Import MediaPipe
 try:

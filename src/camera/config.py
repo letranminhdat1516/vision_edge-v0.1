@@ -105,5 +105,5 @@ class IMOUCameraConfig:
             
         return True
 
-# Tạo instance global config từ environment (deprecated - use database)
-camera_config = IMOUCameraConfig.from_env()
+# Global config - will be replaced by database config at runtime
+camera_config = None

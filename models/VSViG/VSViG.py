@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 from torchvision import transforms
-from timm.models.registry import register_model
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", FutureWarning)
+    from timm.models import register_model
 import numpy as np
     
 class InterPartMR(nn.Module):
