@@ -147,22 +147,82 @@ if __name__ == "__main__":
         print("❌ DEFAULT_USER_ID not found in .env file")
         exit(1)
     
-    # Load camera from database using clean service
+    # Load cameras from database and determine mode
     from service.clean_camera_service import camera_service
     
     print("📹 Loading camera configuration from database...")
-    primary_camera = camera_service.get_primary_camera(user_id)
+    all_cameras = camera_service.get_cameras_for_user(user_id)
     
-    if not primary_camera:
+    if not all_cameras:
         print("❌ No cameras found for this user")
         print("💡 Please check database or user ID")
         exit(1)
     
-    print(f"✅ Using camera: {primary_camera['name']} ({primary_camera['id']})")
-    print(f"📍 Location: {primary_camera['location']}")
-    print(f"🔗 RTSP URL: {primary_camera['rtsp_url']}")
+    print(f"✅ Found {len(all_cameras)} cameras for user {user_id}")
     
-    # Parse resolution from database
+    # Determine camera mode based on locations
+    locations = set([cam['location'] for cam in all_cameras])
+    
+    if len(all_cameras) >= 2 and len(locations) == 1:
+        # DUAL CAMERA MODE - same room
+        print(f"🎥🎥 DUAL CAMERA MODE: {len(all_cameras)} cameras in same room ({list(locations)[0]})")
+        
+        # Initialize dual camera system
+        from service.dual_camera_surveillance_system import SameRoomDualDetection
+        
+        # Convert to format expected by dual system
+        camera_configs = []
+        for cam in all_cameras:
+            camera_configs.append({
+                'camera_id': cam['id'],
+                'name': cam['name'],
+                'rtsp_url': cam['rtsp_url'],
+                'location': cam['location'],
+                'resolution': cam.get('resolution', '1920x1080'),
+                'fps': cam.get('fps', 30)
+            })
+        
+        print("🚀 Initializing Enhanced Multi-Camera System...")
+        for i, cam in enumerate(all_cameras, 1):
+            print(f"   📹 Camera {i}: {cam['name']} at {cam['location']}")
+        
+        # Initialize enhanced multi-camera system
+        from service.enhanced_multi_camera_system import create_enhanced_system
+        enhanced_system = create_enhanced_system(camera_configs)
+        
+        # Start enhanced multi-camera monitoring
+        print("🎥🎥 Starting enhanced multi-camera monitoring...")
+        if enhanced_system.start():
+            print("✅ Enhanced multi-camera system started successfully!")
+            print("📺 Camera monitors should now be visible!")
+            print("🎮 Press 'q' in any camera window to quit, 's' for stats")
+            
+            try:
+                # Keep system running
+                while enhanced_system.running:
+                    time.sleep(0.1)
+            except KeyboardInterrupt:
+                print("\n🛑 Shutting down enhanced multi-camera system...")
+        else:
+            print("❌ Failed to start enhanced multi-camera system")
+        
+        enhanced_system.stop()
+        exit(0)
+        
+    else:
+        # SINGLE CAMERA MODE
+        if len(all_cameras) >= 2:
+            print(f"🎥 SINGLE CAMERA MODE: {len(all_cameras)} cameras in different rooms")
+        else:
+            print(f"🎥 SINGLE CAMERA MODE: Only {len(all_cameras)} camera available")
+        
+        # Use first camera for single mode
+        primary_camera = all_cameras[0]
+        print(f"✅ Using camera: {primary_camera['name']} ({primary_camera['id']})")
+        print(f"📍 Location: {primary_camera['location']}")
+        print(f"🔗 RTSP URL: {primary_camera['rtsp_url']}")
+    
+    # Parse resolution from database (for single camera mode)
     resolution_str = primary_camera.get('resolution', '1920x1080')
     try:
         width, height = map(int, resolution_str.split('x'))

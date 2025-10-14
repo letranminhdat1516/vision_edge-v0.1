@@ -83,14 +83,20 @@ class SameRoomDualDetection:
         # Display statistics for monitoring
         self.display_stats = {
             'start_time': time.time(),
-            'total_frames': {'camera_01': 0, 'camera_02': 0},
-            'processed_frames': {'camera_01': 0, 'camera_02': 0},
+            'total_frames': {},
+            'processed_frames': {},
             'emergency_detections': 0,
             'fall_detections': 0,
             'seizure_detections': 0,
             'coverage_events': 0,
             'captions_generated': 0
         }
+        
+        # Initialize stats dictionaries with actual camera IDs
+        for config in camera_configs:
+            camera_id = config['camera_id']
+            self.display_stats['total_frames'][camera_id] = 0
+            self.display_stats['processed_frames'][camera_id] = 0
         
         # Statistics
         self.stats = {
@@ -501,6 +507,24 @@ class SameRoomDualDetection:
         """Detection loop for individual camera"""
         position = config.get('position', 'unknown')
         
+        # Wait for camera to stabilize after connection
+        print(f"⏳ Waiting for {config.get('name', camera_id)} to stabilize...")
+        time.sleep(2)
+        
+        # Test frame capture with retries
+        frame_test_count = 0
+        while self.running and frame_test_count < 10:
+            test_frame = camera.get_frame()
+            if test_frame is not None:
+                print(f"✅ {config.get('name', camera_id)} frame capture working!")
+                break
+            frame_test_count += 1
+            time.sleep(0.5)
+        
+        if frame_test_count >= 10:
+            print(f"❌ {config.get('name', camera_id)} frame capture failed after retries")
+            return
+        
         while self.running:
             try:
                 frame = camera.get_frame()
@@ -609,7 +633,9 @@ class SameRoomDualDetection:
                 self.display_stats['total_frames'][camera_id] += 1
                 
             except Exception as e:
-                print(f"❌ Detection error for {camera_id}: {e}")
+                print(f"❌ Detection error for {camera_id}: {type(e).__name__}: {str(e)}")
+                import traceback
+                print(f"   📍 Traceback: {traceback.format_exc().splitlines()[-2] if traceback.format_exc().splitlines() else 'No traceback'}")
                 time.sleep(1)
     
     def _display_camera_monitors(self, camera_id: str, frame: np.ndarray, 
