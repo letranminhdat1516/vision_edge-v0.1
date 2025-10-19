@@ -94,18 +94,6 @@ class YOLOv8PoseEstimator:
         
         Args:
             frame: Input image (H, W, 3)
-            confidence_threshold: Minimum confidence for person detection
-            person_bbox: Optional person bounding box (for compatibility - not used)
-            
-        Returns:
-            np.ndarray: Keypoints (17, 3) with [x, y, confidence] or None
-        """
-    def extract_keypoints(self, frame: np.ndarray, confidence_threshold: float = 0.5, person_bbox=None) -> Optional[np.ndarray]:
-        """
-        Extract pose keypoints from frame
-        
-        Args:
-            frame: Input image (H, W, 3)
             confidence_threshold: Minimum confidence for person detection OR person_bbox for compatibility
             person_bbox: Optional person bounding box (for compatibility - not used)
             
@@ -129,7 +117,12 @@ class YOLOv8PoseEstimator:
             else:
                 # Normal case: second parameter is confidence threshold
                 if isinstance(confidence_threshold, (list, tuple)):
-                    actual_confidence_threshold = float(confidence_threshold[0])
+                    if len(confidence_threshold) > 0:
+                        actual_confidence_threshold = float(confidence_threshold[0])
+                    else:
+                        # Empty list/tuple, use default
+                        actual_confidence_threshold = 0.5
+                        print("⚠️ YOLOv8-Pose: Empty confidence threshold list, using default 0.5")
                 else:
                     actual_confidence_threshold = float(confidence_threshold)
             

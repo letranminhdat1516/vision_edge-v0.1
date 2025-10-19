@@ -9,7 +9,7 @@ from pathlib import Path
 from service.emergency_notification_dispatcher import HealthcareEventPublisher
 
 class AdvancedHealthcarePipeline:
-    def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder):
+    def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder, camera_id=None, user_id=None):
         self.camera = camera
         self.video_processor = video_processor
         self.fall_detector = fall_detector
@@ -17,8 +17,11 @@ class AdvancedHealthcarePipeline:
         self.seizure_predictor = seizure_predictor
         self.alert_save_path = alerts_folder
         
-        # Initialize Supabase event publisher
-        self.event_publisher = HealthcareEventPublisher()
+        # Initialize Supabase event publisher with real camera_id
+        self.event_publisher = HealthcareEventPublisher(
+            default_user_id=user_id,
+            default_camera_id=camera_id
+        )
         
         # Create alert save directory
         Path(self.alert_save_path).mkdir(parents=True, exist_ok=True)
@@ -163,8 +166,12 @@ class AdvancedHealthcarePipeline:
                 fall_result = self.fall_detector.detect_fall(frame, primary_person)
                 base_fall_confidence = fall_result['confidence']
                 
-                # MORE SENSITIVE: Lower threshold for direct detection
-                if base_fall_confidence >= 0.6:  # Giảm từ 0.8 xuống 0.6 để sensitive hơn
+                # Debug: Log fall detection attempt
+                if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds at 30fps
+                    print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}")
+                
+                # VERY SENSITIVE: Much lower threshold for testing
+                if base_fall_confidence >= 0.3:  # Giảm từ 0.6 xuống 0.3 để test nhạy cảm
                     result['fall_detected'] = True
                     result['fall_confidence'] = base_fall_confidence
                     self.stats['fall_detections'] += 1
@@ -201,8 +208,8 @@ class AdvancedHealthcarePipeline:
                     enhanced_fall_confidence = self.enhance_detection_with_motion(base_fall_confidence, motion_level, 'fall')
                     smoothed_fall_confidence = self.smooth_detection_confidence(enhanced_fall_confidence, 'fall')
                     
-                    # MORE SENSITIVE: Lower threshold for confirmation-based detection
-                    fall_threshold = 0.3  # Giảm từ 0.4 xuống 0.3 để sensitive hơn
+                    # VERY SENSITIVE: Much lower threshold for testing
+                    fall_threshold = 0.1  # Giảm từ 0.2 xuống 0.1 để test nhạy cảm
                     if smoothed_fall_confidence > fall_threshold:
                         self.detection_history['fall_confirmation_frames'] += 1
                     else:
@@ -271,9 +278,13 @@ class AdvancedHealthcarePipeline:
                     enhanced_seizure_confidence = self.enhance_detection_with_motion(base_seizure_confidence, motion_level, 'seizure')
                     final_seizure_confidence = self.smooth_detection_confidence(enhanced_seizure_confidence, 'seizure')
                     
-                    # MORE SENSITIVE: Use lower thresholds for easier testing
-                    seizure_threshold = 0.2   # Giảm từ 0.3 xuống 0.2 để sensitive hơn
-                    warning_threshold = 0.15  # Giảm từ 0.2 xuống 0.15 để sensitive hơn
+                    # Debug: Log seizure detection attempt
+                    if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds at 30fps
+                        print(f"🔍 Seizure Detection Debug: Base={base_seizure_confidence:.3f}, Final={final_seizure_confidence:.3f}, Motion={motion_level:.3f}")
+                    
+                    # VERY SENSITIVE: Much lower thresholds for testing
+                    seizure_threshold = 0.05   # Giảm từ 0.15 xuống 0.05 để test nhạy cảm
+                    warning_threshold = 0.05  # Giảm từ 0.15 xuống 0.05 để test nhạy cảm
                     
                     if final_seizure_confidence > seizure_threshold:
                         self.detection_history['seizure_confirmation_frames'] += 1

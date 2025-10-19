@@ -109,39 +109,10 @@ class CameraConfigService:
         }
     
     def _get_fallback_cameras(self) -> List[Dict]:
-        """Fallback camera configuration when database is not available"""
-        return [
-            {
-                'id': '272394ef-08de-46a4-95b7-1df369696b89',
-                'name': 'Phòng bệnh nhân 1',
-                'rtsp_url': 'rtsp://admin:L2C37340@192.168.8.122:554/cam/realmonitor?channel=1&subtype=1',
-                'type': 'ip',
-                'location': 'patient_room_1',
-                'resolution': '1920x1080',
-                'fps': 30,
-                'status': 'active',
-                'is_online': True,
-                'ip_address': '192.168.8.122',
-                'port': 554,
-                'username': 'admin',
-                'password': 'L2C37340'
-            },
-            {
-                'id': '84e81371-3873-4046-b907-85497c7da8aa',
-                'name': 'Phòng bệnh nhân 2', 
-                'rtsp_url': 'rtsp://admin:L24009D7@192.168.8.86:554/cam/realmonitor?channel=1&subtype=1',
-                'type': 'ip',
-                'location': 'patient_room_2',
-                'resolution': '1920x1080',
-                'fps': 30,
-                'status': 'active',
-                'is_online': True,
-                'ip_address': '192.168.8.86',
-                'port': 554,
-                'username': 'admin',
-                'password': 'L24009D7'
-            }
-        ]
+        """Fallback camera configuration when database is not available - DISABLED"""
+        print("❌ WARNING: Fallback cameras requested - this should not happen!")
+        print("   System should use clean_camera_service instead")
+        return []  # Return empty to force error and find where this is used
 
 # Global instance
 camera_config_service = CameraConfigService()

@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ProfessionalVietnameseCaptionPipeline:
-    """Pipeline chuyên nghiệp: BLIP + Translation Model"""
+    """Pipeline BLIP + Translation Model"""
     
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

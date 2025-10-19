@@ -15,7 +15,7 @@ class SimpleFallDetector:
     Uses lightweight approach without AI models.
     """
     
-    def __init__(self, confidence_threshold=0.7):
+    def __init__(self, confidence_threshold=0.4):  # Giảm từ 0.7 xuống 0.4 để nhạy hơn
         """
         Initialize simplified fall detector.
         
@@ -25,7 +25,7 @@ class SimpleFallDetector:
         self.confidence_threshold = confidence_threshold
         self.previous_frame = None
         self.previous_timestamp = None
-        self.min_time_interval = 1.0  # Giảm từ 1.5 xuống 1.0 giây để nhạy hơn
+        self.min_time_interval = 0.8  # Giảm từ 1.0 xuống 0.8 giây để nhạy hơn
         self.frame_buffer = []
         self.max_buffer_size = 3
         

@@ -3,7 +3,7 @@ try:
     from seizure_detection.seizure_predictor import SeizurePredictor as ExternalSeizurePredictor
 except ImportError:
     class InternalVSViGSeizureDetector:
-        def __init__(self, confidence_threshold=0.65):
+        def __init__(self, confidence_threshold=0.5):  # Giảm từ 0.65 xuống 0.5
             self.confidence_threshold = confidence_threshold
         def detect_seizure(self, frame, bbox):
             return {
@@ -12,7 +12,7 @@ except ImportError:
                 'confidence': 0.0
             }
     class InternalSeizurePredictor:
-        def __init__(self, temporal_window=30, alert_threshold=0.65, warning_threshold=0.45):
+        def __init__(self, temporal_window=30, alert_threshold=0.55, warning_threshold=0.35):  # Giảm threshold để nhạy hơn
             pass
         def update_prediction(self, confidence):
             return {
@@ -23,7 +23,7 @@ except ImportError:
             }
 
 class SeizureDetectionService:
-    def __init__(self, confidence_threshold=0.7, temporal_window=25, alert_threshold=0.7, warning_threshold=0.5):
+    def __init__(self, confidence_threshold=0.5, temporal_window=25, alert_threshold=0.55, warning_threshold=0.35):  # Giảm threshold để nhạy hơn
         # Chọn đúng class dựa trên import
         if 'ExternalVSViGSeizureDetector' in globals():
             self.detector = ExternalVSViGSeizureDetector(confidence_threshold=confidence_threshold)

@@ -16,10 +16,10 @@ class SeizurePredictor:
     """
     
     def __init__(self, 
-                 temporal_window: int = 30,
-                 smoothing_factor: float = 0.3,      # Tăng để responsive hơn
-                 alert_threshold: float = 0.65,     # Giảm để dễ detect hơn  
-                 warning_threshold: float = 0.45):  # Giảm để sensitive hơn
+                 temporal_window: int = 25,        # Giảm từ 30 xuống 25 để responsive hơn
+                 smoothing_factor: float = 0.4,    # Tăng từ 0.3 lên 0.4 để responsive hơn
+                 alert_threshold: float = 0.55,    # Giảm từ 0.65 xuống 0.55 để dễ detect hơn  
+                 warning_threshold: float = 0.35): # Giảm từ 0.45 xuống 0.35 để sensitive hơn
         """
         Initialize seizure predictor
         

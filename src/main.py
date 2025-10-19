@@ -133,10 +133,7 @@ def detect_camera_mode():
 
 print("="*60)
 print("🏥 Vision Edge Healthcare System v0.1")
-print("🔍 Analyzing camera configuration...")
-
-# Detect camera mode
-camera_mode, camera_data = detect_camera_mode()
+print("🔍 Loading camera configuration from database...")
 print("="*60)
 
 if __name__ == "__main__":
@@ -160,149 +157,239 @@ if __name__ == "__main__":
     
     print(f"✅ Found {len(all_cameras)} cameras for user {user_id}")
     
-    # Determine camera mode based on locations
-    locations = set([cam['location'] for cam in all_cameras])
-    
-    if len(all_cameras) >= 2 and len(locations) == 1:
-        # DUAL CAMERA MODE - same room
-        print(f"🎥🎥 DUAL CAMERA MODE: {len(all_cameras)} cameras in same room ({list(locations)[0]})")
-        
-        # Initialize dual camera system
-        from service.dual_camera_surveillance_system import SameRoomDualDetection
-        
-        # Convert to format expected by dual system
-        camera_configs = []
-        for cam in all_cameras:
-            camera_configs.append({
-                'camera_id': cam['id'],
-                'name': cam['name'],
-                'rtsp_url': cam['rtsp_url'],
-                'location': cam['location'],
-                'resolution': cam.get('resolution', '1920x1080'),
-                'fps': cam.get('fps', 30)
-            })
-        
-        print("🚀 Initializing Enhanced Multi-Camera System...")
-        for i, cam in enumerate(all_cameras, 1):
-            print(f"   📹 Camera {i}: {cam['name']} at {cam['location']}")
-        
-        # Initialize enhanced multi-camera system
-        from service.enhanced_multi_camera_system import create_enhanced_system
-        enhanced_system = create_enhanced_system(camera_configs)
-        
-        # Start enhanced multi-camera monitoring
-        print("🎥🎥 Starting enhanced multi-camera monitoring...")
-        if enhanced_system.start():
-            print("✅ Enhanced multi-camera system started successfully!")
-            print("📺 Camera monitors should now be visible!")
-            print("🎮 Press 'q' in any camera window to quit, 's' for stats")
-            
-            try:
-                # Keep system running
-                while enhanced_system.running:
-                    time.sleep(0.1)
-            except KeyboardInterrupt:
-                print("\n🛑 Shutting down enhanced multi-camera system...")
+    # Always use simple multi-camera approach - based on working single camera code
+    if len(all_cameras) >= 2:
+        # MULTI-CAMERA MODE - Using proven single camera logic
+        locations = set([cam['location'] for cam in all_cameras])
+        if len(locations) == 1:
+            print(f"🎥🎥 MULTI-CAMERA MODE: {len(all_cameras)} cameras in same room ({list(locations)[0]})")
         else:
-            print("❌ Failed to start enhanced multi-camera system")
+            print(f"🎥🎥 MULTI-CAMERA MODE: {len(all_cameras)} cameras in different rooms")
         
-        enhanced_system.stop()
+        # Process each camera individually using working single camera code
+        print("🎥 Starting Multi-Camera Healthcare Monitoring System...")
+        print("📱 Emergency notifications: ACTIVE")
+        print("🏥 Real-time healthcare detection: ACTIVE")
+        if INTELLIGENT_ACTIONS_AVAILABLE:
+            print("🤖 Intelligent action generation: ACTIVE")
+        else:
+            print("📝 Static action messages: ACTIVE")
+        print("Press 'q' to quit, 's' to show statistics")
+        print("="*60)
+        
+        # Main processing loop for all cameras - Each camera with its own services
+        cameras_data = []
+        
+        for i, cam in enumerate(all_cameras):
+            print(f"🔧 Setting up processing for Camera {i+1}: {cam['name']}")
+            
+            # Parse resolution from database
+            resolution_str = cam.get('resolution', '1920x1080')
+            try:
+                width, height = map(int, resolution_str.split('x'))
+                resolution = (width, height)
+            except:
+                resolution = (1920, 1080)
+            
+            # Configure camera from database data (same as single mode)
+            camera_config = {
+                'url': cam['rtsp_url'],
+                'buffer_size': 1,
+                'fps': cam.get('fps', 30),
+                'resolution': resolution,
+                'auto_reconnect': True,
+                'camera_id': cam['id'],
+                'camera_name': cam['name']
+            }
+            
+            processor_config = 120
+            alerts_folder = "examples/data/saved_frames/alerts"
+            
+            # Initialize services for THIS camera
+            from service.camera_service import CameraService
+            from service.video_processing_service import VideoProcessingService
+            from service.fall_detection_service import FallDetectionService
+            from service.seizure_detection_service import SeizureDetectionService
+            from seizure_detection.seizure_predictor import SeizurePredictor
+            
+            individual_camera = CameraService(camera_config)
+            individual_camera.connect()
+            individual_video_processor = VideoProcessingService(processor_config)
+            individual_fall_detector = FallDetectionService()
+            individual_seizure_detector = SeizureDetectionService()
+            individual_seizure_predictor = SeizurePredictor(temporal_window=20, alert_threshold=0.55, warning_threshold=0.35)  # Giảm threshold để nhạy hơn
+            
+            # Initialize individual Healthcare Pipeline
+            print(f"🔧 Initializing Healthcare Pipeline with camera_id: {cam['id']}, user_id: {user_id}")
+            individual_pipeline = AdvancedHealthcarePipeline(
+                camera=individual_camera,
+                video_processor=individual_video_processor,
+                fall_detector=individual_fall_detector,
+                seizure_detector=individual_seizure_detector,
+                seizure_predictor=individual_seizure_predictor,
+                alerts_folder=alerts_folder,
+                camera_id=cam['id'],  # Use real camera ID from database
+                user_id=user_id  # Use real user ID
+            )
+            
+            # Store camera data with individual instances
+            cameras_data.append({
+                'camera': individual_camera,
+                'pipeline': individual_pipeline,
+                'name': cam['name'],
+                'id': cam['id']
+            })
+            
+            print(f"✅ Camera {i+1} ({cam['name']}) processing setup complete!")
+        
+        print(f"🎥 All {len(cameras_data)} cameras ready for processing!")
+        
+        while True:
+            for cam_data in cameras_data:
+                try:
+                    frame = cam_data['camera'].get_frame()
+                    if frame is None:
+                        continue
+                    
+                    result = cam_data['pipeline'].process_frame(frame)
+                    detection_result = result["detection_result"]
+                    person_detections = result["person_detections"]
+                    
+                    # Debug logging removed for cleaner output
+                    
+                    # Generate intelligent action when alert detected
+                    if detection_result.get('alert_level') in ['critical', 'high']:
+                        emergency_type = detection_result.get('emergency_type', 'unknown')
+                        confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
+                        print(f"🚨 EMERGENCY ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
+                    # Debug warning level alerts too
+                    elif detection_result.get('alert_level') == 'warning':
+                        emergency_type = detection_result.get('emergency_type', 'unknown')
+                        confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
+                        print(f"⚠️ WARNING ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
+                    
+                    # Display windows for each camera (using unique window names)
+                    normal_window_name = f"Camera {cam_data['name']} - Normal View"
+                    analysis_window_name = f"Camera {cam_data['name']} - Analysis View"
+                    
+                    cv2.imshow(normal_window_name, result["normal_window"])
+                    
+                    # Analysis view with statistics overlay
+                    analysis_view = cam_data['pipeline'].visualize_dual_detection(frame, detection_result, person_detections)
+                    analysis_view = cam_data['pipeline'].draw_statistics_overlay(analysis_view, cam_data['pipeline'].stats)
+                    
+                    cv2.imshow(analysis_window_name, analysis_view)
+                    
+                except Exception as e:
+                    print(f"❌ Error processing {cam_data['name']}: {e}")
+                    continue
+            
+            # Check keyboard input (same as single mode)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print("\n🛑 Shutting down Multi-Camera Healthcare Monitoring System...")
+                break
+            elif key == ord('s'):
+                # Show statistics for all cameras
+                for cam_data in cameras_data:
+                    print(f"\n📊 Statistics for {cam_data['name']}:")
+                    cam_data['pipeline'].print_final_statistics()
+        
+        print("📱 Notifications stopped")
+        print("🏥 Multi-camera healthcare monitoring stopped")
+        cv2.destroyAllWindows()
         exit(0)
         
     else:
-        # SINGLE CAMERA MODE
-        if len(all_cameras) >= 2:
-            print(f"🎥 SINGLE CAMERA MODE: {len(all_cameras)} cameras in different rooms")
-        else:
-            print(f"🎥 SINGLE CAMERA MODE: Only {len(all_cameras)} camera available")
+        # SINGLE CAMERA MODE - only when 1 camera
+        print(f"🎥 SINGLE CAMERA MODE: Only {len(all_cameras)} camera available")
         
         # Use first camera for single mode
         primary_camera = all_cameras[0]
         print(f"✅ Using camera: {primary_camera['name']} ({primary_camera['id']})")
         print(f"📍 Location: {primary_camera['location']}")
         print(f"🔗 RTSP URL: {primary_camera['rtsp_url']}")
-    
-    # Parse resolution from database (for single camera mode)
-    resolution_str = primary_camera.get('resolution', '1920x1080')
-    try:
-        width, height = map(int, resolution_str.split('x'))
-        resolution = (width, height)
-    except:
-        resolution = (1920, 1080)
-    
-    # Configure camera from database data
-    camera_config = {
-        'url': primary_camera['rtsp_url'],
-        'buffer_size': 1,
-        'fps': primary_camera.get('fps', 30),
-        'resolution': resolution,
-        'auto_reconnect': True,
-        'camera_id': primary_camera['id'],
-        'camera_name': primary_camera['name']
-    }
-    
-    processor_config = 120
-    alerts_folder = "examples/data/saved_frames/alerts"
-    # Khởi tạo các service thật sự
-    from service.camera_service import CameraService
-    from service.video_processing_service import VideoProcessingService
-    from service.fall_detection_service import FallDetectionService
-    from service.seizure_detection_service import SeizureDetectionService
-
-    camera = CameraService(camera_config)
-    camera.connect()
-    video_processor = VideoProcessingService(processor_config)
-    fall_detector = FallDetectionService()
-    seizure_detector = SeizureDetectionService()
-    
-    # Import và init seizure predictor
-    from seizure_detection.seizure_predictor import SeizurePredictor
-    seizure_predictor = SeizurePredictor(temporal_window=25, alert_threshold=0.7, warning_threshold=0.5)
-    
-    # Khởi tạo AdvancedHealthcarePipeline
-    print("🏥 Initializing Healthcare Pipeline...")
-    print("   - Real-time fall detection")
-    print("   - Real-time seizure detection") 
-    print("   - Emergency notifications")
-    print("   - Supabase realtime integration")
-    print("   - Mobile app notifications")
-    if INTELLIGENT_ACTIONS_AVAILABLE:
-        print("   - 🤖 Intelligent action generation (BLIP + Translation)")
-    else:
-        print("   - 📝 Static action messages")
-    
-    pipeline = AdvancedHealthcarePipeline(
-        camera=camera, 
-        video_processor=video_processor, 
-        fall_detector=fall_detector, 
-        seizure_detector=seizure_detector, 
-        seizure_predictor=seizure_predictor, 
-        alerts_folder=alerts_folder
-    )
-    
-    # Initialize intelligent action pipeline if available
-    caption_pipeline = None
-    if INTELLIGENT_ACTIONS_AVAILABLE:
+        
+        # Parse resolution from database (for single camera mode)
+        resolution_str = primary_camera.get('resolution', '1920x1080')
         try:
-            caption_pipeline = get_professional_caption_pipeline()
-            print(f"   ✅ BLIP model loaded: {caption_pipeline.blip_loaded}")
-            print(f"   ✅ Translation model loaded: {caption_pipeline.translator_loaded}")
-        except Exception as e:
-            print(f"   ⚠️ Intelligent action initialization failed: {e}")
-            caption_pipeline = None
-    
-    print("✅ Healthcare Pipeline initialized!")
-    print("📱 Mobile notifications handled by NestJS backend")
-    print("="*60)
+            width, height = map(int, resolution_str.split('x'))
+            resolution = (width, height)
+        except:
+            resolution = (1920, 1080)
+        
+        # Configure camera from database data
+        camera_config = {
+            'url': primary_camera['rtsp_url'],
+            'buffer_size': 1,
+            'fps': primary_camera.get('fps', 30),
+            'resolution': resolution,
+            'auto_reconnect': True,
+            'camera_id': primary_camera['id'],
+            'camera_name': primary_camera['name']
+        }
+        
+        processor_config = 120
+        alerts_folder = "examples/data/saved_frames/alerts"
+        # Khởi tạo các service thật sự
+        from service.camera_service import CameraService
+        from service.video_processing_service import VideoProcessingService
+        from service.fall_detection_service import FallDetectionService
+        from service.seizure_detection_service import SeizureDetectionService
 
+        camera = CameraService(camera_config)
+        camera.connect()
+        video_processor = VideoProcessingService(processor_config)
+        fall_detector = FallDetectionService()
+        seizure_detector = SeizureDetectionService()
+        
+        # Import và init seizure predictor
+        from seizure_detection.seizure_predictor import SeizurePredictor
+        seizure_predictor = SeizurePredictor(temporal_window=20, alert_threshold=0.55, warning_threshold=0.35)  # Giảm threshold để nhạy hơn
+        
+        # Khởi tạo AdvancedHealthcarePipeline
+        print("🏥 Initializing Healthcare Pipeline...")
+        print("   - Real-time fall detection")
+        print("   - Real-time seizure detection") 
+        print("   - Emergency notifications")
+        print("   - Supabase realtime integration")
+        print("   - Mobile app notifications")
+        if INTELLIGENT_ACTIONS_AVAILABLE:
+            print("   - 🤖 Intelligent action generation (BLIP + Translation)")
+        else:
+            print("   - 📝 Static action messages")
+        
+        pipeline = AdvancedHealthcarePipeline(
+            camera=camera, 
+            video_processor=video_processor, 
+            fall_detector=fall_detector, 
+            seizure_detector=seizure_detector, 
+            seizure_predictor=seizure_predictor, 
+            alerts_folder=alerts_folder
+        )
+        
+        # Initialize intelligent action pipeline if available
+        caption_pipeline = None
+        if INTELLIGENT_ACTIONS_AVAILABLE:
+            try:
+                caption_pipeline = get_professional_caption_pipeline()
+                print(f"   ✅ BLIP model loaded: {caption_pipeline.blip_loaded}")
+                print(f"   ✅ Translation model loaded: {caption_pipeline.translator_loaded}")
+            except Exception as e:
+                print(f"   ⚠️ Intelligent action initialization failed: {e}")
+                caption_pipeline = None
+        
+        print("✅ Healthcare Pipeline initialized!")
+        print("📱 Mobile notifications handled by NestJS backend")
+        print("="*60)
 
-    print("🎥 Starting Healthcare Monitoring System...")
-    print("📱 Emergency notifications: ACTIVE")
-    print("🏥 Real-time healthcare detection: ACTIVE")
-    if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
-        print("🤖 Intelligent action generation: ACTIVE")
-    else:
-        print("📝 Static action messages: ACTIVE")
+        print("🎥 Starting Healthcare Monitoring System...")
+        print("📱 Emergency notifications: ACTIVE")
+        print("🏥 Real-time healthcare detection: ACTIVE")
+        if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
+            print("🤖 Intelligent action generation: ACTIVE")
+        else:
+            print("📝 Static action messages: ACTIVE")
     print("Press 'q' to quit, 's' to show statistics, 'i' to toggle intelligent actions, 'e' to create random test event")
     print("="*60)
 

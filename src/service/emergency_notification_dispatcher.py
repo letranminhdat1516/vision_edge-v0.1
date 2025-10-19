@@ -44,6 +44,11 @@ class HealthcareEventPublisher:
         self.default_camera_id = default_camera_id or str(uuid.uuid4())
         self.default_room_id = default_room_id or str(uuid.uuid4())
         
+        # Debug: Print what camera_id is being used
+        print(f"🔧 HealthcareEventPublisher initialized:")
+        print(f"   📷 Camera ID: {self.default_camera_id}")
+        print(f"   👤 User ID: {self.default_user_id}")
+        
         # Load configuration
         self.config = config_loader.load_system_config()
         self.detection_settings = config_loader.load_detection_settings()
@@ -337,10 +342,10 @@ class HealthcareEventPublisher:
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish fall detection with priority-based alert system"""
         try:
-            # Use environment-based default IDs instead of config file
+            # Use provided camera_id or constructor default (no more env fallback)
             import os
             
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or os.getenv('DEFAULT_CAMERA_ID', str(uuid.uuid4()))
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or self.default_camera_id
             final_room_id = room_id or (context.get('room_id') if context else None) or os.getenv('DEFAULT_ROOM_ID', str(uuid.uuid4()))
             final_user_id = user_id or (context.get('user_id') if context else None) or os.getenv('DEFAULT_USER_ID', str(uuid.uuid4()))
             
@@ -452,10 +457,10 @@ class HealthcareEventPublisher:
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish seizure detection with priority-based alert system"""
         try:
-            # Use environment-based default IDs instead of config file
+            # Use provided camera_id or constructor default (no more env fallback)
             import os
             
-            final_camera_id = camera_id or (context.get('camera_id') if context else None) or os.getenv('DEFAULT_CAMERA_ID', str(uuid.uuid4()))
+            final_camera_id = camera_id or (context.get('camera_id') if context else None) or self.default_camera_id
             final_room_id = room_id or (context.get('room_id') if context else None) or os.getenv('DEFAULT_ROOM_ID', str(uuid.uuid4()))
             final_user_id = user_id or (context.get('user_id') if context else None) or os.getenv('DEFAULT_USER_ID', str(uuid.uuid4()))
             

@@ -69,8 +69,7 @@ class PostgreSQLHealthcareService:
         # Initialize connection
         self._initialize_connection()
         
-        # Ensure default entities exist in database
-        self._ensure_default_entities()
+        # Note: We now use real database cameras instead of ensuring default entities
     
     def _initialize_connection(self):
         """Initialize PostgreSQL connection pool"""
@@ -280,44 +279,59 @@ class PostgreSQLHealthcareService:
     
     def _get_user_camera_id(self, user_id: str) -> Optional[str]:
         """Get first camera_id for a user"""
-        logger.info(f"🔍 _get_user_camera_id called with user_id: {user_id}")
+        print(f"🔍 DEBUG: _get_user_camera_id called with user_id: {user_id}")
         conn = self.get_connection()
         if not conn:
-            logger.warning("🔍 No database connection available")
+            print("🔍 DEBUG: No database connection available")
             return None
         
         try:
             with conn.cursor() as cursor:
+                # First, check what cameras exist for this user
+                cursor.execute(
+                    "SELECT camera_id, camera_name, user_id, status FROM cameras WHERE user_id = %s",
+                    (user_id,)
+                )
+                all_cameras = cursor.fetchall()
+                print(f"🔍 DEBUG: All cameras for user {user_id}: {all_cameras}")
+                
+                # Get first active camera
                 cursor.execute(
                     "SELECT camera_id FROM cameras WHERE user_id = %s AND status = 'active' LIMIT 1",
                     (user_id,)
                 )
                 result = cursor.fetchone()
-                camera_id = str(result['camera_id']) if result else None
-                logger.info(f"🔍 Found user camera_id: {camera_id}")
+                camera_id = str(result['camera_id']) if result else None  # Use 'camera_id' not 'id'
+                print(f"🔍 DEBUG: Found user camera_id: {camera_id}")
                 return camera_id
         except Exception as e:
-            logger.error(f"Error getting user camera: {e}")
+            print(f"🔍 DEBUG: Error getting user camera: {e}")
             return None
         finally:
             self.return_connection(conn)
     
     def _get_any_camera_id(self) -> Optional[str]:
         """Get any available camera_id as fallback"""
-        logger.info(f"🔍 _get_any_camera_id called")
+        print(f"🔍 DEBUG: _get_any_camera_id called")
         conn = self.get_connection()
         if not conn:
+            print("🔍 DEBUG: No database connection for _get_any_camera_id")
             return None
-        
+
         try:
             with conn.cursor() as cursor:
+                # Check what cameras exist at all
+                cursor.execute("SELECT camera_id, camera_name, status FROM cameras LIMIT 5")
+                all_cameras = cursor.fetchall()
+                print(f"🔍 DEBUG: Available cameras: {all_cameras}")
+                
                 cursor.execute("SELECT camera_id FROM cameras WHERE status = 'active' LIMIT 1")
                 result = cursor.fetchone()
-                camera_id = str(result['camera_id']) if result else None
-                logger.info(f"🔍 Found any camera_id: {camera_id}")
+                camera_id = str(result['camera_id']) if result else None  # Use 'camera_id' not 'id'
+                print(f"🔍 DEBUG: Found any camera_id: {camera_id}")
                 return camera_id
         except Exception as e:
-            logger.error(f"Error getting any camera: {e}")
+            print(f"🔍 DEBUG: Error getting any camera: {e}")
             return None
         finally:
             self.return_connection(conn)
@@ -348,21 +362,13 @@ class PostgreSQLHealthcareService:
             self.return_connection(conn)
 
     def _create_default_snapshot(self, camera_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[str]:
-        """Create a default snapshot record with proper fallback values"""
+        """Create a default snapshot record with validated IDs"""
         conn = self.get_connection()
         if not conn:
             return None
         
-        # Get default IDs from config
-        db_config = config_loader.get_database_config()
-        fall_defaults = db_config.get('default_ids', {}).get('fall_detection', {})
-        
-        # Use provided IDs or fallback to config values, validate not None
-        final_camera_id = camera_id or fall_defaults.get('camera_id')
-        final_user_id = user_id or fall_defaults.get('user_id')
-        
-        # Validate UUIDs - if any is None/empty, skip snapshot creation
-        if not all([final_camera_id, final_user_id]):
+        # Validate required IDs - if any is None/empty, skip snapshot creation
+        if not all([camera_id, user_id]):
             logger.warning("⚠️ Missing required IDs for snapshot creation, skipping...")
             return None
         
@@ -382,8 +388,8 @@ class PostgreSQLHealthcareService:
                 
                 cursor.execute(insert_sql, (
                     snapshot_id,
-                    final_camera_id,
-                    final_user_id,
+                    camera_id,
+                    user_id,
                     json.dumps({'type': 'default_snapshot', 'created_by': 'system'}),
                     'alert_triggered',
                     datetime.now(timezone.utc)
@@ -665,14 +671,14 @@ class PostgreSQLHealthcareService:
             # If no camera_id provided, get user's first camera
             if not camera_id and user_id:
                 camera_id = self._get_user_camera_id(user_id)
-                logger.info(f"🔧 Got user camera_id: {camera_id}")
+                print(f"🔧 Got user camera_id: {camera_id}")
             
             # If still no camera_id, get any available camera
             if not camera_id:
                 camera_id = self._get_any_camera_id()
-                logger.info(f"🔧 Got fallback camera_id: {camera_id}")
+                print(f"🔧 Got fallback camera_id: {camera_id}")
             
-            logger.info(f"🔧 Final IDs - user_id: {user_id}, camera_id: {camera_id}")
+            print(f"🔧 Final IDs - user_id: {user_id}, camera_id: {camera_id}")
             
             # Create snapshot first with real camera_id
             snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
@@ -681,7 +687,7 @@ class PostgreSQLHealthcareService:
             )
             
             # If snapshot creation failed, try to create one with minimal data
-            if not snapshot_id:
+            if not snapshot_id and camera_id and user_id:
                 snapshot_id = self._create_minimal_snapshot(camera_id, user_id)
                 
             # If still failed, create dummy snapshot
@@ -787,7 +793,10 @@ class PostgreSQLHealthcareService:
                 camera_id = self._get_any_camera_id()
             
             # Create snapshot_id
-            snapshot_id = self._create_minimal_snapshot(camera_id, user_id)
+            if camera_id and user_id:
+                snapshot_id = self._create_minimal_snapshot(camera_id, user_id)
+            else:
+                snapshot_id = None
             if not snapshot_id:
                 snapshot_id = str(uuid.uuid4())
                 logger.warning("Using dummy snapshot_id for alert")
@@ -926,147 +935,6 @@ class PostgreSQLHealthcareService:
             
         except Exception as e:
             logger.error(f"Error closing PostgreSQL service: {e}")
-    
-    def _ensure_default_entities(self):
-        """Ensure default users, cameras, rooms exist in database"""
-        try:
-            db_config = config_loader.get_database_config()
-            default_ids = db_config.get('default_ids', {})
-            
-            # Get default IDs for both fall and seizure detection
-            fall_defaults = default_ids.get('fall_detection', {})
-            seizure_defaults = default_ids.get('seizure_detection', {})
-            
-            all_defaults = [fall_defaults, seizure_defaults]
-            
-            # Create default entities if they don't exist
-            for defaults in all_defaults:
-                if defaults:
-                    self._create_default_user(defaults.get('user_id'))
-                    self._create_default_room(defaults.get('room_id'))
-                    self._create_default_camera(defaults.get('camera_id'), defaults.get('room_id'))
-                    
-            logger.info("✅ Default entities verified/created")
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Could not ensure default entities: {e}")
-    
-    def _create_default_user(self, user_id: str):
-        """Create default user if not exists"""
-        if not user_id:
-            return
-            
-        conn = self.get_connection()
-        if not conn:
-            return
-            
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
-                if cursor.fetchone():
-                    return  # User already exists
-                
-                # Create default user
-                cursor.execute("""
-                    INSERT INTO users (user_id, username, email, role, created_at) 
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (user_id) DO NOTHING
-                """, (
-                    user_id,
-                    'admin_demo',
-                    'admin@vision-edge.com',
-                    'admin',
-                    datetime.now(timezone.utc)
-                ))
-                conn.commit()
-                logger.info(f"✅ Created default user: {user_id}")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Could not create default user {user_id}: {e}")
-        finally:
-            self.return_connection(conn)
-    
-    def _create_default_room(self, room_id: str):
-        """Create default room if not exists"""
-        if not room_id:
-            return
-            
-        conn = self.get_connection()
-        if not conn:
-            return
-            
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT room_id FROM rooms WHERE room_id = %s", (room_id,))
-                if cursor.fetchone():
-                    return  # Room already exists
-                
-                # Create default room
-                cursor.execute("""
-                    INSERT INTO rooms (room_id, room_name, location, capacity, room_type, created_at) 
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (room_id) DO NOTHING
-                """, (
-                    room_id,
-                    'Healthcare Room A101',
-                    'First Floor - Healthcare Wing',
-                    4,
-                    'patient_room',
-                    datetime.now(timezone.utc)
-                ))
-                conn.commit()
-                logger.info(f"✅ Created default room: {room_id}")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Could not create default room {room_id}: {e}")
-        finally:
-            self.return_connection(conn)
-    
-    def _create_default_camera(self, camera_id: str, room_id: str):
-        """Create default camera if not exists"""
-        if not camera_id or not room_id:
-            return
-            
-        conn = self.get_connection()
-        if not conn:
-            return
-            
-        try:
-            # Get default user_id from config
-            db_config = config_loader.get_database_config()
-            default_user_id = db_config.get('default_ids', {}).get('fall_detection', {}).get('user_id')
-            
-            if not default_user_id:
-                logger.warning(f"⚠️ No default user_id found for camera creation")
-                return
-            
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT camera_id FROM cameras WHERE camera_id = %s", (camera_id,))
-                if cursor.fetchone():
-                    return  # Camera already exists
-                
-                # Create default camera
-                cursor.execute("""
-                    INSERT INTO cameras (camera_id, user_id, room_id, camera_name, camera_type, ip_address, status, created_at) 
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (camera_id) DO NOTHING
-                """, (
-                    camera_id,
-                    default_user_id,  # Add user_id
-                    room_id,
-                    f'Healthcare Camera - Room {room_id[-3:]}',
-                    'rtsp',  # Use valid enum value for RTSP cameras
-                    '192.168.8.122',
-                    'active',
-                    datetime.now(timezone.utc)
-                ))
-                conn.commit()
-                logger.info(f"✅ Created default camera: {camera_id}")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Could not create default camera {camera_id}: {e}")
-        finally:
-            self.return_connection(conn)
 
 # Global service instance
 postgresql_service = PostgreSQLHealthcareService()
