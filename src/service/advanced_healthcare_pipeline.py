@@ -8,6 +8,9 @@ from pathlib import Path
 # Import Supabase integration
 from service.emergency_notification_dispatcher import HealthcareEventPublisher
 
+# Import snapshot service for image storage
+from infrastructure.services.snapshot_service import get_snapshot_service
+
 class AdvancedHealthcarePipeline:
     def __init__(self, camera, video_processor, fall_detector, seizure_detector, seizure_predictor, alerts_folder, camera_id=None, user_id=None):
         self.camera = camera
@@ -16,12 +19,22 @@ class AdvancedHealthcarePipeline:
         self.seizure_detector = seizure_detector
         self.seizure_predictor = seizure_predictor
         self.alert_save_path = alerts_folder
+        self.camera_id = camera_id
+        self.user_id = user_id
         
         # Initialize Supabase event publisher with real camera_id
         self.event_publisher = HealthcareEventPublisher(
             default_user_id=user_id,
             default_camera_id=camera_id
         )
+        
+        # Initialize snapshot service for image storage
+        try:
+            self.snapshot_service = get_snapshot_service()
+            print(f"📸 Snapshot service initialized - MinIO storage ready")
+        except Exception as e:
+            print(f"⚠️ Snapshot service failed to initialize: {e}")
+            self.snapshot_service = None
         
         # Create alert save directory
         Path(self.alert_save_path).mkdir(parents=True, exist_ok=True)
@@ -177,7 +190,21 @@ class AdvancedHealthcarePipeline:
                     self.stats['fall_detections'] += 1
                     self.stats['last_fall_time'] = time.time()
                     print(f"🚨 FALL DETECTED! Confidence: {base_fall_confidence:.2f} | Motion: {motion_level:.2f} | Direct Detection")
-                    print(f"📊 Alert Level: HIGH | Emergency Type: Fall | Saved Image: fall_detected_*.jpg")
+                    print(f"📊 Alert Level: HIGH | Emergency Type: Fall")
+                    
+                    # Save detection snapshot to MinIO
+                    snapshot_id = self.save_detection_snapshot(
+                        frame=frame,
+                        event_type='fall',
+                        confidence=base_fall_confidence,
+                        metadata={
+                            'motion_level': motion_level,
+                            'detection_type': 'direct',
+                            'person_bbox': person_bbox
+                        }
+                    )
+                    if snapshot_id:
+                        print(f"📸 Fall image saved to MinIO: {snapshot_id[:8]}...")
                     
                     # Publish fall detection to Supabase realtime
                     try:
@@ -186,7 +213,8 @@ class AdvancedHealthcarePipeline:
                             'motion_level': motion_level,
                             'detection_type': 'direct',
                             'processing_time': time.time() - fall_start,
-                            'frame_number': self.stats['total_frames']
+                            'frame_number': self.stats['total_frames'],
+                            'snapshot_id': snapshot_id
                         }
                         
                         response = self.event_publisher.publish_fall_detection(
@@ -225,6 +253,21 @@ class AdvancedHealthcarePipeline:
                         print(f"🚨 FALL DETECTED! Confidence: {smoothed_fall_confidence:.2f} | Motion: {motion_level:.2f} | Frames: {self.detection_history['fall_confirmation_frames']}")
                         print(f"📊 Alert Level: HIGH | Emergency Type: Fall | Enhanced Detection")
                         
+                        # Save detection snapshot to MinIO
+                        snapshot_id = self.save_detection_snapshot(
+                            frame=frame,
+                            event_type='fall',
+                            confidence=smoothed_fall_confidence,
+                            metadata={
+                                'motion_level': motion_level,
+                                'detection_type': 'confirmation',
+                                'confirmation_frames': self.detection_history['fall_confirmation_frames'],
+                                'person_bbox': person_bbox
+                            }
+                        )
+                        if snapshot_id:
+                            print(f"📸 Fall confirmation image saved: {snapshot_id[:8]}...")
+                        
                         # Publish fall detection to Supabase realtime
                         try:
                             bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
@@ -233,7 +276,8 @@ class AdvancedHealthcarePipeline:
                                 'detection_type': 'confirmation',
                                 'confirmation_frames': self.detection_history['fall_confirmation_frames'],
                                 'processing_time': time.time() - fall_start,
-                                'frame_number': self.stats['total_frames']
+                                'frame_number': self.stats['total_frames'],
+                                'snapshot_id': snapshot_id
                             }
                             
                             response = self.event_publisher.publish_fall_detection(
@@ -323,7 +367,24 @@ class AdvancedHealthcarePipeline:
                             self.stats['seizure_detections'] += 1
                             self.stats['last_seizure_time'] = time.time()
                             print(f"🚨 SEIZURE DETECTED! Confidence: {final_seizure_confidence:.2f} | Motion: {motion_level:.2f} | Frames: {self.detection_history['seizure_confirmation_frames']}")
-                            print(f"📊 Alert Level: CRITICAL | Emergency Type: Seizure | Saved Image: seizure_detected_*.jpg")
+                            print(f"📊 Alert Level: CRITICAL | Emergency Type: Seizure")
+                            
+                            # Save detection snapshot to MinIO
+                            snapshot_id = self.save_detection_snapshot(
+                                frame=frame,
+                                event_type='seizure',
+                                confidence=final_seizure_confidence,
+                                metadata={
+                                    'motion_level': motion_level,
+                                    'detection_type': 'confirmation',
+                                    'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
+                                    'temporal_ready': seizure_result.get('temporal_ready', False),
+                                    'person_bbox': person_bbox,
+                                    'keypoints': seizure_result.get('keypoints')
+                                }
+                            )
+                            if snapshot_id:
+                                print(f"📸 Seizure image saved to MinIO: {snapshot_id[:8]}...")
                             
                             # Publish seizure detection to Supabase realtime
                             try:
@@ -334,7 +395,8 @@ class AdvancedHealthcarePipeline:
                                     'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
                                     'temporal_ready': seizure_result.get('temporal_ready', False),
                                     'processing_time': time.time() - seizure_time_start,
-                                    'frame_number': self.stats['total_frames']
+                                    'frame_number': self.stats['total_frames'],
+                                    'snapshot_id': snapshot_id
                                 }
                                 
                                 response = self.event_publisher.publish_seizure_detection(
@@ -784,3 +846,42 @@ class AdvancedHealthcarePipeline:
                 
         except Exception as e:
             print(f"❌ Emergency Event Logging Error: {e}")
+
+    def save_detection_snapshot(self, frame, event_type, confidence, metadata=None):
+        """
+        Save detection snapshot to MinIO and database
+        
+        Args:
+            frame: OpenCV frame to save
+            event_type: Type of detection (fall, seizure, etc.)
+            confidence: Detection confidence
+            metadata: Additional metadata
+        """
+        if not self.snapshot_service or not self.camera_id or not self.user_id:
+            print(f"⚠️ Cannot save snapshot - service not available or missing IDs")
+            return None
+            
+        try:
+            snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
+                camera_id=self.camera_id,
+                user_id=self.user_id,
+                event_type=event_type,
+                confidence=confidence,
+                frame=frame,
+                metadata={
+                    'detection_time': datetime.now().isoformat(),
+                    'frame_number': self.stats['total_frames'],
+                    'processing_stats': {
+                        'fps': self.stats['fps'],
+                        'total_detections': self.stats[f'{event_type}_detections']
+                    },
+                    **(metadata or {})
+                }
+            )
+            
+            print(f"📸 {event_type.upper()} snapshot saved: {snapshot_id[:8]}... (confidence: {confidence:.3f})")
+            return snapshot_id
+            
+        except Exception as e:
+            print(f"❌ Error saving {event_type} snapshot: {e}")
+            return None
