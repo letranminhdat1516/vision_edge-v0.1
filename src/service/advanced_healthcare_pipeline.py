@@ -156,22 +156,22 @@ class AdvancedHealthcarePipeline:
         # Fall detection with improvements và COOLDOWN LOGIC
         fall_start = time.time()
         
-        # COOLDOWN: Không detect fall liên tục - MORE SENSITIVE
+        # COOLDOWN: Prevent fall detection spam - INCREASED
         current_time = time.time()
         if (self.stats['last_fall_time'] and 
-            current_time - self.stats['last_fall_time'] < 2.0):  # Giảm từ 3s xuống 2s
+            current_time - self.stats['last_fall_time'] < 8.0):  # Tăng lên 8s để giảm spam
             result['fall_confidence'] = 0.0  # Force reset để tránh spam
         else:
             try:
                 fall_result = self.fall_detector.detect_fall(frame, primary_person)
                 base_fall_confidence = fall_result['confidence']
                 
-                # Debug: Log fall detection attempt
-                if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds at 30fps
-                    print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}")
+                # Debug: Log fall detection attempt (disabled to reduce noise)
+                # if self.stats['total_frames'] % 300 == 0:  # Every 10 seconds (disabled)
+                #     print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}")
                 
-                # VERY SENSITIVE: Much lower threshold for testing
-                if base_fall_confidence >= 0.3:  # Giảm từ 0.6 xuống 0.3 để test nhạy cảm
+                # HIGH THRESHOLD: Prevent false positives
+                if base_fall_confidence >= 0.7:  # Tăng lên 0.7 để giảm false positive
                     result['fall_detected'] = True
                     result['fall_confidence'] = base_fall_confidence
                     self.stats['fall_detections'] += 1
@@ -208,15 +208,15 @@ class AdvancedHealthcarePipeline:
                     enhanced_fall_confidence = self.enhance_detection_with_motion(base_fall_confidence, motion_level, 'fall')
                     smoothed_fall_confidence = self.smooth_detection_confidence(enhanced_fall_confidence, 'fall')
                     
-                    # VERY SENSITIVE: Much lower threshold for testing
-                    fall_threshold = 0.1  # Giảm từ 0.2 xuống 0.1 để test nhạy cảm
+                    # BALANCED THRESHOLD: Reduce false positives while keeping sensitivity
+                    fall_threshold = 0.4  # Tăng từ 0.1 lên 0.4 để giảm false positive
                     if smoothed_fall_confidence > fall_threshold:
                         self.detection_history['fall_confirmation_frames'] += 1
                     else:
                         self.detection_history['fall_confirmation_frames'] = max(0, self.detection_history['fall_confirmation_frames'] - 1)
                     
-                    # MORE SENSITIVE: Fewer confirmation frames needed
-                    min_confirmation_frames = 2  # Giảm từ 3 xuống 2 để nhanh hơn
+                    # REQUIRE MORE FRAMES: More confirmation frames to reduce spam
+                    min_confirmation_frames = 4  # Tăng từ 2 lên 4 để chắc chắn hơn
                     if self.detection_history['fall_confirmation_frames'] >= min_confirmation_frames:
                         result['fall_detected'] = True
                         result['fall_confidence'] = smoothed_fall_confidence
@@ -259,12 +259,25 @@ class AdvancedHealthcarePipeline:
         self.performance['fall_detection_time'] = time.time() - fall_start
         
         # Seizure detection with improvements và DEBUG LOGGING
-        seizure_start = time.time()
+        seizure_time_start = time.time()
+        if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds
+            print(f"🧠 Seizure Detector Check: detector={'Available' if self.seizure_detector else 'NULL'}")
+        
         if self.seizure_detector is not None:
             try:
                 seizure_result = self.seizure_detector.detect_seizure(frame, person_bbox)
                 result['seizure_ready'] = seizure_result.get('temporal_ready', False)
                 result['keypoints'] = seizure_result.get('keypoints')
+                
+                # Debug: Always show seizure detector status with instructions
+                if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds
+                    temporal_status = "READY" if seizure_result.get('temporal_ready') else "NOT_READY"
+                    print(f"🧠 Seizure Detector Status: {temporal_status} | Raw Confidence: {seizure_result.get('confidence', 0):.3f}")
+                    if not seizure_result.get('temporal_ready'):
+                        print("💡 Seizure Detection Tips: Cần đứng thẳng trước camera và thực hiện các chuyển động:")
+                        print("   - Vẫy tay liên tục và mạnh")
+                        print("   - Lắc đầu qua lại nhiều lần") 
+                        print("   - Cử động cơ thể đột ngột và không đều")
                 
                 if seizure_result.get('temporal_ready'):
                     # Update seizure predictor nếu có
@@ -278,27 +291,33 @@ class AdvancedHealthcarePipeline:
                     enhanced_seizure_confidence = self.enhance_detection_with_motion(base_seizure_confidence, motion_level, 'seizure')
                     final_seizure_confidence = self.smooth_detection_confidence(enhanced_seizure_confidence, 'seizure')
                     
-                    # Debug: Log seizure detection attempt
-                    if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds at 30fps
-                        print(f"🔍 Seizure Detection Debug: Base={base_seizure_confidence:.3f}, Final={final_seizure_confidence:.3f}, Motion={motion_level:.3f}")
+                    # Debug: Log seizure detection attempt MORE FREQUENTLY
+                    if self.stats['total_frames'] % 30 == 0:  # Every 1 second instead of 2 seconds
+                        print(f"🔍 Seizure Debug: Base={base_seizure_confidence:.3f}, Final={final_seizure_confidence:.3f}, Motion={motion_level:.3f}, Temporal={seizure_result.get('temporal_ready', False)}")
                     
-                    # VERY SENSITIVE: Much lower thresholds for testing
-                    seizure_threshold = 0.05   # Giảm từ 0.15 xuống 0.05 để test nhạy cảm
-                    warning_threshold = 0.05  # Giảm từ 0.15 xuống 0.05 để test nhạy cảm
+                    # EXTREMELY SENSITIVE: Super low thresholds for easy detection
+                    seizure_threshold = 0.02   # Cực thấp để dễ detect
+                    warning_threshold = 0.01  # Cực thấp để có cảnh báo
                     
                     if final_seizure_confidence > seizure_threshold:
                         self.detection_history['seizure_confirmation_frames'] += 1
+                        if self.stats['total_frames'] % 30 == 0:
+                            print(f"🎯 Seizure Above Threshold: {final_seizure_confidence:.3f} > {seizure_threshold}, Frames: {self.detection_history['seizure_confirmation_frames']}")
+                    elif final_seizure_confidence > warning_threshold:
+                        # Keep frames for warning level
+                        if self.stats['total_frames'] % 30 == 0:
+                            print(f"⚠️ Seizure Warning Level: {final_seizure_confidence:.3f} > {warning_threshold}, Frames: {self.detection_history['seizure_confirmation_frames']}")
                     else:
-                        # AGGRESSIVE RESET: Reset to 0 immediately when confidence drops
+                        # Reset to 0 when below warning threshold
                         self.detection_history['seizure_confirmation_frames'] = 0
                     
                     # MORE SENSITIVE: Fewer confirmation frames needed
-                    min_seizure_confirmation = 2  # Giảm từ 3 xuống 2 để nhanh hơn
+                    min_seizure_confirmation = 1  # Chỉ cần 1 frame để confirm - siêu nhạy
                     if self.detection_history['seizure_confirmation_frames'] >= min_seizure_confirmation:
-                        # COOLDOWN CHECK: Avoid spam seizure detection  
+                        # COOLDOWN CHECK: Shorter cooldown for testing  
                         current_time = time.time()
                         if (self.stats['last_seizure_time'] is None or 
-                            current_time - self.stats['last_seizure_time'] > 5.0):  # Giảm từ 10s xuống 5s
+                            current_time - self.stats['last_seizure_time'] > 0.5):  # Chỉ 0.5 giây cooldown - rất nhạy
                             result['seizure_detected'] = True
                             result['seizure_confidence'] = final_seizure_confidence
                             self.stats['seizure_detections'] += 1
@@ -314,7 +333,7 @@ class AdvancedHealthcarePipeline:
                                     'detection_type': 'confirmation',
                                     'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
                                     'temporal_ready': seizure_result.get('temporal_ready', False),
-                                    'processing_time': time.time() - seizure_start,
+                                    'processing_time': time.time() - seizure_time_start,
                                     'frame_number': self.stats['total_frames']
                                 }
                                 
@@ -351,7 +370,7 @@ class AdvancedHealthcarePipeline:
         else:
             pass  # Seizure detector is None - no need to log
                 
-        self.performance['seizure_detection_time'] = time.time() - seizure_start
+        self.performance['seizure_detection_time'] = time.time() - seizure_time_start
         
         # Enhanced alert level determination - BALANCED APPROACH
         if result['seizure_detected']:
@@ -370,7 +389,7 @@ class AdvancedHealthcarePipeline:
             result['emergency_type'] = 'seizure_warning'
             # Save seizure warning image
             self.save_alert_image(frame, 'seizure_warning', result['seizure_confidence'])
-        elif result['fall_confidence'] > 0.18:  # Giảm từ 0.25 xuống 0.18 để nhạy hơn
+        elif result['fall_confidence'] > 0.50:  # Tăng từ 0.18 lên 0.50 để giảm false positive
             result['alert_level'] = 'warning'
             result['emergency_type'] = 'fall_warning'
             self.save_alert_image(frame, 'fall_warning', result['fall_confidence'])

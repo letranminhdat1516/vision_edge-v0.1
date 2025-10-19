@@ -39,7 +39,7 @@ class VSViGSeizureDetector:
                  pose_model_path: Optional[str] = None,
                  dynamic_order_path: Optional[str] = None,
                  device: str = 'auto',
-                 confidence_threshold: float = 0.6):  # Giảm từ 0.75 xuống 0.6 để nhạy hơn
+                 confidence_threshold: float = 0.01):  # Cực thấp từ 0.6 xuống 0.01 - siêu nhạy
         """
         Initialize VSViG seizure detector
         
@@ -73,7 +73,7 @@ class VSViGSeizureDetector:
         
         # Configuration
         self.confidence_threshold = confidence_threshold
-        self.temporal_window = 60  # Tăng từ 30 lên 60 frames
+        self.temporal_window = 15  # Giảm xuống 15 frames (0.5 giây) để nhanh hơn
         self.frame_buffer = []  # Buffer for temporal analysis
         
         # Seizure detection state management
@@ -223,9 +223,17 @@ class VSViGSeizureDetector:
             if len(self.frame_buffer) > self.temporal_window:
                 self.frame_buffer.pop(0)
             
+            # Debug: Show buffer filling progress every 5 frames
+            if len(self.frame_buffer) % 5 == 0 and len(self.frame_buffer) < self.temporal_window:
+                self.logger.info(f"🧠 Filling temporal buffer: {len(self.frame_buffer)}/{self.temporal_window} frames")
+            
             # Check if we have enough frames for temporal analysis
             if len(self.frame_buffer) >= self.temporal_window:
                 result['temporal_ready'] = True
+                
+                # Debug logging for temporal readiness
+                if len(self.frame_buffer) == self.temporal_window:
+                    self.logger.info(f"🧠 Temporal Window READY: {len(self.frame_buffer)}/{self.temporal_window} frames collected")
                 
                 # Run VSViG seizure detection
                 seizure_confidence = self._run_vsvig_inference()
@@ -316,7 +324,7 @@ class VSViGSeizureDetector:
         """
         Analyze motion patterns for seizure detection - BALANCED THRESHOLDS
         """
-        if keypoint_sequence.shape[0] < 8:  # Cần ít nhất 8 frames (thay vì 10)
+        if keypoint_sequence.shape[0] < 5:  # Cần ít nhất 5 frames
             return 0.0
         
         try:
@@ -329,16 +337,16 @@ class VSViGSeizureDetector:
             # Calculate velocity magnitudes
             vel_magnitudes = np.sqrt(np.sum(velocities**2, axis=2))  # (T-1, 15)
             
-            # BALANCED THRESHOLDS - không quá khó, không quá dễ
+            # VERY SENSITIVE THRESHOLDS - detect any irregular movement
             # 1. High velocity variance (irregular movement)
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 200.0) if velocity_variance > 100 else 0.0
+            velocity_score = np.tanh(velocity_variance / 50.0) if velocity_variance > 20 else 0.0
             
             # 2. Acceleration peaks  
             accelerations = np.diff(velocities, axis=0)  # (T-2, 15, 2)
             acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))  # (T-2, 15)
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 400.0) if acceleration_peaks > 200 else 0.0
+            acceleration_score = np.tanh(acceleration_peaks / 100.0) if acceleration_peaks > 50 else 0.0
             
             # 3. Frequency analysis - count rapid direction changes
             direction_changes = 0
@@ -347,31 +355,31 @@ class VSViGSeizureDetector:
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 200.0) if direction_changes > 80 else 0.0
+                frequency_score = np.tanh(direction_changes / 50.0) if direction_changes > 15 else 0.0
             else:
                 frequency_score = 0.0
             
             # 4. Overall movement intensity
             total_movement = np.mean(vel_magnitudes)
-            intensity_score = np.tanh(total_movement / 100.0) if total_movement > 50 else 0.0
+            intensity_score = np.tanh(total_movement / 25.0) if total_movement > 10 else 0.0
             
             # 5. Sudden movement spikes (seizure characteristic)
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 150.0) if movement_spikes > 80 else 0.0
+            spike_score = np.tanh(movement_spikes / 40.0) if movement_spikes > 20 else 0.0
             
-            # MODERATE requirements: At least 2 indicators above moderate threshold - INCREASED SENSITIVITY
-            moderate_threshold = 0.25  # Giảm từ 0.3 xuống 0.25 để nhạy hơn
+            # VERY SENSITIVE: Only need 1 indicator above low threshold
+            sensitive_threshold = 0.15  # Giảm xuống 0.15 để cực kỳ nhạy
             indicators = [
-                velocity_score > moderate_threshold,
-                acceleration_score > moderate_threshold, 
-                frequency_score > moderate_threshold,
-                intensity_score > moderate_threshold,
-                spike_score > moderate_threshold
+                velocity_score > sensitive_threshold,
+                acceleration_score > sensitive_threshold, 
+                frequency_score > sensitive_threshold,
+                intensity_score > sensitive_threshold,
+                spike_score > sensitive_threshold
             ]
             
             active_indicators = sum(indicators)
-            if active_indicators < 2:
-                return 0.0  # Need at least 2 indicators
+            if active_indicators < 1:
+                return 0.0  # Need at least 1 indicator
             
             # Weighted combination
             seizure_confidence = (
@@ -382,8 +390,14 @@ class VSViGSeizureDetector:
                 0.15 * spike_score
             )
             
-            # Apply moderate final threshold
-            if seizure_confidence < 0.5:  # Giảm từ 0.7 về 0.5
+            # Debug logging every few frames
+            frame_count = getattr(self, '_debug_frame_count', 0)
+            self._debug_frame_count = frame_count + 1
+            if frame_count % 30 == 0:  # Log every 30 frames
+                self.logger.info(f"Seizure Scores - Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Int:{intensity_score:.3f}, Spike:{spike_score:.3f}, Final:{seizure_confidence:.3f}, Active:{active_indicators}")
+            
+            # Apply very low final threshold for maximum sensitivity
+            if seizure_confidence < 0.1:  # Giảm xuống 0.1 để cực kỳ nhạy
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)

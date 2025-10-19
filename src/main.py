@@ -174,7 +174,16 @@ if __name__ == "__main__":
             print("🤖 Intelligent action generation: ACTIVE")
         else:
             print("📝 Static action messages: ACTIVE")
-        print("Press 'q' to quit, 's' to show statistics")
+        print("="*60)
+        print("🎮 CONTROLS:")
+        print("   'q' = Quit system")  
+        print("   's' = Show detailed statistics")
+        print("")
+        print("🤸 SEIZURE DETECTION TIPS (SIÊU NHẠY CẢM):")
+        print("   🔥 Vẫy tay nhanh liên tục 3-5 giây")
+        print("   🔥 Nhảy nhót, chuyển động bất thường")
+        print("   🔥 Gật đầu mạnh nhiều lần")
+        print("   🔥 Threshold siêu thấp: chỉ cần 0.01 confidence!")
         print("="*60)
         
         # Main processing loop for all cameras - Each camera with its own services
@@ -217,7 +226,7 @@ if __name__ == "__main__":
             individual_video_processor = VideoProcessingService(processor_config)
             individual_fall_detector = FallDetectionService()
             individual_seizure_detector = SeizureDetectionService()
-            individual_seizure_predictor = SeizurePredictor(temporal_window=20, alert_threshold=0.55, warning_threshold=0.35)  # Giảm threshold để nhạy hơn
+            individual_seizure_predictor = SeizurePredictor(temporal_window=3, alert_threshold=0.01, warning_threshold=0.005)  # Siêu nhạy cảm!
             
             # Initialize individual Healthcare Pipeline
             print(f"🔧 Initializing Healthcare Pipeline with camera_id: {cam['id']}, user_id: {user_id}")
