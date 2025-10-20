@@ -18,7 +18,7 @@ class Snapshots(Base):
     snapshot_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
     camera_id = Column(UUID(as_uuid=True), nullable=False)
     user_id = Column(UUID(as_uuid=True))
-    metadata = Column(String)
+    meta_data = Column('metadata', String)  # Map to 'metadata' column in database
     capture_type = Column(String(16), nullable=False)
     captured_at = Column(DateTime, nullable=False)
     processed_at = Column(DateTime)

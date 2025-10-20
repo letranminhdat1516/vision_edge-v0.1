@@ -34,6 +34,7 @@ class AdvancedHealthcarePipeline:
             print(f"📸 Snapshot service initialized - MinIO storage ready")
         except Exception as e:
             print(f"⚠️ Snapshot service failed to initialize: {e}")
+            print(f"📸 Will use local file storage fallback")
             self.snapshot_service = None
         
         # Create alert save directory
@@ -857,31 +858,53 @@ class AdvancedHealthcarePipeline:
             confidence: Detection confidence
             metadata: Additional metadata
         """
-        if not self.snapshot_service or not self.camera_id or not self.user_id:
-            print(f"⚠️ Cannot save snapshot - service not available or missing IDs")
+        if not self.camera_id or not self.user_id:
+            print(f"⚠️ Cannot save snapshot - missing camera_id or user_id")
             return None
             
         try:
-            snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
-                camera_id=self.camera_id,
-                user_id=self.user_id,
-                event_type=event_type,
-                confidence=confidence,
-                frame=frame,
-                metadata={
-                    'detection_time': datetime.now().isoformat(),
-                    'frame_number': self.stats['total_frames'],
-                    'processing_stats': {
-                        'fps': self.stats['fps'],
-                        'total_detections': self.stats[f'{event_type}_detections']
-                    },
-                    **(metadata or {})
-                }
-            )
-            
-            print(f"📸 {event_type.upper()} snapshot saved: {snapshot_id[:8]}... (confidence: {confidence:.3f})")
-            return snapshot_id
-            
+            if self.snapshot_service:
+                snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
+                    camera_id=self.camera_id,
+                    user_id=self.user_id,
+                    event_type=event_type,
+                    confidence=confidence,
+                    frame=frame,
+                    metadata={
+                        'detection_time': datetime.now().isoformat(),
+                        'frame_number': self.stats['total_frames'],
+                        'processing_stats': {
+                            'fps': self.stats['fps'],
+                            'total_detections': self.stats[f'{event_type}_detections']
+                        },
+                        **(metadata or {})
+                    }
+                )
+                
+                print(f"📸 {event_type.upper()} snapshot saved: {snapshot_id[:8]}... (confidence: {confidence:.3f})")
+                return snapshot_id
+            else:
+                print(f"⚠️ Snapshot service not available - saving locally only")
+                # Fallback: save to local alerts folder
+                import cv2
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{event_type}_{self.camera_id}_{timestamp}_{confidence:.3f}.jpg"
+                local_path = os.path.join(self.alert_save_path, filename)
+                cv2.imwrite(local_path, frame)
+                print(f"📸 {event_type.upper()} image saved locally: {filename}")
+                return f"local_{timestamp}"
+                
         except Exception as e:
             print(f"❌ Error saving {event_type} snapshot: {e}")
-            return None
+            # Fallback: save to local alerts folder
+            try:
+                import cv2
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{event_type}_{self.camera_id}_{timestamp}_{confidence:.3f}_fallback.jpg"
+                local_path = os.path.join(self.alert_save_path, filename)
+                cv2.imwrite(local_path, frame)
+                print(f"📸 {event_type.upper()} image saved locally (fallback): {filename}")
+                return f"fallback_{timestamp}"
+            except Exception as fallback_error:
+                print(f"❌ Fallback save also failed: {fallback_error}")
+                return None

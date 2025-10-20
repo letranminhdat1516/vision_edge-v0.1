@@ -82,7 +82,7 @@ class HealthcareEventPublisher:
         """Map database severity to mobile status format"""
         severity_to_mobile = {
             'high': 'danger',
-            'medium': 'warning',
+            'medium': 'abnormal_behavior',
             'low': 'normal'
         }
         return severity_to_mobile.get(severity, 'normal')
@@ -526,7 +526,7 @@ class HealthcareEventPublisher:
                 alert_data = {
                     'event_id': event_id,
                     'user_id': final_user_id,
-                    'alert_type': 'warning',  # Use valid enum value
+                    'alert_type': 'abnormal_behavior',  # Use valid enum value
                     'severity': severity,
                     'message': same_action_message,
                     'alert_data': {

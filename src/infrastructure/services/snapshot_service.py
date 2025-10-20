@@ -5,6 +5,7 @@ Handles creating snapshots and snapshot images with MinIO integration.
 
 import uuid
 import logging
+import json
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 import numpy as np
@@ -24,6 +25,23 @@ from models.generated.snapshot_images import SnapshotImages
 
 logger = logging.getLogger(__name__)
 
+def clean_metadata_for_json(data: Any) -> Any:
+    """Clean metadata to be JSON serializable by converting numpy types to Python types"""
+    if isinstance(data, dict):
+        return {key: clean_metadata_for_json(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [clean_metadata_for_json(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return data.tolist()  # Convert numpy array to list
+    elif isinstance(data, np.floating):
+        return float(data)  # Convert numpy float to Python float
+    elif isinstance(data, np.integer):
+        return int(data)  # Convert numpy int to Python int
+    elif isinstance(data, np.bool_):
+        return bool(data)  # Convert numpy bool to Python bool
+    else:
+        return data
+
 class SnapshotService:
     """Service for managing snapshots and snapshot images"""
     
@@ -31,7 +49,21 @@ class SnapshotService:
         """Initialize the snapshot service"""
         self.engine = create_engine(database_url)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-        self.minio_service = get_minio_service()
+        
+        # Initialize MinIO service with connection test
+        try:
+            self.minio_service = get_minio_service()
+            
+            # Test MinIO connection
+            if hasattr(self.minio_service, 'test_connection') and self.minio_service.test_connection():
+                logger.info("SnapshotService: MinIO connection verified")
+            else:
+                logger.warning("SnapshotService: MinIO connection test failed, uploads may fail")
+                
+        except Exception as e:
+            logger.error(f"SnapshotService: MinIO initialization failed: {e}")
+            self.minio_service = None
+            
         logger.info("SnapshotService initialized")
     
     def create_detection_snapshot(
@@ -64,8 +96,11 @@ class SnapshotService:
             image_id = str(uuid.uuid4())
             
             # Upload image to MinIO
+            if not self.minio_service:
+                raise Exception("MinIO service not available")
+                
             logger.info(f"Uploading {event_type} detection image to MinIO...")
-            object_name, cloud_url, file_size = self.minio_service.upload_frame_image(
+            upload_result = self.minio_service.upload_frame_image(
                 frame=frame,
                 camera_id=camera_id,
                 event_type=event_type,
@@ -78,18 +113,40 @@ class SnapshotService:
                 }
             )
             
-            # Create snapshot record
+            if upload_result is None:
+                raise Exception("MinIO upload failed - all retry attempts exhausted")
+                
+            object_name, cloud_url, file_size = upload_result
+            
+            # Create snapshot record with cleaned metadata
+            metadata_dict = {
+                'event_type': event_type,
+                'confidence': confidence,
+                'detection_time': datetime.now().isoformat(),
+                **(metadata or {})
+            }
+            
+            # Clean metadata to be JSON serializable
+            cleaned_metadata = clean_metadata_for_json(metadata_dict)
+            
+            # Map event types to valid capture types
+            capture_type_mapping = {
+                'seizure': 'alert_triggered',
+                'fall': 'alert_triggered', 
+                'manual': 'manual',
+                'motion': 'motion_triggered',
+                'scheduled': 'scheduled'
+            }
+            
+            # Get valid capture type for database
+            db_capture_type = capture_type_mapping.get(event_type, 'alert_triggered')
+            
             snapshot = Snapshots(
                 snapshot_id=snapshot_id,
                 camera_id=camera_id,
                 user_id=user_id,
-                metadata=str({
-                    'event_type': event_type,
-                    'confidence': confidence,
-                    'detection_time': datetime.now().isoformat(),
-                    **(metadata or {})
-                }),
-                capture_type=event_type,
+                meta_data=json.dumps(cleaned_metadata),  # Use proper JSON serialization
+                capture_type=db_capture_type,  # Use mapped value
                 captured_at=datetime.now(),
                 processed_at=datetime.now(),
                 is_processed=True
@@ -105,10 +162,16 @@ class SnapshotService:
                 file_size=str(file_size)
             )
             
-            # Save to database
+            # Save to database with proper order
+            # First, save snapshot and commit
             db.add(snapshot)
+            db.commit()
+            logger.info(f"✅ Snapshot record created: {snapshot_id}")
+            
+            # Then, save snapshot image
             db.add(snapshot_image)
             db.commit()
+            logger.info(f"✅ Snapshot image record created: {image_id}")
             
             logger.info(f"✅ Successfully created {event_type} snapshot: {snapshot_id}")
             logger.info(f"📸 Image uploaded to MinIO: {object_name}")
@@ -243,7 +306,7 @@ class SnapshotService:
             # Delete images from MinIO
             for image in images:
                 image_path = getattr(image, 'image_path', None)
-                if image_path:
+                if image_path and self.minio_service:
                     self.minio_service.delete_image(str(image_path))
             
             # Delete from database
@@ -275,7 +338,10 @@ class SnapshotService:
             manual_snapshots = db.query(Snapshots).filter(Snapshots.capture_type == 'manual').count()
             
             # MinIO stats
-            minio_stats = self.minio_service.get_storage_stats()
+            if self.minio_service:
+                minio_stats = self.minio_service.get_storage_stats()
+            else:
+                minio_stats = {'error': 'MinIO service not available'}
             
             return {
                 'database': {
