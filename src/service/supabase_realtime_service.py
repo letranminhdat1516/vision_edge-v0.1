@@ -167,11 +167,11 @@ class SupabaseRealtimeService:
             
             # Create intelligent action message based on event type
             if event_type.lower() == 'seizure':
-                return f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} 🚨 Cảnh báo: Phát hiện co giật - Độ tin cậy: 0.0% - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                return f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
             elif event_type.lower() == 'fall':
-                return f"⚠️ CẢNH BÁO: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Độ tin cậy: 0.0% - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                return f"⚠️ CẢNH BÁO: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Cần theo dõi (Tin cậy: {confidence:.0%})"
             elif event_type.lower() == 'abnormal':
-                return f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Độ tin cậy: 0.0% - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                return f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
             else:
                 return f"🔍 PHÁT HIỆN: {vietnamese_caption} 📊 Cảnh báo: Phát hiện sự kiện {event_type} - Độ tin cậy: {confidence:.0%}"
                 

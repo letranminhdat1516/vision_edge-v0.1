@@ -540,7 +540,7 @@ class PostgreSQLHealthcareService:
                             # Create full intelligent action message like in main.py
                             if event_type in ['abnormal_behavior', 'seizure']:
                                 if confidence >= 0.50:
-                                    result = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} 🚨 Cảnh báo: Phát hiện co giật - Độ tin cậy: 0.0% - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                                    result = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
                                     logger.info(f"🚨 Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
@@ -553,11 +553,11 @@ class PostgreSQLHealthcareService:
                                     return result
                             elif event_type == 'fall':
                                 if confidence >= 0.60:
-                                    result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} 🚨 Cảnh báo: Phát hiện té ngã - Độ tin cậy: 0.0% - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                                    result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
                                     logger.info(f"🚨 Generated fall emergency action: {result}")
                                     return result
                                 elif confidence >= 0.40:
-                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Độ tin cậy: 0.0% - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Cần theo dõi (Tin cậy: {confidence:.0%})"
                                     logger.info(f"⚠️ Generated fall warning action: {result}")
                                     return result
                                 else:
