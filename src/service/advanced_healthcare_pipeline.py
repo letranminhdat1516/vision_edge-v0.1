@@ -215,7 +215,8 @@ class AdvancedHealthcarePipeline:
                             'detection_type': 'direct',
                             'processing_time': time.time() - fall_start,
                             'frame_number': self.stats['total_frames'],
-                            'snapshot_id': snapshot_id
+                            'snapshot_id': snapshot_id,
+                            'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence'  # Add description
                         }
                         
                         response = self.event_publisher.publish_fall_detection(
@@ -278,7 +279,8 @@ class AdvancedHealthcarePipeline:
                                 'confirmation_frames': self.detection_history['fall_confirmation_frames'],
                                 'processing_time': time.time() - fall_start,
                                 'frame_number': self.stats['total_frames'],
-                                'snapshot_id': snapshot_id
+                                'snapshot_id': snapshot_id,
+                                'description': f'Fall activity detected with {smoothed_fall_confidence:.1%} confidence'  # Add description
                             }
                             
                             response = self.event_publisher.publish_fall_detection(
@@ -397,7 +399,8 @@ class AdvancedHealthcarePipeline:
                                     'temporal_ready': seizure_result.get('temporal_ready', False),
                                     'processing_time': time.time() - seizure_time_start,
                                     'frame_number': self.stats['total_frames'],
-                                    'snapshot_id': snapshot_id
+                                    'snapshot_id': snapshot_id,
+                                    'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence'  # Add description
                                 }
                                 
                                 response = self.event_publisher.publish_seizure_detection(

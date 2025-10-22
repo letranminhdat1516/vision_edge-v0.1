@@ -108,8 +108,8 @@ class MinIOService:
                         }
                     )
                     
-                    # Generate cloud URL (presigned URL for access)
-                    cloud_url = f"http://{self.endpoint}/{self.bucket_name}/{object_name}"
+                    # Generate cloud URL using public domain
+                    cloud_url = f"https://nas.cicca.dpdns.org/cdn-image/{object_name}"
                     
                     logger.info(f"Successfully uploaded image to MinIO: {object_name}")
                     return object_name, cloud_url, file_size

@@ -649,6 +649,12 @@ class PostgreSQLHealthcareService:
     
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Insert event detection into database"""
+        
+        # Add unique detection key for duplicate prevention
+        import time
+        detection_key = f"{event_data.get('event_type')}_{event_data.get('confidence', 0):.3f}_{int(time.time() * 1000)}"
+        logger.info(f"🔍 Publishing event detection: {detection_key}")
+        
         if not self.is_connected:
             logger.error("PostgreSQL not connected")
             return None
@@ -708,6 +714,37 @@ class PostgreSQLHealthcareService:
             
             print(f"🔥 DEBUG AFTER _generate_event_description:")
             print(f"   vietnamese_description: '{vietnamese_description}'")
+            
+            # Validate event description - don't save if NULL or empty
+            if not vietnamese_description or vietnamese_description.strip() == '' or vietnamese_description.lower() == 'null':
+                logger.warning(f"❌ Skipping event detection save - empty event_description for {event_data.get('event_type', 'unknown')}")
+                return None
+                
+            # Check for recent duplicate events (same type, user, camera within 5 seconds)
+            try:
+                conn = self.get_connection()
+                with conn.cursor() as cursor:
+                    duplicate_check_sql = """
+                    SELECT event_id FROM event_detections 
+                    WHERE event_type = %s AND user_id = %s AND camera_id = %s 
+                    AND detected_at > NOW() - INTERVAL '5 seconds'
+                    ORDER BY detected_at DESC LIMIT 1
+                    """
+                    cursor.execute(duplicate_check_sql, (
+                        event_data.get('event_type'),
+                        user_id,
+                        camera_id
+                    ))
+                    recent_event = cursor.fetchone()
+                    
+                    if recent_event:
+                        logger.warning(f"❌ Skipping duplicate event detection - similar {event_data.get('event_type')} within 5 seconds")
+                        self.return_connection(conn)
+                        return {'event_id': recent_event[0], 'duplicate_skipped': True}
+                        
+                self.return_connection(conn)
+            except Exception as dup_error:
+                logger.warning(f"Duplicate check failed: {dup_error}")
             
             # Validate final IDs (user_id and camera_id already processed above)
             

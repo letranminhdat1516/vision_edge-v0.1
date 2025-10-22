@@ -619,6 +619,11 @@ if __name__ == "__main__":
                             }]
                         }
                         
+                        # Validate intelligent_action before inserting
+                        if not intelligent_action or intelligent_action.strip() == '' or intelligent_action.lower() == 'null':
+                            print(f"❌ Skipping event insert - empty intelligent_action for {event_type}")
+                            continue
+                        
                         cursor.execute(insert_query, (
                             event_id,
                             user_id,
