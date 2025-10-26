@@ -271,14 +271,14 @@ class ProfessionalVietnameseCaptionPipeline:
         elif 'seizure' in filename:
             medical_additions.append("🚨 Cảnh báo: Phát hiện co giật")
         
-        # Extract confidence
-        if 'conf_' in filename:
-            try:
-                conf_part = filename.split('conf_')[1].split('.')[0]
-                confidence = float(conf_part)
-                medical_additions.append(f"Độ tin cậy: {confidence:.1%}")
-            except:
-                pass
+        # Extract confidence (REMOVED - to avoid duplicate confidence display)
+        # if 'conf_' in filename:
+        #     try:
+        #         conf_part = filename.split('conf_')[1].split('.')[0]
+        #         confidence = float(conf_part)
+        #         medical_additions.append(f"- Độ tin cậy: {confidence:.1%}")
+        #     except:
+        #         pass
         
         # Combine base caption with medical context
         if medical_additions:

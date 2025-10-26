@@ -544,11 +544,11 @@ class PostgreSQLHealthcareService:
                                     logger.info(f"🚨 Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
-                                    result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                                    result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
                                     logger.info(f"⚠️ Generated abnormal action: {result}")
                                     return result
                                 else:
-                                    result = f"📊 QUAN SÁT: {vietnamese_caption} - Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                                    result = f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
                                     logger.info(f"📊 Generated observation action: {result}")
                                     return result
                             elif event_type == 'fall':
@@ -557,11 +557,11 @@ class PostgreSQLHealthcareService:
                                     logger.info(f"🚨 Generated fall emergency action: {result}")
                                     return result
                                 elif confidence >= 0.40:
-                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi (Tin cậy: {confidence:.0%})"
                                     logger.info(f"⚠️ Generated fall warning action: {result}")
                                     return result
                                 else:
-                                    result = f"📊 THEO DÕI: {vietnamese_caption} - Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Quan sát (Tin cậy: {confidence:.0%})"
+                                    result = f"📊 THEO DỔI: {vietnamese_caption} - Quan sát (Tin cậy: {confidence:.0%})"
                                     logger.info(f"📊 Generated fall observation action: {result}")
                                     return result
                     else:
@@ -575,28 +575,28 @@ class PostgreSQLHealthcareService:
             logger.info("📋 Using fallback action messages")
             if event_type == 'fall':
                 if confidence >= 0.60:
-                    return f"🚨 KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - Độ tin cậy: {confidence:.1%} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
+                    return f"🚨 KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
                 elif confidence >= 0.40:
-                    return f"⚠️ CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Độ tin cậy: {confidence:.1%} - Cần kiểm tra"
+                    return f"⚠️ CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Cần kiểm tra (Tin cậy: {confidence:.0%})"
                 else:
-                    return f"📊 THEO DÕI: Nghi ngờ té ngã - Độ tin cậy: {confidence:.1%} - Quan sát"
+                    return f"📊 THEO DÕI: Nghi ngờ té ngã - Quan sát (Tin cậy: {confidence:.0%})"
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
                 if confidence >= 0.50:
-                    return f"🆘 KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - Độ tin cậy: {confidence:.1%} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                    return f"🆘 KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
                 elif confidence >= 0.30:
-                    return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Độ tin cậy: {confidence:.1%} - Cần theo dõi chặt chẽ"
+                    return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
                 else:
-                    return f"📊 QUAN SÁT: Nghi ngờ hành vi bất thường - Độ tin cậy: {confidence:.1%} - Tiếp tục theo dõi"
+                    return f"📊 QUAN SÁT: Nghi ngờ hành vi bất thường - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
                     
             else:
                 # Unknown event type
-                return f"🔍 PHÁT HIỆN: Sự kiện {event_type} - Độ tin cậy: {confidence:.1%} - Cần đánh giá"
+                return f"🔍 PHÁT HIỆN: Sự kiện {event_type} - Cần đánh giá (Tin cậy: {confidence:.0%})"
                 
         except Exception as e:
             logger.error(f"❌ Error generating intelligent action: {e}")
             # Final fallback
-            return fallback_description or f"Phát hiện sự kiện {event_type} (độ tin cậy: {confidence:.1%})"
+            return fallback_description or f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.1%})"
     
     def generate_vietnamese_caption(self, image_path: str, event_type: str, confidence: float) -> str:
         """
@@ -614,11 +614,11 @@ class PostgreSQLHealthcareService:
             if self.vietnamese_caption is None:
                 # Fallback: simple Vietnamese description
                 if event_type == 'fall':
-                    return f"Phát hiện té ngã với độ tin cậy {confidence:.1%}"
+                    return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
                 elif event_type in ['abnormal_behavior', 'seizure']:
-                    return f"Phát hiện co giật với độ tin cậy {confidence:.1%}"
+                    return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
                 else:
-                    return f"Phát hiện sự kiện {event_type} với độ tin cậy {confidence:.1%}"
+                    return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
             
             # Use BLIP model for Vietnamese captioning
             vietnamese_result = self.vietnamese_caption.generate_professional_caption(image_path)
@@ -631,21 +631,21 @@ class PostgreSQLHealthcareService:
                 # Fallback if BLIP fails
                 logger.warning("BLIP returned empty caption, using fallback")
                 if event_type == 'fall':
-                    return f"Phát hiện té ngã với độ tin cậy {confidence:.1%}"
+                    return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
                 elif event_type in ['abnormal_behavior', 'seizure']:
-                    return f"Phát hiện co giật với độ tin cậy {confidence:.1%}"
+                    return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
                 else:
-                    return f"Phát hiện sự kiện {event_type} với độ tin cậy {confidence:.1%}"
+                    return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
                     
         except Exception as e:
             logger.error(f"❌ Error generating Vietnamese caption: {e}")
             # Fallback description
             if event_type == 'fall':
-                return f"Phát hiện té ngã với độ tin cậy {confidence:.1%}"
+                return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
             elif event_type in ['abnormal_behavior', 'seizure']:
-                return f"Phát hiện co giật với độ tin cậy {confidence:.1%}"
+                return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
             else:
-                return f"Phát hiện sự kiện {event_type} với độ tin cậy {confidence:.1%}"
+                return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
     
     def publish_event_detection(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Insert event detection into database"""
