@@ -21,7 +21,7 @@ class Plans(Base):
     description = Column(Text)
     price = Column(String, nullable=False)
     currency = Column(String(10), nullable=False)
-    billing_period = Column(String(7), nullable=False)
+    billing_period = Column(String(10), nullable=False)
     is_active = Column(Boolean, nullable=False)
     is_current = Column(Boolean, nullable=False)
     camera_quota = Column(Integer, nullable=False)

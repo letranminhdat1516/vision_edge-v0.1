@@ -23,7 +23,10 @@ class CaregiverInvitations(Base):
     is_active = Column(Boolean, nullable=False)
     assigned_by = Column(UUID(as_uuid=True))
     assignment_notes = Column(Text)
-    status = Column(String(20))
+    responded_at = Column(DateTime)
+    expires_at = Column(DateTime)
+    response_reason = Column(String(255))
+    status = Column(String(9), nullable=False)
 
     def __repr__(self):
         return f"<CaregiverInvitations(id={self.id})>"

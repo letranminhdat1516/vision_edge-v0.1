@@ -23,6 +23,14 @@ class Ticket(Base):
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
     status = Column(String(12), nullable=False)
+    category = Column(String(50))
+    priority = Column(String(20))
+    assigned_to = Column(UUID(as_uuid=True))
+    tags = Column(String)
+    metadata = Column(String)
+    due_date = Column(DateTime)
+    resolved_at = Column(DateTime)
+    closed_at = Column(DateTime)
 
     def __repr__(self):
         return f"<Ticket(id={self.id})>"

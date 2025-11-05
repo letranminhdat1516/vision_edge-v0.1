@@ -28,6 +28,7 @@ class Users(Base):
     updated_at = Column(DateTime, nullable=False)
     otp_code = Column(Text)
     otp_expires_at = Column(DateTime)
+    default_payment_method_id = Column(UUID(as_uuid=True))
 
     def __repr__(self):
         return f"<Users(id={self.id})>"

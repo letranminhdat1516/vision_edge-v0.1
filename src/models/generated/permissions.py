@@ -15,11 +15,11 @@ Base = declarative_base()
 class Permissions(Base):
     __tablename__ = 'permissions'
     
-    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(String(255))
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
+    permission_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
 
     def __repr__(self):
         return f"<Permissions(id={self.id})>"

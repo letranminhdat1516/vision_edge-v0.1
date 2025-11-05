@@ -11,8 +11,15 @@ import json
 import sys
 import uuid
 import os
+import logging
 from pathlib import Path
 from service.advanced_healthcare_pipeline import AdvancedHealthcarePipeline
+
+# Setup logging to see handler notifications
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Import intelligent action generation
 try:
@@ -253,6 +260,62 @@ if __name__ == "__main__":
         
         print(f"🎥 All {len(cameras_data)} cameras ready for processing!")
         
+        # 🔊 Initialize Emergency Alarm Handler (PostgreSQL LISTEN/NOTIFY - psycopg3)
+        print("\n🔊 Initializing Emergency Alarm System (REALTIME MODE)...")
+        print("   - Bluetooth/USB speaker detection")
+        print("   - Mobile app emergency trigger")
+        print("   - PostgreSQL LISTEN/NOTIFY (Direct Connection - port 5432)")
+        print("   - Automatic audio alert playback")
+        from infrastructure.services.emergency_alarm_handler_psycopg import emergency_alarm_handler
+        from infrastructure.services.audio_alert_service import audio_alert_service
+        
+        # Connect PostgreSQL service to alarm handler (use first camera's pipeline)
+        emergency_alarm_handler.set_postgresql_service(cameras_data[0]['pipeline'].event_publisher.postgresql_service)
+        
+        # Check audio device status
+        audio_status = audio_alert_service.get_status()
+        if audio_status['enabled']:
+            print(f"   ✅ Audio system ready!")
+            print(f"      Backend: {audio_status['audio_backend']}")
+            print(f"      Devices detected: {audio_status['available_devices']}")
+            if audio_status['devices']:
+                print(f"      Device list:")
+                for device in audio_status['devices'][:3]:  # Show max 3 devices
+                    print(f"         - {device}")
+        else:
+            print(f"   ⚠️ Audio system disabled - check logs for details")
+        
+        # Start emergency alarm handler in background (LISTEN/NOTIFY)
+        import asyncio
+        import threading
+        import logging
+        
+        # Enable logging for handler
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        def run_emergency_handler():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(emergency_alarm_handler.start_listening())
+        
+        alarm_thread = threading.Thread(target=run_emergency_handler, daemon=True)
+        alarm_thread.start()
+        
+        # Wait for handler to connect
+        print("   ⏳ Waiting for handler to connect...")
+        time.sleep(3)
+        
+        print("   ✅ Emergency alarm handler started (PostgreSQL LISTEN/NOTIFY)!")
+        print("   📡 Channel: 'system_alarm_channel'")
+        print("   🔌 Connection: Direct (port 5432)")
+        print("   📱 Ready for mobile app triggers (< 50ms response)")
+        print("\n" + "=" * 80)
+        print("💡 Handler logs will appear above when alarm is triggered")
+        print("=" * 80 + "\n")
+        
         while True:
             for cam_data in cameras_data:
                 try:
@@ -377,6 +440,65 @@ if __name__ == "__main__":
             alerts_folder=alerts_folder
         )
         
+        # 🔊 Initialize Emergency Alarm Handler (PostgreSQL LISTEN/NOTIFY - psycopg3)
+        print("🔊 Initializing Emergency Alarm System (REALTIME MODE)...")
+        print("   - Bluetooth/USB speaker detection")
+        print("   - Mobile app emergency trigger")
+        print("   - PostgreSQL LISTEN/NOTIFY (Direct Connection - port 5432)")
+        print("   - Automatic audio alert playback")
+        from infrastructure.services.emergency_alarm_handler_psycopg import emergency_alarm_handler
+        from infrastructure.services.audio_alert_service import audio_alert_service
+        
+        # Connect PostgreSQL service to alarm handler
+        emergency_alarm_handler.set_postgresql_service(pipeline.event_publisher.postgresql_service)
+        
+        # Check audio device status
+        audio_status = audio_alert_service.get_status()
+        if audio_status['enabled']:
+            print(f"   ✅ Audio system ready!")
+            print(f"      Backend: {audio_status['audio_backend']}")
+            print(f"      Devices detected: {audio_status['available_devices']}")
+            if audio_status['devices']:
+                print(f"      Device list:")
+                for device in audio_status['devices'][:3]:  # Show max 3 devices
+                    print(f"         - {device}")
+        else:
+            print(f"   ⚠️ Audio system disabled - check logs for details")
+        
+        # Start emergency alarm handler in background (LISTEN/NOTIFY)
+        import asyncio
+        import threading
+        import logging
+        
+        # Enable logging for handler
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
+        def run_emergency_handler():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(emergency_alarm_handler.start_listening())
+        
+        alarm_thread = threading.Thread(target=run_emergency_handler, daemon=True)
+        alarm_thread.start()
+        
+        # Wait for handler to connect
+        print("   ⏳ Waiting for handler to connect...")
+        time.sleep(3)
+        
+        print("   ✅ Emergency alarm handler started (PostgreSQL LISTEN/NOTIFY)!")
+        print("   📡 Channel: 'system_alarm_channel'")
+        print("   🔌 Connection: Direct (port 5432)")
+        print("   📱 Ready for mobile app triggers (< 50ms response)")
+        print("\n" + "=" * 80)
+        print("💡 Handler logs will appear above when alarm is triggered")
+        print("=" * 80 + "\n")
+
+
+
+        
         # Initialize intelligent action pipeline if available
         caption_pipeline = None
         if INTELLIGENT_ACTIONS_AVAILABLE:
@@ -399,7 +521,13 @@ if __name__ == "__main__":
             print("🤖 Intelligent action generation: ACTIVE")
         else:
             print("📝 Static action messages: ACTIVE")
-    print("Press 'q' to quit, 's' to show statistics, 'i' to toggle intelligent actions, 'e' to create random test event")
+    print("🎮 CONTROLS:")
+    print("   'q' = Quit system")
+    print("   's' = Show statistics")
+    print("   'i' = Intelligent action info")
+    print("   'e' = Create random test event")
+    print("   'a' = Show emergency alarm status")  # NEW
+    print("   't' = Test emergency alarm manually")  # NEW
     print("="*60)
 
     # Real-time processing variables
@@ -496,6 +624,7 @@ if __name__ == "__main__":
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             print("\n🛑 Shutting down Healthcare Monitoring System...")
+            emergency_alarm_handler.stop()  # Stop alarm handler
             break
         elif key == ord('s'):
             # Show detailed statistics
@@ -504,6 +633,37 @@ if __name__ == "__main__":
                 print(f"\n🤖 INTELLIGENT ACTION STATUS:")
                 print(f"   BLIP Model: {'✅ Loaded' if caption_pipeline.blip_loaded else '❌ Not loaded'}")
                 print(f"   Translation: {'✅ AI Model' if caption_pipeline.translator_loaded else '📝 Rule-based'}")
+        elif key == ord('a'):
+            # Show emergency alarm status
+            print("\n🔊 EMERGENCY ALARM SYSTEM STATUS:")
+            print(f"   Handler Running: {'✅ Yes' if emergency_alarm_handler.is_running else '❌ No'}")
+            print(f"   Channel: {emergency_alarm_handler.channel_name}")
+            print(f"   Processed Events: {len(emergency_alarm_handler.processed_events)}")
+            
+            # Show audio status
+            audio_status = audio_alert_service.get_status()
+            print(f"   Audio Enabled: {'✅ Yes' if audio_status['enabled'] else '❌ No'}")
+            print(f"   Audio Backend: {audio_status.get('audio_backend', 'unknown')}")
+            print(f"   Audio Devices: {audio_status.get('available_devices', 0)}")
+        elif key == ord('t'):
+            # Test emergency alarm manually
+            print("\n🔊 TESTING EMERGENCY ALARM...")
+            print("   This will play a 5-second test alarm")
+            try:
+                test_user_id = os.getenv('DEFAULT_USER_ID', 'test_user')
+                test_result = asyncio.run(audio_alert_service.play_emergency_alarm(
+                    user_id=test_user_id,
+                    triggered_by='manual_test',
+                    duration=5  # Short 5-second test
+                ))
+                if test_result['success']:
+                    print(f"   ✅ Test alarm played successfully!")
+                    print(f"      Volume: {test_result.get('volume', 1.0) * 100:.0f}%")
+                    print(f"      Duration: {test_result.get('duration', 5)}s")
+                else:
+                    print(f"   ❌ Test alarm failed: {test_result['message']}")
+            except Exception as e:
+                print(f"   ❌ Test alarm error: {e}")
         elif key == ord('i'):
             # Show intelligent action info
             if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:

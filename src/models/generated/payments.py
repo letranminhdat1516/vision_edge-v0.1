@@ -24,6 +24,7 @@ class Payments(Base):
     description = Column(Text)
     delivery_data = Column(String)
     vnp_txn_ref = Column(String(50))
+    idempotency_key = Column(String(128))
     vnp_create_date = Column(String)
     vnp_expire_date = Column(String)
     vnp_order_info = Column(Text)

@@ -20,7 +20,7 @@ class Subscriptions(Base):
     plan_code = Column(Text, nullable=False)
     plan_id = Column(UUID(as_uuid=True))
     status = Column(String(9), nullable=False)
-    billing_period = Column(String(7), nullable=False)
+    billing_period = Column(String(10), nullable=False)
     started_at = Column(DateTime, nullable=False)
     current_period_start = Column(DateTime, nullable=False)
     current_period_end = Column(DateTime)
@@ -38,6 +38,12 @@ class Subscriptions(Base):
     cancel_at_period_end = Column(Boolean, nullable=False)
     offer_start_date = Column(DateTime)
     offer_end_date = Column(DateTime)
+    renewal_attempt_count = Column(Integer, nullable=False)
+    next_renew_attempt_at = Column(DateTime)
+    dunning_stage = Column(String(50))
+    last_renewal_error = Column(Text)
+    plan_snapshot = Column(String)
+    unit_amount_minor = Column(String, nullable=False)
 
     def __repr__(self):
         return f"<Subscriptions(id={self.id})>"

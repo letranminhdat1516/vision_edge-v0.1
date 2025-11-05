@@ -18,7 +18,6 @@ class Notifications(Base):
     notification_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
     user_id = Column(UUID(as_uuid=True), nullable=False)
     event_id = Column(UUID(as_uuid=True))
-    notification_type = Column(String(7), nullable=False)
     severity = Column(String(8), nullable=False)
     title = Column(String(255))
     message = Column(Text, nullable=False)
@@ -33,7 +32,7 @@ class Notifications(Base):
     acknowledged_at = Column(DateTime)
     created_at = Column(DateTime, nullable=False)
     resolved_at = Column(DateTime)
-    channel = Column(String(7))
+    channel = Column(String(7), nullable=False)
     business_type = Column(String(20))
 
     def __repr__(self):

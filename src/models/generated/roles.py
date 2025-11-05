@@ -15,11 +15,11 @@ Base = declarative_base()
 class Roles(Base):
     __tablename__ = 'roles'
     
-    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
     name = Column(String(50), nullable=False)
     description = Column(String(255))
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
+    role_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
 
     def __repr__(self):
         return f"<Roles(id={self.id})>"
