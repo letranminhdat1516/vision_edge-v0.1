@@ -766,7 +766,14 @@ class PostgreSQLHealthcareService:
                 ),
                 'context_data': json.dumps(event_data.get('context', {})),
                 'detected_at': datetime.now(timezone.utc),
-                'created_at': datetime.now(timezone.utc)
+                'created_at': datetime.now(timezone.utc),
+                # Required fields with NOT NULL constraint
+                'lifecycle_state': 'NOTIFIED',  # Initial state when event is created
+                'confirmation_state': 'DETECTED',  # Fixed: Use valid enum value (was PENDING_CONFIRMATION)
+                'verification_status': 'PENDING',  # Waiting for verification
+                'escalation_count': 0,  # No escalations yet
+                'is_canceled': False,  # Not canceled
+                'notification_attempts': 0  # Will be incremented when notification sent
             }
             
             with conn.cursor() as cursor:
@@ -775,12 +782,16 @@ class PostgreSQLHealthcareService:
                     event_id, user_id, camera_id, snapshot_id,
                     event_type, event_description, detection_data, ai_analysis_result,
                     confidence_score, bounding_boxes, status, context_data,
-                    detected_at, created_at
+                    detected_at, created_at,
+                    lifecycle_state, confirmation_state, verification_status,
+                    escalation_count, is_canceled, notification_attempts
                 ) VALUES (
                     %(event_id)s, %(user_id)s, %(camera_id)s, %(snapshot_id)s,
                     %(event_type)s, %(event_description)s, %(detection_data)s, %(ai_analysis_result)s,
                     %(confidence_score)s, %(bounding_boxes)s, %(status)s, %(context_data)s,
-                    %(detected_at)s, %(created_at)s
+                    %(detected_at)s, %(created_at)s,
+                    %(lifecycle_state)s, %(confirmation_state)s, %(verification_status)s,
+                    %(escalation_count)s, %(is_canceled)s, %(notification_attempts)s
                 ) RETURNING *
                 """
                 
@@ -790,9 +801,16 @@ class PostgreSQLHealthcareService:
                 
                 if result:
                     logger.info(f"✅ Event detection published: {record['event_type']} with confidence {record['confidence_score']}")
+                    print(f"💾 ✅ DATABASE SAVE SUCCESS!")
+                    print(f"   Event ID: {record['event_id']}")
+                    print(f"   Event Type: {record['event_type']}")
+                    print(f"   Status: {record['status']}")
+                    print(f"   Confidence: {record['confidence_score']:.2%}")
+                    print(f"   Description: {record['event_description'][:100]}...")
                     return dict(result)
                 else:
                     logger.error("❌ Failed to publish event detection")
+                    print(f"❌ DATABASE SAVE FAILED - No result returned")
                     return None
                     
         except Exception as e:
@@ -852,17 +870,33 @@ class PostgreSQLHealthcareService:
                     'alert_message': alert_data.get('message'),
                     'alert_data': alert_data.get('alert_data', {})
                 }),
-                'created_at': datetime.now(timezone.utc)
+                'created_at': datetime.now(timezone.utc),
+                'detected_at': datetime.now(timezone.utc),
+                # Required fields with NOT NULL constraint
+                'lifecycle_state': 'NOTIFIED',
+                'confirmation_state': 'DETECTED',  # Fixed: Use valid enum value
+                'verification_status': 'PENDING',
+                'escalation_count': 0,
+                'is_canceled': False,
+                'notification_attempts': 0,
+                'event_description': alert_data.get('message', 'Alert notification'),
+                'status': 'danger' if alert_data.get('severity') == 'critical' else 'warning'
             }
             
             with conn.cursor() as cursor:
                 insert_sql = """
                 INSERT INTO event_detections (
                     event_id, user_id, camera_id, snapshot_id, event_type, confidence_score,
-                    detection_data, created_at
+                    detection_data, created_at, detected_at,
+                    lifecycle_state, confirmation_state, verification_status,
+                    escalation_count, is_canceled, notification_attempts,
+                    event_description, status
                 ) VALUES (
                     %(event_id)s, %(user_id)s, %(camera_id)s, %(snapshot_id)s, %(event_type)s, %(confidence_score)s,
-                    %(detection_data)s, %(created_at)s
+                    %(detection_data)s, %(created_at)s, %(detected_at)s,
+                    %(lifecycle_state)s, %(confirmation_state)s, %(verification_status)s,
+                    %(escalation_count)s, %(is_canceled)s, %(notification_attempts)s,
+                    %(event_description)s, %(status)s
                 ) RETURNING *
                 """
                 

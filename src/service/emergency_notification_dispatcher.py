@@ -342,6 +342,12 @@ class HealthcareEventPublisher:
                               room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish fall detection with priority-based alert system"""
         try:
+            print(f"\n{'='*60}")
+            print(f"🚨 PUBLISHING FALL DETECTION TO DATABASE")
+            print(f"   Confidence: {confidence:.2%}")
+            print(f"   Bounding boxes: {len(bounding_boxes)}")
+            print(f"{'='*60}\n")
+            
             # Use provided camera_id or constructor default (no more env fallback)
             import os
             
@@ -457,6 +463,12 @@ class HealthcareEventPublisher:
                                  room_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Publish seizure detection with priority-based alert system"""
         try:
+            print(f"\n{'='*60}")
+            print(f"🆘 PUBLISHING SEIZURE DETECTION TO DATABASE")
+            print(f"   Confidence: {confidence:.2%}")
+            print(f"   Bounding boxes: {len(bounding_boxes)}")
+            print(f"{'='*60}\n")
+            
             # Use provided camera_id or constructor default (no more env fallback)
             import os
             

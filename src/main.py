@@ -334,6 +334,63 @@ if __name__ == "__main__":
                         emergency_type = detection_result.get('emergency_type', 'unknown')
                         confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
                         print(f"🚨 EMERGENCY ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
+                        
+                        # 💾 SAVE EVENT TO DATABASE
+                        try:
+                            print(f"💾 Saving event to database for {cam_data['name']}...")
+                            
+                            # Determine event_type and status
+                            event_type = "abnormal_behavior" if "seizure" in emergency_type else "fall"
+                            status = "danger" if detection_result.get('alert_level') == 'critical' else "warning"
+                            
+                            # Get bounding boxes from detection result
+                            bounding_boxes = detection_result.get('bounding_boxes', [])
+                            if not bounding_boxes and person_detections:
+                                # Fallback to person detections
+                                bounding_boxes = [{
+                                    'x': int(p.get('bbox', [0, 0, 0, 0])[0]),
+                                    'y': int(p.get('bbox', [0, 0, 0, 0])[1]),
+                                    'width': int(p.get('bbox', [0, 0, 0, 0])[2] - p.get('bbox', [0, 0, 0, 0])[0]),
+                                    'height': int(p.get('bbox', [0, 0, 0, 0])[3] - p.get('bbox', [0, 0, 0, 0])[1]),
+                                    'confidence': float(p.get('confidence', confidence)),
+                                    'class': 'person'
+                                } for p in person_detections[:3]]  # Max 3 persons
+                            
+                            # Publish event using pipeline's event publisher
+                            if event_type == 'fall':
+                                alert_result = cam_data['pipeline'].event_publisher.publish_fall_detection(
+                                    confidence=confidence,
+                                    bounding_boxes=bounding_boxes,
+                                    context={
+                                        'description': f"{emergency_type.upper()} detected in {cam_data['name']}",
+                                        'alert_level': detection_result.get('alert_level'),
+                                        'camera_name': cam_data['name']
+                                    }
+                                )
+                            else:  # abnormal_behavior (seizure)
+                                alert_result = cam_data['pipeline'].event_publisher.publish_seizure_detection(
+                                    confidence=confidence,
+                                    bounding_boxes=bounding_boxes,
+                                    context={
+                                        'description': f"{emergency_type.upper()} detected in {cam_data['name']}",
+                                        'alert_level': detection_result.get('alert_level'),
+                                        'camera_name': cam_data['name']
+                                    }
+                                )
+                            
+                            if alert_result and alert_result.get('success'):
+                                print(f"   ✅ Event saved to database!")
+                                print(f"   🆔 Event ID: {alert_result.get('event_id', 'N/A')}")
+                                print(f"   📊 Status: {status}")
+                                print(f"   📹 Camera: {cam_data['name']}")
+                            else:
+                                print(f"   ⚠️ Event save failed: {alert_result.get('error', 'Unknown error') if alert_result else 'No response'}")
+                                
+                        except Exception as db_error:
+                            print(f"   ❌ Database save error: {db_error}")
+                            import traceback
+                            traceback.print_exc()
+                    
                     # Debug warning level alerts too
                     elif detection_result.get('alert_level') == 'warning':
                         emergency_type = detection_result.get('emergency_type', 'unknown')
@@ -572,7 +629,7 @@ if __name__ == "__main__":
                 try:
                     # Generate intelligent action based on image content
                     status = "danger" if detection_result.get('alert_level') == 'critical' else "warning"
-                    event_type = "seizure" if "seizure" in emergency_type else "fall"
+                    event_type = "abnormal_behavior" if "seizure" in emergency_type else "fall"
                     
                     # Get Vietnamese caption from image
                     vietnamese_caption, metadata = caption_pipeline.generate_professional_caption(str(last_alert_image_path))
@@ -601,6 +658,62 @@ if __name__ == "__main__":
             print(f"   📱 Notification sent to backend")
             print(f"   📡 Event published to Supabase realtime")
             print(f"   💬 Action: {intelligent_action}")
+            
+            # 💾 SAVE EVENT TO DATABASE
+            try:
+                print(f"💾 Saving event to database...")
+                
+                # Determine event_type and status
+                event_type = "abnormal_behavior" if "seizure" in emergency_type else "fall"
+                status = "danger" if detection_result.get('alert_level') == 'critical' else "warning"
+                
+                # Get bounding boxes from detection result
+                bounding_boxes = detection_result.get('bounding_boxes', [])
+                if not bounding_boxes and person_detections:
+                    # Fallback to person detections
+                    bounding_boxes = [{
+                        'x': int(p.get('bbox', [0, 0, 0, 0])[0]),
+                        'y': int(p.get('bbox', [0, 0, 0, 0])[1]),
+                        'width': int(p.get('bbox', [0, 0, 0, 0])[2] - p.get('bbox', [0, 0, 0, 0])[0]),
+                        'height': int(p.get('bbox', [0, 0, 0, 0])[3] - p.get('bbox', [0, 0, 0, 0])[1]),
+                        'confidence': float(p.get('confidence', confidence)),
+                        'class': 'person'
+                    } for p in person_detections[:3]]  # Max 3 persons
+                
+                # Publish event using pipeline's event publisher
+                if event_type == 'fall':
+                    alert_result = pipeline.event_publisher.publish_fall_detection(
+                        confidence=confidence,
+                        bounding_boxes=bounding_boxes,
+                        context={
+                            'description': intelligent_action,
+                            'alert_level': detection_result.get('alert_level'),
+                            'frame_count': frame_count
+                        }
+                    )
+                else:  # abnormal_behavior (seizure)
+                    alert_result = pipeline.event_publisher.publish_seizure_detection(
+                        confidence=confidence,
+                        bounding_boxes=bounding_boxes,
+                        context={
+                            'description': intelligent_action,
+                            'alert_level': detection_result.get('alert_level'),
+                            'frame_count': frame_count
+                        }
+                    )
+                
+                if alert_result and alert_result.get('success'):
+                    print(f"   ✅ Event saved to database!")
+                    print(f"   🆔 Event ID: {alert_result.get('event_id', 'N/A')}")
+                    print(f"   📊 Status: {status}")
+                    print(f"   💾 Database: PostgreSQL")
+                else:
+                    print(f"   ⚠️ Event save failed: {alert_result.get('error', 'Unknown error') if alert_result else 'No response'}")
+                    
+            except Exception as db_error:
+                print(f"   ❌ Database save error: {db_error}")
+                import traceback
+                traceback.print_exc()
         
         # Hiển thị Normal View
         cv2.imshow("Healthcare Monitor - Normal View", result["normal_window"])
