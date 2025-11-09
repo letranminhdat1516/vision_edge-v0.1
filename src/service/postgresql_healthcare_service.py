@@ -449,6 +449,87 @@ class PostgreSQLHealthcareService:
             else:
                 return 'normal'
     
+    def _calculate_reliability_score(self, confidence: float, event_type: str, 
+                                     bounding_boxes: list = None, context: dict = None) -> float:
+        """
+        Calculate reliability score (độ nguy hiểm) based on multiple factors
+        
+        Công thức tính độ nguy hiểm:
+        - Base score từ confidence (0-100)
+        - Event type multiplier (fall/seizure nguy hiểm hơn)
+        - Detection quality (số lượng bounding boxes, kích thước)
+        - Context factors (location, time, history)
+        
+        Args:
+            confidence: AI confidence score (0.0 - 1.0)
+            event_type: Type of event detected
+            bounding_boxes: List of detected objects
+            context: Additional context data
+            
+        Returns:
+            Reliability score (0.0 - 1.0): 1.0 = cực kỳ nguy hiểm, 0.0 = không nguy hiểm
+        """
+        
+        # 1. BASE SCORE từ confidence (40% trọng số)
+        base_score = confidence * 0.4
+        
+        # 2. EVENT TYPE SEVERITY (30% trọng số)
+        event_severity = {
+            'fall': 0.30,              # Té ngã: rất nguy hiểm
+            'abnormal_behavior': 0.28,  # Co giật: rất nguy hiểm
+            'seizure': 0.28,           # Co giật: rất nguy hiểm
+            'manual_emergency': 0.30,   # Khẩn cấp thủ công: rất nguy hiểm
+            'sleep': 0.05,             # Ngủ: ít nguy hiểm
+            'normal_activity': 0.02    # Hoạt động bình thường: không nguy hiểm
+        }
+        severity_score = event_severity.get(event_type, 0.15)  # Default: mức trung bình
+        
+        # 3. DETECTION QUALITY (15% trọng số)
+        quality_score = 0.0
+        if bounding_boxes and len(bounding_boxes) > 0:
+            # Có detection objects
+            quality_score = 0.10
+            
+            # Bonus nếu có nhiều detections (người té có thể detect nhiều pose)
+            if len(bounding_boxes) >= 2:
+                quality_score += 0.03
+            
+            # Bonus nếu có keypoints (pose data)
+            if any('keypoints' in bbox for bbox in bounding_boxes):
+                quality_score += 0.02
+        
+        # 4. CONTEXT FACTORS (15% trọng số)
+        context_score = 0.0
+        if context:
+            # Alert level từ detection
+            alert_level = context.get('alert_level', '')
+            if alert_level == 'critical':
+                context_score = 0.15
+            elif alert_level == 'high':
+                context_score = 0.12
+            elif alert_level == 'warning':
+                context_score = 0.08
+            
+            # Consecutive detections (liên tục phát hiện = nguy hiểm hơn)
+            if context.get('consecutive_detections', 0) >= 3:
+                context_score += 0.03
+        
+        # TỔNG ĐIỂM
+        total_score = base_score + severity_score + quality_score + context_score
+        
+        # Clamp giá trị trong khoảng [0.0, 1.0]
+        reliability_score = min(max(total_score, 0.0), 1.0)
+        
+        # Log để debug
+        logger.debug(f"🎯 Reliability Score Calculation:")
+        logger.debug(f"   Base (confidence {confidence:.2%}): {base_score:.3f}")
+        logger.debug(f"   Severity ({event_type}): {severity_score:.3f}")
+        logger.debug(f"   Quality (boxes={len(bounding_boxes) if bounding_boxes else 0}): {quality_score:.3f}")
+        logger.debug(f"   Context: {context_score:.3f}")
+        logger.debug(f"   📊 TOTAL RELIABILITY: {reliability_score:.3f} ({reliability_score*100:.1f}%)")
+        
+        return reliability_score
+    
     def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
         """
         Generate intelligent action message for event_description field
@@ -748,6 +829,14 @@ class PostgreSQLHealthcareService:
             
             # Validate final IDs (user_id and camera_id already processed above)
             
+            # Calculate reliability score (độ nguy hiểm)
+            reliability_score = self._calculate_reliability_score(
+                confidence=event_data.get('confidence', 0.0),
+                event_type=event_data.get('event_type', ''),
+                bounding_boxes=event_data.get('bounding_boxes', []),
+                context=event_data.get('context', {})
+            )
+            
             # Prepare record with validated values
             record = {
                 'event_id': str(uuid.uuid4()),
@@ -773,7 +862,8 @@ class PostgreSQLHealthcareService:
                 'verification_status': 'PENDING',  # Waiting for verification
                 'escalation_count': 0,  # No escalations yet
                 'is_canceled': False,  # Not canceled
-                'notification_attempts': 0  # Will be incremented when notification sent
+                'notification_attempts': 0,  # Will be incremented when notification sent
+                'reliability_score': float(reliability_score)  # Độ nguy hiểm (0.0 - 1.0)
             }
             
             with conn.cursor() as cursor:
@@ -784,14 +874,16 @@ class PostgreSQLHealthcareService:
                     confidence_score, bounding_boxes, status, context_data,
                     detected_at, created_at,
                     lifecycle_state, confirmation_state, verification_status,
-                    escalation_count, is_canceled, notification_attempts
+                    escalation_count, is_canceled, notification_attempts,
+                    reliability_score
                 ) VALUES (
                     %(event_id)s, %(user_id)s, %(camera_id)s, %(snapshot_id)s,
                     %(event_type)s, %(event_description)s, %(detection_data)s, %(ai_analysis_result)s,
                     %(confidence_score)s, %(bounding_boxes)s, %(status)s, %(context_data)s,
                     %(detected_at)s, %(created_at)s,
                     %(lifecycle_state)s, %(confirmation_state)s, %(verification_status)s,
-                    %(escalation_count)s, %(is_canceled)s, %(notification_attempts)s
+                    %(escalation_count)s, %(is_canceled)s, %(notification_attempts)s,
+                    %(reliability_score)s
                 ) RETURNING *
                 """
                 
@@ -806,6 +898,7 @@ class PostgreSQLHealthcareService:
                     print(f"   Event Type: {record['event_type']}")
                     print(f"   Status: {record['status']}")
                     print(f"   Confidence: {record['confidence_score']:.2%}")
+                    print(f"   🎯 Reliability (Độ nguy hiểm): {record['reliability_score']:.2%}")
                     print(f"   Description: {record['event_description'][:100]}...")
                     return dict(result)
                 else:
