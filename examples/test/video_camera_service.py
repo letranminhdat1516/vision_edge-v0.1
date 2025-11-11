@@ -100,8 +100,8 @@ class VideoCameraService:
         
         self.frame_count += 1
         
-        # Resize if needed
-        if frame is not None:
+        # Resize if needed (only if resolution is specified)
+        if frame is not None and self.resolution is not None:
             current_height, current_width = frame.shape[:2]
             if (current_width, current_height) != self.resolution:
                 frame = cv2.resize(frame, self.resolution)
