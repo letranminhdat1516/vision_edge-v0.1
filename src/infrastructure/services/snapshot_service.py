@@ -145,7 +145,7 @@ class SnapshotService:
                 snapshot_id=snapshot_id,
                 camera_id=camera_id,
                 user_id=user_id,
-                meta_data=json.dumps(cleaned_metadata),  # Use proper JSON serialization
+                metadata_=json.dumps(cleaned_metadata),  # FIX: Use metadata_ (not meta_data) - SQLAlchemy mapping
                 capture_type=db_capture_type,  # Use mapped value
                 captured_at=datetime.now(),
                 processed_at=datetime.now(),
@@ -156,6 +156,7 @@ class SnapshotService:
             snapshot_image = SnapshotImages(
                 image_id=image_id,
                 snapshot_id=snapshot_id,
+                is_primary=True,  # FIX: Set is_primary to avoid NULL constraint violation
                 image_path=object_name,  # MinIO object name
                 cloud_url=cloud_url,
                 created_at=datetime.now(),

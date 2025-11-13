@@ -18,7 +18,7 @@ class Snapshots(Base):
     snapshot_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
     camera_id = Column(UUID(as_uuid=True), nullable=False)
     user_id = Column(UUID(as_uuid=True))
-    snapshot_metadata = Column('metadata', String)  # Mapped to 'metadata' column in DB
+    metadata_ = Column('metadata', String)  # Renamed to avoid SQLAlchemy reserved word
     capture_type = Column(String(16), nullable=False)
     captured_at = Column(DateTime, nullable=False)
     processed_at = Column(DateTime)

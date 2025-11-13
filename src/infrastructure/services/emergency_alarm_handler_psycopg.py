@@ -40,6 +40,7 @@ class EmergencyAlarmHandlerPsycopg:
         
         # Channel name - must match trigger function
         self.channel_name = 'system_alarm_channel'  # Match notify_alarm_trigger()
+        self.stop_channel_name = 'system_alarm_stop_channel'  # For lifecycle_state changes
         
         logger.info("🎧 Emergency Alarm Handler initialized (PostgreSQL LISTEN/NOTIFY - psycopg3)")
         logger.info(f"   Using DIRECT connection (port 5432) for LISTEN/NOTIFY")
@@ -59,7 +60,8 @@ class EmergencyAlarmHandlerPsycopg:
         logger.info("=" * 80)
         logger.info("🚀 EMERGENCY ALARM HANDLER STARTED (LISTEN/NOTIFY)")
         logger.info("=" * 80)
-        logger.info(f"📡 Channel: {self.channel_name}")
+        logger.info(f"📡 Alarm Channel: {self.channel_name}")
+        logger.info(f"📡 Stop Channel: {self.stop_channel_name}")
         logger.info("💡 Waiting for notifications from PostgreSQL triggers...")
         logger.info("=" * 80)
         
@@ -88,9 +90,12 @@ class EmergencyAlarmHandlerPsycopg:
                 logger.info("✅ PostgreSQL connection established!")
                 
                 with self.listen_conn.cursor() as cur:
-                    # Start listening
+                    # Start listening to both channels
                     cur.execute(f"LISTEN {self.channel_name};")
-                    logger.info(f"✅ Listening on channel: {self.channel_name}")
+                    cur.execute(f"LISTEN {self.stop_channel_name};")
+                    logger.info(f"✅ Listening on channels:")
+                    logger.info(f"   - {self.channel_name} (alarm activation)")
+                    logger.info(f"   - {self.stop_channel_name} (alarm stop)")
                     logger.info("⚡ Ready to receive instant notifications!")
                     
                     # Poll for notifications
@@ -148,10 +153,20 @@ class EmergencyAlarmHandlerPsycopg:
             data = json.loads(notify.payload)
             
             event_id = data.get('event_id')
-            state = data.get('state')  # Should be 'ALARM_ACTIVATED'
+            state = data.get('state')
+            action = data.get('action')
             message = data.get('message', '')
             
-            # Avoid duplicates
+            # Check which channel sent the notification
+            if notify.channel == self.stop_channel_name:
+                # Stop alarm request
+                logger.info(f"🔇 STOP ALARM REQUEST received")
+                logger.info(f"   Event ID: {event_id}")
+                logger.info(f"   Reason: {message}")
+                self._process_alarm_stop_sync(data)
+                return
+            
+            # Avoid duplicates for alarm activation
             if event_id in self.processed_events:
                 logger.info(f"⏭️  Event {event_id} already processed, skipping")
                 return
@@ -204,7 +219,7 @@ class EmergencyAlarmHandlerPsycopg:
                 # Update event status
                 self._update_event_status(
                     event_id=event_id,
-                    lifecycle_state='ACKED',
+                    lifecycle_state='ACKNOWLEDGED',
                     status='danger',
                     confirmation_state='CONFIRMED_BY_CUSTOMER',
                     verification_status='APPROVED',
@@ -254,7 +269,7 @@ class EmergencyAlarmHandlerPsycopg:
                 # Update event
                 self._update_event_status(
                     event_id=event_id,
-                    lifecycle_state='ACKED',
+                    lifecycle_state='ACKNOWLEDGED',
                     notes=f"ALARM ACTIVATED FROM MOBILE at {datetime.now()}: {event_data.get('event_description', '')}"
                 )
             else:
@@ -270,6 +285,35 @@ class EmergencyAlarmHandlerPsycopg:
             
         except Exception as e:
             logger.error(f"❌ Error processing alarm: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def _process_alarm_stop_sync(self, event_data: Dict[str, Any]):
+        """Xử lý alarm stop request (synchronous)"""
+        try:
+            event_id = str(event_data.get('event_id', ''))
+            reason = event_data.get('message', 'Unknown reason')
+            
+            logger.info(f"🔇 Processing ALARM STOP: {event_id}")
+            logger.info(f"   Reason: {reason}")
+            logger.info(f"   Old state: {event_data.get('old_lifecycle_state')}")
+            logger.info(f"   New state: {event_data.get('new_lifecycle_state')}")
+            
+            # Stop alarm
+            import asyncio
+            stop_result = asyncio.run(audio_alert_service.stop_alarm())
+            
+            if stop_result['success']:
+                logger.info("✅ ✅ ✅ ALARM STOPPED SUCCESSFULLY! ✅ ✅ ✅")
+                logger.info(f"   Event: {event_id[:8]}...")
+                logger.info(f"   Reason: {reason}")
+            else:
+                logger.warning(f"⚠️ No alarm was playing: {stop_result['message']}")
+            
+            logger.info("=" * 80)
+            
+        except Exception as e:
+            logger.error(f"❌ Error stopping alarm: {e}")
             import traceback
             logger.error(traceback.format_exc())
     

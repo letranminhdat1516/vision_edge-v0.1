@@ -39,7 +39,7 @@ class VSViGSeizureDetector:
                  pose_model_path: Optional[str] = None,
                  dynamic_order_path: Optional[str] = None,
                  device: str = 'auto',
-                 confidence_threshold: float = 0.01):  # Cực thấp từ 0.6 xuống 0.01 - siêu nhạy
+                 confidence_threshold: float = 0.30):  # BALANCED: Tăng từ 0.01 lên 0.30 để giảm false positive
         """
         Initialize VSViG seizure detector
         
@@ -396,8 +396,8 @@ class VSViGSeizureDetector:
             if frame_count % 30 == 0:  # Log every 30 frames
                 self.logger.info(f"Seizure Scores - Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Int:{intensity_score:.3f}, Spike:{spike_score:.3f}, Final:{seizure_confidence:.3f}, Active:{active_indicators}")
             
-            # Apply very low final threshold for maximum sensitivity
-            if seizure_confidence < 0.1:  # Giảm xuống 0.1 để cực kỳ nhạy
+            # BALANCED: Tăng threshold để giảm false positive
+            if seizure_confidence < 0.30:  # Tăng từ 0.1 lên 0.30
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)

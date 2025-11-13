@@ -145,13 +145,21 @@ class FallFocusedTester:
             
             # Process frame to get person detections
             result = video_processor.process_frame(frame)
-            person_detections = result.get('person_detections', [])
+            
+            # IntegratedVideoProcessor trả về 'detections', không phải 'person_detections'
+            all_detections = result.get('detections', [])
+            person_detections = [d for d in all_detections if d.get('class_name') == 'person']
             
             # DEBUG: Log detection status
             if frame_count % 30 == 0:  # Every 30 frames
-                print(f"🔍 Frame {frame_count}: Detected {len(person_detections)} person(s)")
-                if not person_detections:
-                    print(f"   ⚠️ No persons detected by YOLO!")
+                processed = result.get('processed', False)
+                is_keyframe = result.get('is_keyframe', False)
+                print(f"🔍 Frame {frame_count}: Processed={processed}, Keyframe={is_keyframe}, "
+                      f"Persons={len(person_detections)}, All objects={len(all_detections)}")
+                if not processed:
+                    print(f"   ⚠️ Frame not processed: {result.get('reason', 'unknown')}")
+                if not person_detections and all_detections:
+                    print(f"   ℹ️ Detected objects but no persons: {[d['class_name'] for d in all_detections[:3]]}")
             
             if person_detections:
                 stats['frames_with_person'] += 1

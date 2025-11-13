@@ -4,6 +4,13 @@ Update an event to trigger alarm while main.py is running
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Add src to path
+src_path = Path(__file__).parent.parent / 'src'
+sys.path.insert(0, str(src_path))
+
 from dotenv import load_dotenv
 from service.postgresql_healthcare_service import PostgreSQLHealthcareService
 
@@ -64,14 +71,14 @@ for i, event in enumerate(events, 1):
         event_id = str(event['event_id'])[:8]
         event_type = event['event_type']
         state = event['lifecycle_state']
-        description = event.get('event_description', 'No description')[:60]
+        description = (event.get('event_description') or 'No description')[:60]
         confidence = event.get('confidence_score', 0)
     else:
         event_id = str(event[0])[:8]
         event_type = event[1]
         state = event[2]
-        description = (event[3] if event[3] else 'No description')[:60]
-        confidence = event[4] if len(event) > 4 and event[4] else 0
+        description = (event[3] or 'No description')[:60] if event[3] else 'No description'
+        confidence = float(event[4]) if len(event) > 4 and event[4] else 0
     
     print(f"{i:2d}. {event_id}... | {event_type:20s} | {state}")
     print(f"    📝 {description}...")

@@ -54,6 +54,15 @@ class PostgreSQLHealthcareService:
         except ImportError as e:
             self.vietnamese_caption = None
             logger.warning(f"📝 Vietnamese Caption Service: Disabled - {e}")
+        
+        # Initialize Snapshot Service for MinIO image upload
+        try:
+            from infrastructure.services.snapshot_service import get_snapshot_service
+            self.snapshot_service = get_snapshot_service(self.database_url)
+            logger.info("📸 Snapshot Service: Enabled for MinIO image upload")
+        except ImportError as e:
+            self.snapshot_service = None
+            logger.warning(f"📸 Snapshot Service: Disabled - {e}")
         self.is_connected = False
         self.polling_threads = {}
         self.event_handlers = {}
@@ -130,10 +139,10 @@ class PostgreSQLHealthcareService:
                     # Parse database URL
                     parsed = urlparse(url)
                     
-                    # Create connection pool
+                    # Create connection pool với size lớn hơn để tránh exhausted
                     self.connection_pool = SimpleConnectionPool(
-                        minconn=1,
-                        maxconn=10,
+                        minconn=2,
+                        maxconn=50,  # Tăng từ 10 lên 50 connections
                         host=parsed.hostname,
                         port=parsed.port or 5432,
                         database=parsed.path[1:] if parsed.path else 'postgres',
@@ -476,8 +485,8 @@ class PostgreSQLHealthcareService:
         # 2. EVENT TYPE SEVERITY (30% trọng số)
         event_severity = {
             'fall': 0.30,              # Té ngã: rất nguy hiểm
-            'abnormal_behavior': 0.28,  # Co giật: rất nguy hiểm
-            'seizure': 0.28,           # Co giật: rất nguy hiểm
+            'abnormal_behavior': 0.28,  # Bất thường: rất nguy hiểm
+            'seizure': 0.28,           # Bất thường: rất nguy hiểm
             'manual_emergency': 0.30,   # Khẩn cấp thủ công: rất nguy hiểm
             'sleep': 0.05,             # Ngủ: ít nguy hiểm
             'normal_activity': 0.02    # Hoạt động bình thường: không nguy hiểm
@@ -546,7 +555,7 @@ class PostgreSQLHealthcareService:
         """
         try:
             # Debug logging for test description detection
-            print(f"� _generate_event_description called:")
+            print(f" _generate_event_description called:")
             print(f"   event_type: {event_type}")
             print(f"   confidence: {confidence}")
             print(f"   fallback_description: '{fallback_description}'")
@@ -558,7 +567,7 @@ class PostgreSQLHealthcareService:
                 # Create intelligent action using test description
                 if event_type in ['abnormal_behavior', 'seizure']:
                     if confidence >= 0.50:
-                        result = f"🆘 KHẨN CẤP - CO GIẬT: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                        result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
                     elif confidence >= 0.30:
                         result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {fallback_description} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
                     else:
@@ -611,8 +620,11 @@ class PostgreSQLHealthcareService:
                 try:
                     if self.vietnamese_caption is not None:
                         logger.info("✅ Vietnamese caption service is available, generating caption...")
-                        # Generate Vietnamese caption from image
-                        vietnamese_result = self.vietnamese_caption.generate_professional_caption(image_file_to_use)
+                        # Generate Vietnamese caption from image with event_type for accurate medical context
+                        vietnamese_result = self.vietnamese_caption.generate_professional_caption(
+                            image_file_to_use,
+                            event_type=event_type  # Pass event_type to avoid filename confusion
+                        )
                         vietnamese_caption = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
                         
                         logger.info(f"📝 Generated Vietnamese caption: {vietnamese_caption}")
@@ -621,7 +633,7 @@ class PostgreSQLHealthcareService:
                             # Create full intelligent action message like in main.py
                             if event_type in ['abnormal_behavior', 'seizure']:
                                 if confidence >= 0.50:
-                                    result = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                                    result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
                                     logger.info(f"🚨 Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
@@ -664,7 +676,7 @@ class PostgreSQLHealthcareService:
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
                 if confidence >= 0.50:
-                    return f"🆘 KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                    return f"🆘 KHẨN CẤP - BẤT THƯỜNG: Phát hiện hành vi bất thường nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
                 elif confidence >= 0.30:
                     return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
                 else:
@@ -697,7 +709,7 @@ class PostgreSQLHealthcareService:
                 if event_type == 'fall':
                     return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
                 elif event_type in ['abnormal_behavior', 'seizure']:
-                    return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
+                    return f"Phát hiện hành vi bất thường (tin cậy: {confidence:.0%})"
                 else:
                     return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
             
@@ -714,7 +726,7 @@ class PostgreSQLHealthcareService:
                 if event_type == 'fall':
                     return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
                 elif event_type in ['abnormal_behavior', 'seizure']:
-                    return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
+                    return f"Phát hiện hành vi bất thường (tin cậy: {confidence:.0%})"
                 else:
                     return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
                     
@@ -724,7 +736,7 @@ class PostgreSQLHealthcareService:
             if event_type == 'fall':
                 return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
             elif event_type in ['abnormal_behavior', 'seizure']:
-                return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
+                return f"Phát hiện hành vi bất thường (tin cậy: {confidence:.0%})"
             else:
                 return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
     
@@ -740,10 +752,7 @@ class PostgreSQLHealthcareService:
             logger.error("PostgreSQL not connected")
             return None
         
-        conn = self.get_connection()
-        if not conn:
-            logger.error("Could not get database connection")
-            return None
+        # DON'T get connection here - helper functions manage their own connections
         
         try:
             # Get user's real camera_id from database
@@ -755,7 +764,7 @@ class PostgreSQLHealthcareService:
                 user_id = os.getenv('DEFAULT_USER_ID')
                 logger.info(f"🔧 Using DEFAULT_USER_ID from env: {user_id}")
             
-            # If no camera_id provided, get user's first camera
+            # If no camera_id provided, get user's first camera (uses own connection)
             if not camera_id and user_id:
                 camera_id = self._get_user_camera_id(user_id)
                 print(f"🔧 Got user camera_id: {camera_id}")
@@ -767,11 +776,47 @@ class PostgreSQLHealthcareService:
             
             print(f"🔧 Final IDs - user_id: {user_id}, camera_id: {camera_id}")
             
-            # Create snapshot first with real camera_id
-            snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
-                camera_id=camera_id,
-                user_id=user_id
-            )
+            # Upload image to MinIO if frame is provided
+            snapshot_id = None
+            image_id = None
+            cloud_url = None
+            
+            if self.snapshot_service and event_data.get('frame') is not None:
+                try:
+                    import numpy as np
+                    frame = event_data.get('frame')
+                    
+                    # Ensure frame is valid numpy array
+                    if isinstance(frame, np.ndarray) and frame.size > 0:
+                        logger.info(f"📸 Uploading {event_data.get('event_type')} image to MinIO...")
+                        
+                        snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
+                            camera_id=camera_id,
+                            user_id=user_id,
+                            event_type=event_data.get('event_type', 'unknown'),
+                            confidence=event_data.get('confidence', 0.0),
+                            frame=frame,
+                            metadata={
+                                'detection_data': event_data.get('detection_data', {}),
+                                'bounding_boxes': event_data.get('bounding_boxes', [])
+                            }
+                        )
+                        
+                        logger.info(f"✅ MinIO upload successful! snapshot_id: {snapshot_id}, image_id: {image_id}")
+                    else:
+                        logger.warning("⚠️ Invalid frame data - skipping MinIO upload")
+                        
+                except Exception as upload_error:
+                    logger.error(f"❌ MinIO upload failed: {upload_error}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Fallback: Create snapshot using old method if MinIO upload failed
+            if not snapshot_id:
+                snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
+                    camera_id=camera_id,
+                    user_id=user_id
+                )
             
             # If snapshot creation failed, try to create one with minimal data
             if not snapshot_id and camera_id and user_id:
@@ -802,30 +847,36 @@ class PostgreSQLHealthcareService:
                 return None
                 
             # Check for recent duplicate events (same type, user, camera within 5 seconds)
+            dup_conn = None
             try:
-                conn = self.get_connection()
-                with conn.cursor() as cursor:
-                    duplicate_check_sql = """
-                    SELECT event_id FROM event_detections 
-                    WHERE event_type = %s AND user_id = %s AND camera_id = %s 
-                    AND detected_at > NOW() - INTERVAL '5 seconds'
-                    ORDER BY detected_at DESC LIMIT 1
-                    """
-                    cursor.execute(duplicate_check_sql, (
-                        event_data.get('event_type'),
-                        user_id,
-                        camera_id
-                    ))
-                    recent_event = cursor.fetchone()
-                    
-                    if recent_event:
-                        logger.warning(f"❌ Skipping duplicate event detection - similar {event_data.get('event_type')} within 5 seconds")
-                        self.return_connection(conn)
-                        return {'event_id': recent_event[0], 'duplicate_skipped': True}
+                dup_conn = self.get_connection()
+                if dup_conn:
+                    with dup_conn.cursor() as cursor:
+                        duplicate_check_sql = """
+                        SELECT event_id FROM event_detections 
+                        WHERE event_type = %s AND user_id = %s AND camera_id = %s 
+                        AND detected_at > NOW() - INTERVAL '5 seconds'
+                        ORDER BY detected_at DESC LIMIT 1
+                        """
+                        cursor.execute(duplicate_check_sql, (
+                            event_data.get('event_type'),
+                            user_id,
+                            camera_id
+                        ))
+                        recent_event = cursor.fetchone()
                         
-                self.return_connection(conn)
+                        if recent_event and recent_event[0]:  # FIX: Check if result exists AND has event_id
+                            logger.warning(f"❌ Skipping duplicate event detection - similar {event_data.get('event_type')} within 5 seconds")
+                            self.return_connection(dup_conn)
+                            return {'event_id': recent_event[0], 'duplicate_skipped': True}
+                    
+                    # Return connection if no duplicate found
+                    self.return_connection(dup_conn)
+                        
             except Exception as dup_error:
                 logger.warning(f"Duplicate check failed: {dup_error}")
+                if dup_conn:
+                    self.return_connection(dup_conn)
             
             # Validate final IDs (user_id and camera_id already processed above)
             
@@ -837,6 +888,13 @@ class PostgreSQLHealthcareService:
                 context=event_data.get('context', {})
             )
             
+            # FIX: Remove numpy arrays from context before JSON serialization
+            context_data = event_data.get('context', {}).copy()
+            if 'frame' in context_data:
+                del context_data['frame']  # Remove frame (numpy ndarray) to avoid JSON serialization error
+            if 'original_frame' in context_data:
+                del context_data['original_frame']
+            
             # Prepare record with validated values
             record = {
                 'event_id': str(uuid.uuid4()),
@@ -847,13 +905,13 @@ class PostgreSQLHealthcareService:
                 'event_description': vietnamese_description,  # Use Vietnamese description
                 'detection_data': json.dumps(event_data.get('detection_data', {})),
                 'ai_analysis_result': json.dumps(event_data.get('ai_analysis', {})),
-                'confidence_score': float(event_data.get('confidence', 0.0)),
+                'confidence_score': str(event_data.get('confidence', 0.0)),  # FIX: Convert to string for DB
                 'bounding_boxes': json.dumps(event_data.get('bounding_boxes', [])),
                 'status': self._determine_event_status(
                     event_data.get('confidence', 0.0),
                     event_data.get('event_type', '')
                 ),
-                'context_data': json.dumps(event_data.get('context', {})),
+                'context_data': json.dumps(context_data),  # FIX: Use cleaned context without frames,
                 'detected_at': datetime.now(timezone.utc),
                 'created_at': datetime.now(timezone.utc),
                 # Required fields with NOT NULL constraint
@@ -863,55 +921,76 @@ class PostgreSQLHealthcareService:
                 'escalation_count': 0,  # No escalations yet
                 'is_canceled': False,  # Not canceled
                 'notification_attempts': 0,  # Will be incremented when notification sent
-                'reliability_score': float(reliability_score)  # Độ nguy hiểm (0.0 - 1.0)
+                'reliability_score': str(reliability_score)  # FIX: Convert to string for DB
             }
             
-            with conn.cursor() as cursor:
-                insert_sql = """
-                INSERT INTO event_detections (
-                    event_id, user_id, camera_id, snapshot_id,
-                    event_type, event_description, detection_data, ai_analysis_result,
-                    confidence_score, bounding_boxes, status, context_data,
-                    detected_at, created_at,
-                    lifecycle_state, confirmation_state, verification_status,
-                    escalation_count, is_canceled, notification_attempts,
-                    reliability_score
-                ) VALUES (
-                    %(event_id)s, %(user_id)s, %(camera_id)s, %(snapshot_id)s,
-                    %(event_type)s, %(event_description)s, %(detection_data)s, %(ai_analysis_result)s,
-                    %(confidence_score)s, %(bounding_boxes)s, %(status)s, %(context_data)s,
-                    %(detected_at)s, %(created_at)s,
-                    %(lifecycle_state)s, %(confirmation_state)s, %(verification_status)s,
-                    %(escalation_count)s, %(is_canceled)s, %(notification_attempts)s,
-                    %(reliability_score)s
-                ) RETURNING *
-                """
-                
-                cursor.execute(insert_sql, record)
-                result = cursor.fetchone()
-                conn.commit()
-                
-                if result:
-                    logger.info(f"✅ Event detection published: {record['event_type']} with confidence {record['confidence_score']}")
-                    print(f"💾 ✅ DATABASE SAVE SUCCESS!")
-                    print(f"   Event ID: {record['event_id']}")
-                    print(f"   Event Type: {record['event_type']}")
-                    print(f"   Status: {record['status']}")
-                    print(f"   Confidence: {record['confidence_score']:.2%}")
-                    print(f"   🎯 Reliability (Độ nguy hiểm): {record['reliability_score']:.2%}")
-                    print(f"   Description: {record['event_description'][:100]}...")
-                    return dict(result)
-                else:
-                    logger.error("❌ Failed to publish event detection")
-                    print(f"❌ DATABASE SAVE FAILED - No result returned")
-                    return None
+            # Get NEW connection for INSERT (previous conn may be closed by helper functions)
+            insert_conn = self.get_connection()
+            if not insert_conn:
+                logger.error("Could not get database connection for INSERT")
+                return None
+            
+            try:
+                with insert_conn.cursor() as cursor:
+                    insert_sql = """
+                    INSERT INTO event_detections (
+                        event_id, user_id, camera_id, snapshot_id,
+                        event_type, event_description, detection_data, ai_analysis_result,
+                        confidence_score, bounding_boxes, status, context_data,
+                        detected_at, created_at,
+                        lifecycle_state, confirmation_state, verification_status,
+                        escalation_count, is_canceled, notification_attempts,
+                        reliability_score
+                    ) VALUES (
+                        %(event_id)s, %(user_id)s, %(camera_id)s, %(snapshot_id)s,
+                        %(event_type)s, %(event_description)s, %(detection_data)s, %(ai_analysis_result)s,
+                        %(confidence_score)s, %(bounding_boxes)s, %(status)s, %(context_data)s,
+                        %(detected_at)s, %(created_at)s,
+                        %(lifecycle_state)s, %(confirmation_state)s, %(verification_status)s,
+                        %(escalation_count)s, %(is_canceled)s, %(notification_attempts)s,
+                        %(reliability_score)s
+                    ) RETURNING *
+                    """
+                    
+                    cursor.execute(insert_sql, record)
+                    result = cursor.fetchone()
+                    insert_conn.commit()
+                    
+                    if result:
+                        logger.info(f"✅ Event detection published: {record['event_type']} with confidence {record['confidence_score']}")
+                        print(f"💾 ✅ DATABASE SAVE SUCCESS!")
+                        print(f"   Event ID: {record['event_id']}")
+                        print(f"   Event Type: {record['event_type']}")
+                        print(f"   Status: {record['status']}")
+                        print(f"   Confidence: {record['confidence_score']}")
+                        print(f"   🎯 Reliability (Độ nguy hiểm): {record['reliability_score']}")
+                        print(f"   Description: {record['event_description'][:100]}...")
+                        
+                        self.return_connection(insert_conn)
+                        # DON'T return conn - it was already returned by helper functions
+                        return dict(result)
+                    else:
+                        logger.error("❌ Failed to publish event detection")
+                        print(f"❌ DATABASE SAVE FAILED - No result returned")
+                        self.return_connection(insert_conn)
+                        # DON'T return conn - it was already returned by helper functions
+                        return None
+                        
+            except Exception as insert_error:
+                logger.error(f"Error during INSERT: {insert_error}")
+                import traceback
+                traceback.print_exc()
+                insert_conn.rollback()
+                self.return_connection(insert_conn)
+                # DON'T return conn - it was already returned by helper functions
+                return None
                     
         except Exception as e:
             logger.error(f"Error publishing event detection: {e}")
-            conn.rollback()
+            import traceback
+            traceback.print_exc()
+            # DON'T rollback or return conn - it was already handled by helper functions
             return None
-        finally:
-            self.return_connection(conn)
     
     def publish_alert(self, alert_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Insert alert into event_detections table instead of alerts"""

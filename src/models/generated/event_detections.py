@@ -51,7 +51,7 @@ class EventDetections(Base):
     pending_since = Column(DateTime)
     verification_status = Column(String(9), nullable=False)
     notification_attempts = Column(Integer, nullable=False)
-    lifecycle_state = Column(String(15), nullable=False)
+    lifecycle_state = Column(String(27), nullable=False)
     reliability_score = Column(String)
 
     def __repr__(self):

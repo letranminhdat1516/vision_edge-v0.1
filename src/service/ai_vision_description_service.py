@@ -259,17 +259,32 @@ class ProfessionalVietnameseCaptionPipeline:
         
         return result
     
-    def enhance_medical_context(self, base_caption, image_path):
-        """Add medical context based on detection results"""
+    def enhance_medical_context(self, base_caption, image_path, event_type=None):
+        """
+        Add medical context based on event_type or detection results
+        
+        Args:
+            base_caption: Base Vietnamese caption
+            image_path: Path to image file
+            event_type: Actual event type ('fall', 'seizure', 'abnormal_behavior', etc.)
+        """
         filename = Path(image_path).name.lower()
         
         medical_additions = []
         
-        # Detect emergency type
-        if 'fall' in filename:
-            medical_additions.append("⚠️ Cảnh báo: Phát hiện ngã đổ")
-        elif 'seizure' in filename:
-            medical_additions.append("🚨 Cảnh báo: Phát hiện co giật")
+        # Detect emergency type - prioritize event_type parameter over filename
+        if event_type:
+            # Use actual event_type (most reliable source)
+            if event_type == 'fall':
+                medical_additions.append("⚠️ Cảnh báo: Phát hiện ngã đổ")
+            elif event_type in ['seizure', 'abnormal_behavior']:
+                medical_additions.append("🚨 Cảnh báo: Phát hiện co giật")
+        else:
+            # Fallback to filename detection (less reliable)
+            if 'fall' in filename:
+                medical_additions.append("⚠️ Cảnh báo: Phát hiện ngã đổ")
+            elif 'seizure' in filename:
+                medical_additions.append("🚨 Cảnh báo: Phát hiện co giật")
         
         # Extract confidence (REMOVED - to avoid duplicate confidence display)
         # if 'conf_' in filename:
@@ -287,8 +302,14 @@ class ProfessionalVietnameseCaptionPipeline:
         
         return base_caption
     
-    def generate_professional_caption(self, image_path):
-        """Generate professional Vietnamese caption"""
+    def generate_professional_caption(self, image_path, event_type=None):
+        """
+        Generate professional Vietnamese caption
+        
+        Args:
+            image_path: Path to image file
+            event_type: Optional event type for accurate medical context ('fall', 'seizure', etc.)
+        """
         metadata = {
             "pipeline_steps": [],
             "success": False,
@@ -308,8 +329,8 @@ class ProfessionalVietnameseCaptionPipeline:
                 metadata["pipeline_steps"].append(f"Translation: {translation_method}")
                 metadata["vietnamese_base"] = vietnamese_caption
                 
-                # Step 3: Enhance with medical context
-                final_caption = self.enhance_medical_context(vietnamese_caption, image_path)
+                # Step 3: Enhance with medical context (pass event_type for accuracy)
+                final_caption = self.enhance_medical_context(vietnamese_caption, image_path, event_type)
                 metadata["final_caption"] = final_caption
                 metadata["success"] = True
                 

@@ -81,16 +81,20 @@ class AdvancedHealthcarePipeline:
             'seizure_detection_time': 0.0,
             'total_detection_time': 0.0
         }
+        
+        # FIX: Initialize frame tracking for motion calculation
+        self._prev_frame = None
+        self._current_frame = None
 
     def process_frame(self, frame):
         """Process frame với skip frame logic và keyframe detection như file mẫu"""
         # Cập nhật total frames
         self.stats['total_frames'] += 1
         
-        # Lưu frame trước và hiện tại để tính motion  
-        prev_frame = getattr(self, '_prev_frame', None)
-        self._current_frame = frame.copy()  # Store current frame for motion calc
-        self._prev_frame = frame.copy()
+        # FIX: Lưu frame trước và hiện tại ĐÚNG để tính motion
+        # _current_frame là frame hiện tại
+        self._current_frame = frame.copy()
+        # Không set _prev_frame ở đây! Nó được set ở cuối hàm
 
         # SKIP FRAME LOGIC - chỉ xử lý keyframe quan trọng
         processing_result = self.video_processor.process_frame(frame)
@@ -99,6 +103,10 @@ class AdvancedHealthcarePipeline:
         if not processing_result['processed']:
             normal_window = self.create_normal_camera_window(frame, [])
             ai_window = frame.copy()
+            
+            # FIX: Vẫn cần update _prev_frame ngay cả khi skip
+            self._prev_frame = self._current_frame
+            
             return {
                 "normal_window": normal_window, 
                 "ai_window": ai_window,
@@ -125,6 +133,9 @@ class AdvancedHealthcarePipeline:
         normal_window = self.create_normal_camera_window(frame, persons)
         ai_window = frame.copy()
 
+        # FIX: Update _prev_frame SAU KHI xử lý xong frame hiện tại
+        self._prev_frame = self._current_frame
+
         return {
             "normal_window": normal_window,
             "ai_window": ai_window,
@@ -143,10 +154,16 @@ class AdvancedHealthcarePipeline:
             'keypoints': None, 'emergency_type': None
         }
         
+        # DEBUG: Log person detection count
+        if self.stats['total_frames'] % 60 == 0:  # Every 2 seconds
+            print(f"👥 Person Detections: {len(person_detections)} detected")
+        
         if not person_detections:
             # Reset confirmation frames when no person detected
             self.detection_history['fall_confirmation_frames'] = 0
             self.detection_history['seizure_confirmation_frames'] = 0
+            if self.stats['total_frames'] % 60 == 0:
+                print(f"⚠️ No person detected - skipping fall/seizure detection")
             return result
             
         # Calculate motion level for enhanced detection
@@ -170,57 +187,186 @@ class AdvancedHealthcarePipeline:
         # Fall detection with improvements và COOLDOWN LOGIC
         fall_start = time.time()
         
-        # COOLDOWN: Prevent fall detection spam - INCREASED
+        # COOLDOWN: Prevent fall detection spam - 10 GIÂY
         current_time = time.time()
+        FALL_COOLDOWN = 10.0  # 10 giây giữa các fall detection - CHỈ 1 EVENT tại 1 thời điểm!
         if (self.stats['last_fall_time'] and 
-            current_time - self.stats['last_fall_time'] < 8.0):  # Tăng lên 8s để giảm spam
+            current_time - self.stats['last_fall_time'] < FALL_COOLDOWN):
+            if self.stats['total_frames'] % 30 == 0:
+                time_left = FALL_COOLDOWN - (current_time - self.stats['last_fall_time'])
+                print(f"⏱️ Fall detection in COOLDOWN: {time_left:.1f}s remaining")
             result['fall_confidence'] = 0.0  # Force reset để tránh spam
-        else:
-            try:
-                fall_result = self.fall_detector.detect_fall(frame, primary_person)
-                base_fall_confidence = fall_result['confidence']
+            return result  # 🔥 RETURN IMMEDIATELY - skip all fall detection logic during cooldown!
+        
+        # 🔥 UPDATE last_fall_time IMMEDIATELY after passing cooldown check
+        # This prevents race condition where multiple frames pass cooldown at same time
+        self.stats['last_fall_time'] = current_time
+        
+        # Now proceed with fall detection
+        # DEBUG: Check if fall detector exists (disabled)
+        # if self.stats['total_frames'] % 60 == 0:
+        #     print(f"🔍 Fall Detector Status: {'Available' if self.fall_detector else 'NULL'}")
+        
+        try:
+            # FIXED: Pass correct parameters - frame, timestamp, and person_bbox
+            fall_result = self.fall_detector.detect_fall(
+                frame=frame,
+                timestamp=current_time,
+                person_bbox=person_bbox
+            )
+            base_fall_confidence = fall_result['confidence']
+            fall_method = fall_result.get('method', 'unknown')
+            
+            # Debug: Log fall detection attempt - ENABLED để debug
+            if self.stats['total_frames'] % 30 == 0:  # Every 1 second
+                print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}, Threshold=0.20, Method={fall_method}")
+            
+            # FALL DETECTION THRESHOLD: GIẢM MẠNH để té ngã là ưu tiên cao nhất!
+            # Giảm từ 0.30 → 0.20 (20%) để SIÊU NHẠY với té ngã
+            if base_fall_confidence >= 0.20:  # SIÊU NHẠY: chỉ cần 20% confidence!
+                result['fall_detected'] = True
+                result['fall_confidence'] = base_fall_confidence
+                self.stats['fall_detections'] += 1
+                # last_fall_time already updated above to prevent race condition!
+                print(f"🚨🚨🚨 TÉ NGÃ PHÁT HIỆN! 🚨🚨🚨")
+                print(f"📊 Confidence: {base_fall_confidence:.2f} | Motion: {motion_level:.2f}")
+                print(f"📊 Method: {fall_method} | Alert Level: CRITICAL")
+                print(f"🏥 Emergency Type: FALL (TÉ NGÃ)")
                 
-                # Debug: Log fall detection attempt (disabled to reduce noise)
-                # if self.stats['total_frames'] % 300 == 0:  # Every 10 seconds (disabled)
-                #     print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}")
+                # 🔥 CREATE EVENT FIRST (to get event_id for snapshots)
+                from datetime import datetime
+                import uuid
                 
-                # HIGH THRESHOLD: Prevent false positives
-                if base_fall_confidence >= 0.7:  # Tăng lên 0.7 để giảm false positive
+                event_id = None
+                try:
+                        bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
+                        event_data = {
+                            'event_type': 'fall',
+                            'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence',
+                            'detection_data': {
+                                'algorithm': 'yolo_fall_detection',
+                                'model_version': 'v1.0',
+                                'detection_timestamp': datetime.now().isoformat(),
+                                'severity': 'high',
+                                'method': fall_method,
+                                'motion_level': motion_level
+                            },
+                            'confidence': base_fall_confidence,
+                            'bounding_boxes': bounding_boxes,
+                            'context': {
+                                'motion_level': motion_level,
+                                'detection_type': 'direct',
+                                'person_bbox': person_bbox,
+                                'method': fall_method
+                            },
+                            'camera_id': self.camera_id,
+                            'user_id': self.user_id
+                        }
+                        
+                        # Publish event to get event_id
+                        event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
+                        event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+                        print(f"✅ Fall event created: {event_id}")
+                except Exception as e:
+                    print(f"❌ Failed to create fall event: {e}")
+                    event_id = str(uuid.uuid4())
+                
+                # Capture 5 snapshots directly from RTSP (no lag!) with event_id
+                snapshot_ids = self.capture_5_snapshots_from_rtsp(
+                    event_type='fall',
+                    confidence=base_fall_confidence,
+                    event_id=event_id,  # 🔥 Pass event_id to link snapshots
+                    metadata={
+                        'motion_level': motion_level,
+                        'detection_type': 'direct',
+                        'person_bbox': person_bbox,
+                        'method': fall_method
+                    }
+                )
+                
+                # Use first snapshot ID for legacy compatibility
+                snapshot_id = snapshot_ids[0] if snapshot_ids else None
+                if snapshot_ids:
+                    print(f"📸 {len(snapshot_ids)} Fall images saved to MinIO!")
+                
+                # Send notification (dispatcher won't create duplicate event now)
+                try:
+                    context_data = {
+                        'motion_level': motion_level,
+                        'detection_type': 'direct',
+                        'processing_time': time.time() - fall_start,
+                        'frame_number': self.stats['total_frames'],
+                        'snapshot_id': snapshot_id,
+                        'event_id': event_id,  # 🔥 Pass event_id to skip duplicate creation
+                        'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence'
+                    }
+                    
+                    response = self.event_publisher.publish_fall_detection(
+                        confidence=base_fall_confidence,
+                        bounding_boxes=bounding_boxes,
+                        context=context_data
+                    )
+                    
+                    if response.get('alert_created'):
+                        print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
+                    else:
+                        print(f"📵 Fall alert skipped: Lower priority than existing alerts")
+                        
+                except Exception as e:
+                    print(f"Error publishing fall detection: {e}")
+                    
+            else:
+                # Apply motion enhancement and smoothing for lower confidence cases
+                enhanced_fall_confidence = self.enhance_detection_with_motion(base_fall_confidence, motion_level, 'fall')
+                smoothed_fall_confidence = self.smooth_detection_confidence(enhanced_fall_confidence, 'fall')
+                
+                # BALANCED THRESHOLD: Reduce false positives while keeping sensitivity
+                fall_threshold = 0.4  # Tăng từ 0.1 lên 0.4 để giảm false positive
+                if smoothed_fall_confidence > fall_threshold:
+                    self.detection_history['fall_confirmation_frames'] += 1
+                else:
+                    self.detection_history['fall_confirmation_frames'] = max(0, self.detection_history['fall_confirmation_frames'] - 1)
+                
+                # REQUIRE MORE FRAMES: More confirmation frames to reduce spam
+                min_confirmation_frames = 3  # Giảm xuống 3 để nhanh hơn
+                if self.detection_history['fall_confirmation_frames'] >= min_confirmation_frames:
                     result['fall_detected'] = True
-                    result['fall_confidence'] = base_fall_confidence
+                    result['fall_confidence'] = smoothed_fall_confidence
                     self.stats['fall_detections'] += 1
-                    self.stats['last_fall_time'] = time.time()
-                    print(f"🚨 FALL DETECTED! Confidence: {base_fall_confidence:.2f} | Motion: {motion_level:.2f} | Direct Detection")
-                    print(f"📊 Alert Level: HIGH | Emergency Type: Fall")
+                    # last_fall_time already updated above at cooldown check!
+                    print(f"🚨 FALL DETECTED! Confidence: {smoothed_fall_confidence:.2f} | Motion: {motion_level:.2f} | Frames: {self.detection_history['fall_confirmation_frames']}")
+                    print(f"📊 Alert Level: HIGH | Emergency Type: Fall | Enhanced Detection")
                     
                     # Save detection snapshot to MinIO
                     snapshot_id = self.save_detection_snapshot(
                         frame=frame,
                         event_type='fall',
-                        confidence=base_fall_confidence,
+                        confidence=smoothed_fall_confidence,
                         metadata={
                             'motion_level': motion_level,
-                            'detection_type': 'direct',
+                            'detection_type': 'confirmation',
+                            'confirmation_frames': self.detection_history['fall_confirmation_frames'],
                             'person_bbox': person_bbox
                         }
                     )
                     if snapshot_id:
-                        print(f"📸 Fall image saved to MinIO: {snapshot_id[:8]}...")
+                        print(f"📸 Fall confirmation image saved: {snapshot_id[:8]}...")
                     
                     # Publish fall detection to Supabase realtime
                     try:
                         bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                         context_data = {
                             'motion_level': motion_level,
-                            'detection_type': 'direct',
+                            'detection_type': 'confirmation',
+                            'confirmation_frames': self.detection_history['fall_confirmation_frames'],
                             'processing_time': time.time() - fall_start,
                             'frame_number': self.stats['total_frames'],
                             'snapshot_id': snapshot_id,
-                            'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence'  # Add description
+                            'description': f'Fall activity detected with {smoothed_fall_confidence:.1%} confidence'  # Add description
                         }
                         
                         response = self.event_publisher.publish_fall_detection(
-                            confidence=base_fall_confidence,
+                            confidence=smoothed_fall_confidence,
                             bounding_boxes=bounding_boxes,
                             context=context_data
                         )
@@ -234,74 +380,10 @@ class AdvancedHealthcarePipeline:
                         print(f"Error publishing fall detection: {e}")
                         
                 else:
-                    # Apply motion enhancement and smoothing for lower confidence cases
-                    enhanced_fall_confidence = self.enhance_detection_with_motion(base_fall_confidence, motion_level, 'fall')
-                    smoothed_fall_confidence = self.smooth_detection_confidence(enhanced_fall_confidence, 'fall')
+                    result['fall_confidence'] = smoothed_fall_confidence
                     
-                    # BALANCED THRESHOLD: Reduce false positives while keeping sensitivity
-                    fall_threshold = 0.4  # Tăng từ 0.1 lên 0.4 để giảm false positive
-                    if smoothed_fall_confidence > fall_threshold:
-                        self.detection_history['fall_confirmation_frames'] += 1
-                    else:
-                        self.detection_history['fall_confirmation_frames'] = max(0, self.detection_history['fall_confirmation_frames'] - 1)
-                    
-                    # REQUIRE MORE FRAMES: More confirmation frames to reduce spam
-                    min_confirmation_frames = 4  # Tăng từ 2 lên 4 để chắc chắn hơn
-                    if self.detection_history['fall_confirmation_frames'] >= min_confirmation_frames:
-                        result['fall_detected'] = True
-                        result['fall_confidence'] = smoothed_fall_confidence
-                        self.stats['fall_detections'] += 1
-                        self.stats['last_fall_time'] = time.time()
-                        print(f"🚨 FALL DETECTED! Confidence: {smoothed_fall_confidence:.2f} | Motion: {motion_level:.2f} | Frames: {self.detection_history['fall_confirmation_frames']}")
-                        print(f"📊 Alert Level: HIGH | Emergency Type: Fall | Enhanced Detection")
-                        
-                        # Save detection snapshot to MinIO
-                        snapshot_id = self.save_detection_snapshot(
-                            frame=frame,
-                            event_type='fall',
-                            confidence=smoothed_fall_confidence,
-                            metadata={
-                                'motion_level': motion_level,
-                                'detection_type': 'confirmation',
-                                'confirmation_frames': self.detection_history['fall_confirmation_frames'],
-                                'person_bbox': person_bbox
-                            }
-                        )
-                        if snapshot_id:
-                            print(f"📸 Fall confirmation image saved: {snapshot_id[:8]}...")
-                        
-                        # Publish fall detection to Supabase realtime
-                        try:
-                            bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
-                            context_data = {
-                                'motion_level': motion_level,
-                                'detection_type': 'confirmation',
-                                'confirmation_frames': self.detection_history['fall_confirmation_frames'],
-                                'processing_time': time.time() - fall_start,
-                                'frame_number': self.stats['total_frames'],
-                                'snapshot_id': snapshot_id,
-                                'description': f'Fall activity detected with {smoothed_fall_confidence:.1%} confidence'  # Add description
-                            }
-                            
-                            response = self.event_publisher.publish_fall_detection(
-                                confidence=smoothed_fall_confidence,
-                                bounding_boxes=bounding_boxes,
-                                context=context_data
-                            )
-                            
-                            if response.get('alert_created'):
-                                print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
-                            else:
-                                print(f"📵 Fall alert skipped: Lower priority than existing alerts")
-                                
-                        except Exception as e:
-                            print(f"Error publishing fall detection: {e}")
-                            
-                    else:
-                        result['fall_confidence'] = smoothed_fall_confidence
-                        
-            except Exception as e:
-                print(f"Fall detection error: {str(e)}")
+        except Exception as e:
+            print(f"Fall detection error: {str(e)}")
             
         self.performance['fall_detection_time'] = time.time() - fall_start
         
@@ -342,9 +424,9 @@ class AdvancedHealthcarePipeline:
                     if self.stats['total_frames'] % 30 == 0:  # Every 1 second instead of 2 seconds
                         print(f"🔍 Seizure Debug: Base={base_seizure_confidence:.3f}, Final={final_seizure_confidence:.3f}, Motion={motion_level:.3f}, Temporal={seizure_result.get('temporal_ready', False)}")
                     
-                    # EXTREMELY SENSITIVE: Super low thresholds for easy detection
-                    seizure_threshold = 0.02   # Cực thấp để dễ detect
-                    warning_threshold = 0.01  # Cực thấp để có cảnh báo
+                    # BALANCED: Thresholds cân bằng để giảm false positive
+                    seizure_threshold = 0.60   # CRITICAL: Tăng từ 0.5 lên 0.60 - chắc chắn hơn
+                    warning_threshold = 0.40   # WARNING: Giảm từ 0.5 xuống 0.40 - tạo vùng warning
                     
                     if final_seizure_confidence > seizure_threshold:
                         self.detection_history['seizure_confirmation_frames'] += 1
@@ -358,13 +440,18 @@ class AdvancedHealthcarePipeline:
                         # Reset to 0 when below warning threshold
                         self.detection_history['seizure_confirmation_frames'] = 0
                     
-                    # MORE SENSITIVE: Fewer confirmation frames needed
-                    min_seizure_confirmation = 1  # Chỉ cần 1 frame để confirm - siêu nhạy
+                    # BALANCED: Cần nhiều frames hơn để confirm
+                    min_seizure_confirmation = 3  # Tăng từ 1 lên 3 frames - chắc chắn hơn
                     if self.detection_history['seizure_confirmation_frames'] >= min_seizure_confirmation:
-                        # COOLDOWN CHECK: Shorter cooldown for testing  
+                        # COOLDOWN CHECK: 10 GIÂY giữa các seizure detection
                         current_time = time.time()
+                        SEIZURE_COOLDOWN = 30.0  # 30 giây cooldown - TĂNG từ 10s để tránh spam alarm!
                         if (self.stats['last_seizure_time'] is None or 
-                            current_time - self.stats['last_seizure_time'] > 0.5):  # Chỉ 0.5 giây cooldown - rất nhạy
+                            current_time - self.stats['last_seizure_time'] > SEIZURE_COOLDOWN):
+                            if self.stats['total_frames'] % 30 == 0 and self.stats['last_seizure_time']:
+                                time_left = SEIZURE_COOLDOWN - (current_time - self.stats['last_seizure_time'])
+                                if time_left > 0:
+                                    print(f"⏱️ Seizure detection in COOLDOWN: {time_left:.1f}s remaining")
                             result['seizure_detected'] = True
                             result['seizure_confidence'] = final_seizure_confidence
                             self.stats['seizure_detections'] += 1
@@ -372,11 +459,51 @@ class AdvancedHealthcarePipeline:
                             print(f"🚨 SEIZURE DETECTED! Confidence: {final_seizure_confidence:.2f} | Motion: {motion_level:.2f} | Frames: {self.detection_history['seizure_confirmation_frames']}")
                             print(f"📊 Alert Level: CRITICAL | Emergency Type: Seizure")
                             
-                            # Save detection snapshot to MinIO
-                            snapshot_id = self.save_detection_snapshot(
-                                frame=frame,
+                            # 🔥 CREATE EVENT FIRST (to get event_id for snapshots)
+                            from datetime import datetime
+                            import uuid
+                            
+                            event_id = None
+                            try:
+                                bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
+                                event_data = {
+                                    'event_type': 'abnormal_behavior',
+                                    'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence',
+                                    'detection_data': {
+                                        'algorithm': 'seizure_detection',
+                                        'behavior_type': 'seizure',
+                                        'model_version': 'v1.0',
+                                        'detection_timestamp': datetime.now().isoformat(),
+                                        'severity': 'high',
+                                        'motion_level': motion_level,
+                                        'confirmation_frames': self.detection_history['seizure_confirmation_frames']
+                                    },
+                                    'confidence': final_seizure_confidence,
+                                    'bounding_boxes': bounding_boxes,
+                                    'context': {
+                                        'motion_level': motion_level,
+                                        'detection_type': 'confirmation',
+                                        'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
+                                        'temporal_ready': seizure_result.get('temporal_ready', False),
+                                        'person_bbox': person_bbox
+                                    },
+                                    'camera_id': self.camera_id,
+                                    'user_id': self.user_id
+                                }
+                                
+                                # Publish event to get event_id
+                                event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
+                                event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+                                print(f"✅ Seizure event created: {event_id}")
+                            except Exception as e:
+                                print(f"❌ Failed to create seizure event: {e}")
+                                event_id = str(uuid.uuid4())
+                            
+                            # Capture 5 snapshots directly from RTSP (no lag!) with event_id
+                            snapshot_ids = self.capture_5_snapshots_from_rtsp(
                                 event_type='seizure',
                                 confidence=final_seizure_confidence,
+                                event_id=event_id,  # 🔥 Pass event_id to link snapshots
                                 metadata={
                                     'motion_level': motion_level,
                                     'detection_type': 'confirmation',
@@ -386,12 +513,14 @@ class AdvancedHealthcarePipeline:
                                     'keypoints': seizure_result.get('keypoints')
                                 }
                             )
-                            if snapshot_id:
-                                print(f"📸 Seizure image saved to MinIO: {snapshot_id[:8]}...")
                             
-                            # Publish seizure detection to Supabase realtime
+                            # Use first snapshot ID for legacy compatibility
+                            snapshot_id = snapshot_ids[0] if snapshot_ids else None
+                            if snapshot_ids:
+                                print(f"📸 {len(snapshot_ids)} Seizure images saved to MinIO!")
+                            
+                            # Send notification (dispatcher won't create duplicate event now)
                             try:
-                                bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                                 context_data = {
                                     'motion_level': motion_level,
                                     'detection_type': 'confirmation',
@@ -400,6 +529,7 @@ class AdvancedHealthcarePipeline:
                                     'processing_time': time.time() - seizure_time_start,
                                     'frame_number': self.stats['total_frames'],
                                     'snapshot_id': snapshot_id,
+                                    'event_id': event_id,  # 🔥 Pass event_id to skip duplicate creation
                                     'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence'  # Add description
                                 }
                                 
@@ -420,8 +550,13 @@ class AdvancedHealthcarePipeline:
                             # RESET confirmation frames after detection
                             self.detection_history['seizure_confirmation_frames'] = 0
                         else:
-                            # Still in cooldown period
+                            # Still in cooldown period - log once per second
+                            if self.stats['total_frames'] % 30 == 0:
+                                time_left = SEIZURE_COOLDOWN - (current_time - self.stats['last_seizure_time'])
+                                print(f"⏱️ Seizure detection in COOLDOWN: {time_left:.1f}s remaining")
                             result['seizure_confidence'] = final_seizure_confidence
+                            # Reset confirmation frames khi trong cooldown
+                            self.detection_history['seizure_confirmation_frames'] = 0
                     elif final_seizure_confidence > warning_threshold and motion_level > 0.2:  # Giảm motion threshold
                         result['seizure_confidence'] = final_seizure_confidence
                         self.stats['seizure_warnings'] += 1
@@ -438,8 +573,22 @@ class AdvancedHealthcarePipeline:
                 
         self.performance['seizure_detection_time'] = time.time() - seizure_time_start
         
-        # Enhanced alert level determination - BALANCED APPROACH
-        if result['seizure_detected']:
+        # Enhanced alert level determination - CONFIDENCE-BASED PRIORITY
+        # Nếu cả fall và seizure cùng detected, ưu tiên cái có confidence cao hơn
+        if result['seizure_detected'] and result['fall_detected']:
+            # Cả 2 đều detected - so sánh confidence
+            if result['seizure_confidence'] > result['fall_confidence']:
+                result['alert_level'] = 'critical'
+                result['emergency_type'] = 'seizure'
+                self.stats['critical_alerts'] += 1
+                self.save_alert_image(frame, 'seizure_detected', result['seizure_confidence'])
+                print(f"⚖️ Both detected, seizure wins ({result['seizure_confidence']:.2f} > {result['fall_confidence']:.2f})")
+            else:
+                result['alert_level'] = 'high'
+                result['emergency_type'] = 'fall'
+                self.save_alert_image(frame, 'fall_detected', result['fall_confidence'])
+                print(f"⚖️ Both detected, fall wins ({result['fall_confidence']:.2f} > {result['seizure_confidence']:.2f})")
+        elif result['seizure_detected']:
             result['alert_level'] = 'critical'
             result['emergency_type'] = 'seizure'
             self.stats['critical_alerts'] += 1
@@ -477,7 +626,11 @@ class AdvancedHealthcarePipeline:
         if hasattr(self, '_prev_frame') and self._prev_frame is not None:
             current_frame = getattr(self, '_current_frame', None)
             if current_frame is not None:
-                return self.calculate_motion_level(self._prev_frame, current_frame)
+                motion = self.calculate_motion_level(self._prev_frame, current_frame)
+                # DEBUG: Log motion calculation (disabled to reduce noise)
+                # if self.stats['total_frames'] % 30 == 0:
+                #     print(f"🎯 Motion Calculation: {motion:.3f}")
+                return motion
         
         # Fallback: use motion variance if no frame data
         if not self.detection_history['motion_levels'] or len(self.detection_history['motion_levels']) < 2:
@@ -850,6 +1003,87 @@ class AdvancedHealthcarePipeline:
                 
         except Exception as e:
             print(f"❌ Emergency Event Logging Error: {e}")
+
+    def capture_5_snapshots_from_rtsp(self, event_type, confidence, event_id=None, metadata=None):
+        """
+        Capture 5 snapshots directly from RTSP stream (no processing lag)
+        Giãn cách đều trong khoảng 2 giây (mỗi 0.5s chụp 1 ảnh)
+        
+        Args:
+            event_type: Type of detection (fall, seizure, etc.)
+            confidence: Detection confidence
+            event_id: Event ID to link snapshots to (optional)
+            metadata: Additional metadata
+            
+        Returns:
+            list of snapshot IDs
+        """
+        if not self.camera_id or not self.user_id:
+            print(f"⚠️ Cannot save snapshots - missing camera_id or user_id")
+            return []
+        
+        snapshot_ids = []
+        rtsp_url = getattr(self.camera, 'rtsp_url', None)
+        
+        if not rtsp_url:
+            print(f"⚠️ No RTSP URL available for camera")
+            return []
+        
+        print(f"📸 Capturing 5 snapshots from RTSP for {event_type}...")
+        
+        try:
+            # Open RTSP stream directly
+            cap = cv2.VideoCapture(rtsp_url)
+            
+            if not cap.isOpened():
+                print(f"❌ Failed to open RTSP stream: {rtsp_url}")
+                return []
+            
+            # Capture 5 frames with 0.5s delay between each
+            for i in range(5):
+                ret, frame = cap.read()
+                
+                if not ret or frame is None:
+                    print(f"⚠️ Failed to capture frame {i+1}/5")
+                    continue
+                
+                # Save to MinIO with sequential numbering
+                if self.snapshot_service:
+                    snapshot_metadata = {
+                        'detection_time': datetime.now().isoformat(),
+                        'sequence_number': i + 1,  # 1-5
+                        'total_snapshots': 5,
+                        **(metadata or {})
+                    }
+                    
+                    # Add event_id if provided
+                    if event_id:
+                        snapshot_metadata['event_id'] = event_id
+                    
+                    snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
+                        camera_id=self.camera_id,
+                        user_id=self.user_id,
+                        event_type=event_type,
+                        confidence=confidence,
+                        frame=frame,
+                        metadata=snapshot_metadata
+                    )
+                    
+                    if snapshot_id:
+                        snapshot_ids.append(snapshot_id)
+                        print(f"✅ Snapshot {i+1}/5 saved: {snapshot_id[:8]}...")
+                
+                # Delay 0.5s before next capture (except last frame)
+                if i < 4:
+                    time.sleep(0.5)
+            
+            cap.release()
+            print(f"📸 Captured {len(snapshot_ids)}/5 snapshots successfully!")
+            
+        except Exception as e:
+            print(f"❌ Error capturing RTSP snapshots: {e}")
+        
+        return snapshot_ids
 
     def save_detection_snapshot(self, frame, event_type, confidence, metadata=None):
         """

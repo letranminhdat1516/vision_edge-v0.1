@@ -13,6 +13,108 @@ from datetime import datetime
 Base = declarative_base()
 
 
+class PatientSleepCheckins(Base):
+    __tablename__ = 'patient_sleep_checkins'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    state = Column(String(100), nullable=False)
+    meta = Column(String)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    habit_id = Column(UUID(as_uuid=True))
+    medical_history_id = Column(UUID(as_uuid=True))
+    supplement_id = Column(UUID(as_uuid=True))
+    checkin_at = Column(DateTime, nullable=False)
+
+
+class PatientHabits(Base):
+    __tablename__ = 'patient_habits'
+    
+    habit_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    habit_type = Column(String(10), nullable=False)
+    habit_name = Column(String(200), nullable=False)
+    description = Column(Text)
+    frequency = Column(String(6), nullable=False)
+    days_of_week = Column(String)
+    location = Column(String(100))
+    notes = Column(Text)
+    is_active = Column(Boolean, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    supplement_id = Column(UUID(as_uuid=True))
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    sleep_start = Column(String)
+    sleep_end = Column(String)
+
+
+class PatientSupplements(Base):
+    __tablename__ = 'patient_supplements'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    name = Column(Text)
+    dob = Column(String)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    customer_id = Column(UUID(as_uuid=True))
+    call_confirmed_until = Column(DateTime)
+    height_cm = Column(Integer)
+    weight_kg = Column(String)
+    doctors = Column(String)
+
+
+class Users(Base):
+    __tablename__ = 'users'
+    
+    user_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    username = Column(String(50), nullable=False)
+    email = Column(String(100), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(100), nullable=False)
+    role = Column(String(9), nullable=False)
+    date_of_birth = Column(String)
+    phone_number = Column(String(20))
+    is_active = Column(Boolean, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    otp_code = Column(Text)
+    otp_expires_at = Column(DateTime)
+    default_payment_method_id = Column(UUID(as_uuid=True))
+
+
+class PatientMedicalRecords(Base):
+    __tablename__ = 'patient_medical_records'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    history = Column(String, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    supplement_id = Column(UUID(as_uuid=True))
+    name = Column(String(200))
+    notes = Column(Text)
+
+
+class Suggestions(Base):
+    __tablename__ = 'suggestions'
+    
+    suggestion_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    user_id = Column(UUID(as_uuid=True))
+    resource_type = Column(String(100))
+    resource_id = Column(String(100))
+    type = Column(String(50))
+    message = Column(Text)
+    skip_until = Column(DateTime)
+    skip_scope = Column(String(4))
+    skip_type = Column(String(50))
+    skip_reason = Column(Text)
+    last_notified_at = Column(DateTime)
+    next_notify_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime)
+    meta = Column(String)
+    status = Column(String(8), nullable=False)
+    title = Column(String(255))
+
+
 class EmailTemplates(Base):
     __tablename__ = 'email_templates'
     
@@ -83,25 +185,6 @@ class Payments(Base):
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
     status_enum = Column(String(10))
-
-
-class Users(Base):
-    __tablename__ = 'users'
-    
-    user_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    username = Column(String(50), nullable=False)
-    email = Column(String(100), nullable=False)
-    password_hash = Column(String(255), nullable=False)
-    full_name = Column(String(100), nullable=False)
-    role = Column(String(9), nullable=False)
-    date_of_birth = Column(String)
-    phone_number = Column(String(20))
-    is_active = Column(Boolean, nullable=False)
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
-    otp_code = Column(Text)
-    otp_expires_at = Column(DateTime)
-    default_payment_method_id = Column(UUID(as_uuid=True))
 
 
 class Plans(Base):
@@ -297,23 +380,6 @@ class EmergencyContacts(Base):
     is_deleted = Column(Boolean, nullable=False)
 
 
-class CaregiverInvitations(Base):
-    __tablename__ = 'caregiver_invitations'
-    
-    assignment_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    caregiver_id = Column(UUID(as_uuid=True), nullable=False)
-    customer_id = Column(UUID(as_uuid=True), nullable=False)
-    assigned_at = Column(DateTime, nullable=False)
-    unassigned_at = Column(DateTime)
-    is_active = Column(Boolean, nullable=False)
-    assigned_by = Column(UUID(as_uuid=True))
-    assignment_notes = Column(Text)
-    responded_at = Column(DateTime)
-    expires_at = Column(DateTime)
-    response_reason = Column(String(255))
-    status = Column(String(9), nullable=False)
-
-
 class EventDetections(Base):
     __tablename__ = 'event_detections'
     
@@ -353,8 +419,25 @@ class EventDetections(Base):
     pending_since = Column(DateTime)
     verification_status = Column(String(9), nullable=False)
     notification_attempts = Column(Integer, nullable=False)
-    lifecycle_state = Column(String(15), nullable=False)
+    lifecycle_state = Column(String(27), nullable=False)
     reliability_score = Column(String)
+
+
+class CaregiverInvitations(Base):
+    __tablename__ = 'caregiver_invitations'
+    
+    assignment_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
+    caregiver_id = Column(UUID(as_uuid=True), nullable=False)
+    customer_id = Column(UUID(as_uuid=True), nullable=False)
+    assigned_at = Column(DateTime, nullable=False)
+    unassigned_at = Column(DateTime)
+    is_active = Column(Boolean, nullable=False)
+    assigned_by = Column(UUID(as_uuid=True))
+    assignment_notes = Column(Text)
+    responded_at = Column(DateTime)
+    expires_at = Column(DateTime)
+    response_reason = Column(String(255))
+    status = Column(String(9), nullable=False)
 
 
 class Notifications(Base):
@@ -379,51 +462,7 @@ class Notifications(Base):
     resolved_at = Column(DateTime)
     channel = Column(String(7), nullable=False)
     business_type = Column(String(20))
-
-
-class PatientHabits(Base):
-    __tablename__ = 'patient_habits'
-    
-    habit_id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    habit_type = Column(String(10), nullable=False)
-    habit_name = Column(String(200), nullable=False)
-    description = Column(Text)
-    frequency = Column(String(6), nullable=False)
-    days_of_week = Column(String)
-    location = Column(String(100))
-    notes = Column(Text)
-    is_active = Column(Boolean, nullable=False)
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
-    supplement_id = Column(UUID(as_uuid=True))
-    user_id = Column(UUID(as_uuid=True), nullable=False)
-    sleep_start = Column(String)
-    sleep_end = Column(String)
-
-
-class PatientSupplements(Base):
-    __tablename__ = 'patient_supplements'
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    name = Column(Text)
-    dob = Column(String)
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
-    customer_id = Column(UUID(as_uuid=True))
-    call_confirmed_until = Column(DateTime)
-    height_cm = Column(Integer)
-    weight_kg = Column(String)
-
-
-class PatientMedicalRecords(Base):
-    __tablename__ = 'patient_medical_records'
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, nullable=False)
-    history = Column(String, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
-    supplement_id = Column(UUID(as_uuid=True))
-    name = Column(String(200))
-    notes = Column(Text)
+    priority = Column(String(50))
 
 
 class Permissions(Base):

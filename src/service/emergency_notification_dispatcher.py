@@ -360,30 +360,35 @@ class HealthcareEventPublisher:
             # Determine if alert should be created and get severity
             should_create_alert, severity = self._should_create_alert(confidence, 'fall', final_user_id)
             
+            # ❌ DISABLED: Event creation moved to advanced_healthcare_pipeline.py with cooldown + 5 snapshots
             # Always create event detection (for audit trail)
-            event_data = {
-                'event_type': 'fall',
-                'description': context.get('description') if context and context.get('description') else f'Fall detected with {confidence:.1%} confidence',
-                'detection_data': {
-                    'algorithm': 'yolo_fall_detection',
-                    'model_version': 'v1.0',
-                    'detection_timestamp': current_time.isoformat(),
-                    'severity': severity
-                },
-                'confidence': confidence,
-                'bounding_boxes': bounding_boxes,
-                'context': context or {},
-                'camera_id': final_camera_id,
-                'room_id': final_room_id,
-                'user_id': final_user_id
-            }
+            # event_data = {
+            #     'event_type': 'fall',
+            #     'description': context.get('description') if context and context.get('description') else f'Fall detected with {confidence:.1%} confidence',
+            #     'detection_data': {
+            #         'algorithm': 'yolo_fall_detection',
+            #         'model_version': 'v1.0',
+            #         'detection_timestamp': current_time.isoformat(),
+            #         'severity': severity
+            #     },
+            #     'confidence': confidence,
+            #     'bounding_boxes': bounding_boxes,
+            #     'context': context or {},
+            #     'camera_id': final_camera_id,
+            #     'room_id': final_room_id,
+            #     'user_id': final_user_id,
+            #     'frame': context.get('frame') if context else None  # 📸 Extract frame from context
+            # }
             
             # Publish event to database
-            if hasattr(self.postgresql_service, 'publish_event_detection'):
-                event_result = self.postgresql_service.publish_event_detection(event_data)
-                event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
-            else:
-                event_id = str(uuid.uuid4())  # Fallback for mock mode
+            # if hasattr(self.postgresql_service, 'publish_event_detection'):
+            #     event_result = self.postgresql_service.publish_event_detection(event_data)
+            #     event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+            # else:
+            #     event_id = str(uuid.uuid4())  # Fallback for mock mode
+            
+            # Use event_id from context (pipeline already created event with cooldown check)
+            event_id = context.get('event_id') if context and context.get('event_id') else str(uuid.uuid4())
             
             # Create mobile response format
             mobile_status = self._map_status_for_mobile(severity)
@@ -407,33 +412,35 @@ class HealthcareEventPublisher:
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
             response['event_id'] = event_id  # Add event_id to response
             
+            # ❌ DISABLED: Alert/Event creation now handled by advanced_healthcare_pipeline.py
+            # Dispatcher only handles notifications, not event creation
             # Create alert only if priority check passed
-            if should_create_alert:
-                try:
-                    if hasattr(self.postgresql_service, 'publish_alert'):
-                        # Use same message generator as event_description for consistency
-                        same_action_message = self.postgresql_service._generate_event_description(
-                            'fall', confidence, alert_image_path or '', ''
-                        )
-                        alert_data = {
-                            'event_id': event_id,
-                            'user_id': final_user_id,
-                            'alert_type': 'emergency',
-                            'severity': severity,
-                            'message': same_action_message,
-                            'alert_data': {
-                                'confidence': float(confidence),
-                                'bounding_boxes': bounding_boxes,
-                                'detection_type': context.get('detection_type', 'direct') if context else 'direct'
-                            }
-                        }
-                        self.postgresql_service.publish_alert(alert_data)
-                except Exception as e:
-                    logger.warning(f"Fall alert publication failed: {e}")
+            # if should_create_alert:
+            #     try:
+            #         if hasattr(self.postgresql_service, 'publish_alert'):
+            #             # Use same message generator as event_description for consistency
+            #             same_action_message = self.postgresql_service._generate_event_description(
+            #                 'fall', confidence, alert_image_path or '', ''
+            #             )
+            #             alert_data = {
+            #                 'event_id': event_id,
+            #                 'user_id': final_user_id,
+            #                 'alert_type': 'emergency',
+            #                 'severity': severity,
+            #                 'message': same_action_message,
+            #                 'alert_data': {
+            #                     'confidence': float(confidence),
+            #                     'bounding_boxes': bounding_boxes,
+            #                     'detection_type': context.get('detection_type', 'direct') if context else 'direct'
+            #                 }
+            #             }
+            #             self.postgresql_service.publish_alert(alert_data)
+            #     except Exception as e:
+            #         logger.warning(f"Fall alert publication failed: {e}")
             
             # Send mobile notification based on conditions (removed since Supabase Realtime handles this)
             fall_threshold_config = config_loader.get_detection_thresholds('fall')
-            notification_threshold = fall_threshold_config.get('notification_threshold', 0.70)
+            notification_threshold = fall_threshold_config.get('notification_threshold', 0.45)
             
             should_notify = (
                 should_create_alert or  # Alert was created
@@ -481,31 +488,36 @@ class HealthcareEventPublisher:
             # Determine if alert should be created and get severity
             should_create_alert, severity = self._should_create_alert(confidence, 'seizure', final_user_id)
                 
+            # ❌ DISABLED: Event creation moved to advanced_healthcare_pipeline.py with cooldown + 5 snapshots
             # Always create event detection (for audit trail)
-            event_data = {
-                'event_type': 'abnormal_behavior',
-                'description': context.get('description') if context and context.get('description') else f'Seizure activity detected with {confidence:.1%} confidence',
-                'detection_data': {
-                    'algorithm': 'seizure_detection',
-                    'behavior_type': 'seizure',
-                    'model_version': 'v1.0',
-                    'detection_timestamp': current_time.isoformat(),
-                    'severity': severity
-                },
-                'confidence': confidence,
-                'bounding_boxes': bounding_boxes,
-                'context': context or {},
-                'camera_id': final_camera_id,
-                'room_id': final_room_id,
-                'user_id': final_user_id
-            }
+            # event_data = {
+            #     'event_type': 'abnormal_behavior',
+            #     'description': context.get('description') if context and context.get('description') else f'Seizure activity detected with {confidence:.1%} confidence',
+            #     'detection_data': {
+            #         'algorithm': 'seizure_detection',
+            #         'behavior_type': 'seizure',
+            #         'model_version': 'v1.0',
+            #         'detection_timestamp': current_time.isoformat(),
+            #         'severity': severity
+            #     },
+            #     'confidence': confidence,
+            #     'bounding_boxes': bounding_boxes,
+            #     'context': context or {},
+            #     'camera_id': final_camera_id,
+            #     'room_id': final_room_id,
+            #     'user_id': final_user_id,
+            #     'frame': context.get('frame') if context else None  # 📸 Extract frame from context
+            # }
             
             # Publish event to database
-            if hasattr(self.postgresql_service, 'publish_event_detection'):
-                event_result = self.postgresql_service.publish_event_detection(event_data)
-                event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
-            else:
-                event_id = str(uuid.uuid4())  # Fallback for mock mode
+            # if hasattr(self.postgresql_service, 'publish_event_detection'):
+            #     event_result = self.postgresql_service.publish_event_detection(event_data)
+            #     event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+            # else:
+            #     event_id = str(uuid.uuid4())  # Fallback for mock mode
+            
+            # Use event_id from context (pipeline already created event with cooldown check)
+            event_id = context.get('event_id') if context and context.get('event_id') else str(uuid.uuid4())
             
             # Create mobile response format
             mobile_status = self._map_status_for_mobile(severity)
@@ -529,25 +541,27 @@ class HealthcareEventPublisher:
             response['priority_level'] = self._calculate_priority_level(severity, 'active')
             response['event_id'] = event_id  # Add event_id to response for seizure
             
+            # ❌ DISABLED: Alert/Event creation now handled by advanced_healthcare_pipeline.py
+            # Dispatcher only handles notifications, not event creation
             # Create alert only if priority check passed
-            if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):
-                # Use same message generator as event_description for consistency
-                same_action_message = self.postgresql_service._generate_event_description(
-                    'seizure', confidence, alert_image_path or '', ''
-                )
-                alert_data = {
-                    'event_id': event_id,
-                    'user_id': final_user_id,
-                    'alert_type': 'abnormal_behavior',  # Use valid enum value
-                    'severity': severity,
-                    'message': same_action_message,
-                    'alert_data': {
-                        'confidence': float(confidence),  # Ensure JSON serializable
-                        'bounding_boxes': bounding_boxes,
-                        'detection_type': context.get('detection_type', 'confirmation') if context else 'confirmation'
-                    }
-                }
-                self.postgresql_service.publish_alert(alert_data)
+            # if should_create_alert and hasattr(self.postgresql_service, 'publish_alert'):
+            #     # Use same message generator as event_description for consistency
+            #     same_action_message = self.postgresql_service._generate_event_description(
+            #         'seizure', confidence, alert_image_path or '', ''
+            #     )
+            #     alert_data = {
+            #         'event_id': event_id,
+            #         'user_id': final_user_id,
+            #         'alert_type': 'abnormal_behavior',  # Use valid enum value
+            #         'severity': severity,
+            #         'message': same_action_message,
+            #         'alert_data': {
+            #             'confidence': float(confidence),  # Ensure JSON serializable
+            #             'bounding_boxes': bounding_boxes,
+            #             'detection_type': context.get('detection_type', 'confirmation') if context else 'confirmation'
+            #         }
+            #     }
+            #     self.postgresql_service.publish_alert(alert_data)
             
             # Send mobile notification based on conditions (removed since Supabase Realtime handles this)
             seizure_threshold_config = config_loader.get_detection_thresholds('seizure')

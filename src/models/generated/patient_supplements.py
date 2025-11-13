@@ -24,6 +24,7 @@ class PatientSupplements(Base):
     call_confirmed_until = Column(DateTime)
     height_cm = Column(Integer)
     weight_kg = Column(String)
+    doctors = Column(String)
 
     def __repr__(self):
         return f"<PatientSupplements(id={self.id})>"

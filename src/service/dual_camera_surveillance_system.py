@@ -210,7 +210,7 @@ class SameRoomDualDetection:
                 max_confidence = max(max_confidence, event_confidence)
             
             # Enhanced seizure detection with dual camera confidence
-            if fused_result.max_seizure_confidence > 0.20:  # Lower threshold for dual camera
+            if fused_result.max_seizure_confidence > 0.5:  # Lower threshold for dual camera
                 event_confidence = fused_result.max_seizure_confidence
                 
                 # Boost confidence if consensus is high

@@ -108,10 +108,12 @@ class MinIOService:
                         }
                     )
                     
-                    # Generate cloud URL using public domain
-                    cloud_url = f"https://nas.cicca.dpdns.org/cdn-image/{object_name}"
+                    # Generate cloud URL - MinIO format: http://endpoint/bucket/object
+                    protocol = 'https' if self.secure else 'http'
+                    cloud_url = f"{protocol}://{self.endpoint}/{self.bucket_name}/{object_name}"
                     
-                    logger.info(f"Successfully uploaded image to MinIO: {object_name}")
+                    logger.info(f"✅ Successfully uploaded image to MinIO: {object_name}")
+                    logger.info(f"📎 Cloud URL: {cloud_url}")
                     return object_name, cloud_url, file_size
                     
                 except Exception as upload_error:

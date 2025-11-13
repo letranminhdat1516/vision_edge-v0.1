@@ -233,7 +233,14 @@ if __name__ == "__main__":
             individual_video_processor = VideoProcessingService(processor_config)
             individual_fall_detector = FallDetectionService()
             individual_seizure_detector = SeizureDetectionService()
-            individual_seizure_predictor = SeizurePredictor(temporal_window=3, alert_threshold=0.01, warning_threshold=0.005)  # Siêu nhạy cảm!
+            # SEIZURE PREDICTOR: Giảm nhạy co giật
+            # alert_threshold: Ngưỡng để báo động (0.70 = 70% confidence)
+            # warning_threshold: Ngưỡng cảnh báo (0.55 = 55% confidence)
+            individual_seizure_predictor = SeizurePredictor(
+                temporal_window=3, 
+                alert_threshold=0.70,      # Tăng từ 0.01 → 0.70 (giảm nhạy)
+                warning_threshold=0.55     # Tăng từ 0.005 → 0.55
+            )
             
             # Initialize individual Healthcare Pipeline
             print(f"🔧 Initializing Healthcare Pipeline with camera_id: {cam['id']}, user_id: {user_id}")
@@ -327,6 +334,13 @@ if __name__ == "__main__":
                     detection_result = result["detection_result"]
                     person_detections = result["person_detections"]
                     
+                    # ✅ STOP ALARM if detect >= 2 people (safety check)
+                    num_people = len(person_detections) if person_detections else 0
+                    if num_people >= 2 and audio_alert_service.is_playing:
+                        print(f"👥 Detected {num_people} people - STOPPING ALARM (safety check)")
+                        import asyncio
+                        asyncio.run(audio_alert_service.stop_alarm())
+                    
                     # Debug logging removed for cleaner output
                     
                     # Generate intelligent action when alert detected
@@ -335,61 +349,10 @@ if __name__ == "__main__":
                         confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
                         print(f"🚨 EMERGENCY ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
                         
-                        # 💾 SAVE EVENT TO DATABASE
-                        try:
-                            print(f"💾 Saving event to database for {cam_data['name']}...")
-                            
-                            # Determine event_type and status
-                            event_type = "abnormal_behavior" if "seizure" in emergency_type else "fall"
-                            status = "danger" if detection_result.get('alert_level') == 'critical' else "warning"
-                            
-                            # Get bounding boxes from detection result
-                            bounding_boxes = detection_result.get('bounding_boxes', [])
-                            if not bounding_boxes and person_detections:
-                                # Fallback to person detections
-                                bounding_boxes = [{
-                                    'x': int(p.get('bbox', [0, 0, 0, 0])[0]),
-                                    'y': int(p.get('bbox', [0, 0, 0, 0])[1]),
-                                    'width': int(p.get('bbox', [0, 0, 0, 0])[2] - p.get('bbox', [0, 0, 0, 0])[0]),
-                                    'height': int(p.get('bbox', [0, 0, 0, 0])[3] - p.get('bbox', [0, 0, 0, 0])[1]),
-                                    'confidence': float(p.get('confidence', confidence)),
-                                    'class': 'person'
-                                } for p in person_detections[:3]]  # Max 3 persons
-                            
-                            # Publish event using pipeline's event publisher
-                            if event_type == 'fall':
-                                alert_result = cam_data['pipeline'].event_publisher.publish_fall_detection(
-                                    confidence=confidence,
-                                    bounding_boxes=bounding_boxes,
-                                    context={
-                                        'description': f"{emergency_type.upper()} detected in {cam_data['name']}",
-                                        'alert_level': detection_result.get('alert_level'),
-                                        'camera_name': cam_data['name']
-                                    }
-                                )
-                            else:  # abnormal_behavior (seizure)
-                                alert_result = cam_data['pipeline'].event_publisher.publish_seizure_detection(
-                                    confidence=confidence,
-                                    bounding_boxes=bounding_boxes,
-                                    context={
-                                        'description': f"{emergency_type.upper()} detected in {cam_data['name']}",
-                                        'alert_level': detection_result.get('alert_level'),
-                                        'camera_name': cam_data['name']
-                                    }
-                                )
-                            
-                            if alert_result and alert_result.get('success'):
-                                print(f"   ✅ Event saved to database!")
-                                print(f"   🆔 Event ID: {alert_result.get('event_id', 'N/A')}")
-                                print(f"   📊 Status: {status}")
-                                print(f"   📹 Camera: {cam_data['name']}")
-                            else:
-                                print(f"   ⚠️ Event save failed: {alert_result.get('error', 'Unknown error') if alert_result else 'No response'}")
-                                
-                        except Exception as db_error:
-                            print(f"   ❌ Database save error: {db_error}")
-                            import traceback
-                            traceback.print_exc()
+                        # ✅ Event creation is now handled by advanced_healthcare_pipeline.py
+                        # with cooldown logic + 5-snapshot RTSP capture. No need to duplicate here.
+                        # Pipeline already created event, captured 5 snapshots, and sent notifications.
+                        print(f"✅ Event already handled by pipeline with cooldown + 5 snapshots")
                     
                     # Debug warning level alerts too
                     elif detection_result.get('alert_level') == 'warning':
@@ -600,6 +563,13 @@ if __name__ == "__main__":
         result = pipeline.process_frame(frame)
         detection_result = result["detection_result"]
         person_detections = result["person_detections"]
+        
+        # ✅ STOP ALARM if detect >= 2 people (safety check)
+        num_people = len(person_detections) if person_detections else 0
+        if num_people >= 2 and audio_alert_service.is_playing:
+            print(f"👥 Detected {num_people} people - STOPPING ALARM (safety check)")
+            import asyncio
+            asyncio.run(audio_alert_service.stop_alarm())
         
         # Generate intelligent action when alert detected
         if detection_result.get('alert_level') in ['critical', 'high']:

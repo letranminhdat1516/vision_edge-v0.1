@@ -206,7 +206,7 @@ class AudioAlertService:
                 self.is_playing = True
                 self.current_sound = sound
                 
-                # Schedule auto-stop
+                # Schedule auto-stop after 10 seconds
                 import asyncio
                 asyncio.create_task(self._auto_stop_after_duration())
             
@@ -222,7 +222,7 @@ class AudioAlertService:
                 play_thread = threading.Thread(target=play_loop, daemon=True)
                 play_thread.start()
                 
-                # Schedule auto-stop
+                # Schedule auto-stop after 10 seconds
                 import asyncio
                 asyncio.create_task(self._auto_stop_after_duration())
             

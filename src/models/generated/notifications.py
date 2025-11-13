@@ -34,6 +34,7 @@ class Notifications(Base):
     resolved_at = Column(DateTime)
     channel = Column(String(7), nullable=False)
     business_type = Column(String(20))
+    priority = Column(String(50))
 
     def __repr__(self):
         return f"<Notifications(id={self.id})>"
