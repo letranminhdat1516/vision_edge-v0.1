@@ -15,7 +15,7 @@ class SimpleFallDetector:
     Uses lightweight approach without AI models.
     """
     
-    def __init__(self, confidence_threshold=0.3):  # Giảm từ 0.7 xuống 0.4 để nhạy hơn
+    def __init__(self, confidence_threshold=0.20):  # Tăng từ 0.15 lên 0.20 - ít nhạy hơn
         """
         Initialize simplified fall detector.
         
@@ -25,9 +25,9 @@ class SimpleFallDetector:
         self.confidence_threshold = confidence_threshold
         self.previous_frame = None
         self.previous_timestamp = None
-        self.min_time_interval = 0.8  # Giảm từ 1.0 xuống 0.8 giây để nhạy hơn
+        self.min_time_interval = 0.15  # Tăng từ 0.1 lên 0.15 giây (4-5 frames @ 30fps) - ít nhạy hơn
         self.frame_buffer = []
-        self.max_buffer_size = 3
+        self.max_buffer_size = 8  # Tăng buffer để phân tích tốt hơn
         
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
@@ -238,9 +238,9 @@ class SimpleFallDetector:
             
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
-            if vertical_movement > 30 and center2_y > center1_y:  # Moving down significantly
-                downward_confidence = min(0.9, 0.4 + (vertical_movement / 100))
-                if downward_confidence >= 0.30:  # Easy threshold
+            if vertical_movement > 40 and center2_y > center1_y:  # Tăng từ 30 lên 40px - ít nhạy hơn
+                downward_confidence = min(0.9, 0.35 + (vertical_movement / 120))  # Giảm confidence base
+                if downward_confidence >= 0.35:  # Tăng threshold từ 0.30 lên 0.35
                     log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, confidence={downward_confidence:.3f}")
                     return {
                         'fall_detected': True,
@@ -251,11 +251,11 @@ class SimpleFallDetector:
                     }
             
             # STRATEGY 1: Dynamic Fall Detection - Person transitioning from standing to lying
-            if (aspect_change > 1.3 and  # Giảm từ 1.5 xuống 1.3 để nhạy hơn
-                vertical_movement > 15 and  # Giảm từ 20 xuống 15 để nhạy hơn
+            if (aspect_change > 1.4 and  # Tăng từ 1.3 lên 1.4 - ít nhạy hơn
+                vertical_movement > 20 and  # Tăng từ 15 lên 20 - ít nhạy hơn
                 center2_y > center1_y):  # Moving downward
                 
-                confidence = min(0.9, 0.5 + (aspect_change - 1.5) * 0.3 + min(vertical_movement / 100, 0.4))
+                confidence = min(0.9, 0.45 + (aspect_change - 1.5) * 0.3 + min(vertical_movement / 100, 0.4))
                 
                 if confidence >= self.confidence_threshold:
                     log.info(f"🚨 DYNAMIC FALL: aspect_change={aspect_change:.2f}, vertical_movement={vertical_movement:.1f}px")
@@ -274,10 +274,10 @@ class SimpleFallDetector:
             frame_bottom = bbox2_arr[3]
             
             # Check if person is in VERY LOW position (likely on floor)
-            is_very_low = frame_bottom > 420  # TĂNG từ 400 → 420: chặt hơn
+            is_very_low = frame_bottom > 430  # TĂNG từ 420 → 430: chặt hơn nữa
             
             # Check if aspect ratio indicates horizontal position
-            is_horizontal = aspect_ratio2 > 1.4  # TĂNG từ 0.85 → 1.4: chỉ detect khi THỰC SỰ nằm ngang!
+            is_horizontal = aspect_ratio2 > 1.5  # TĂNG từ 1.4 → 1.5: chỉ detect khi THỰC SỰ nằm ngang!
             
             # Yêu cầu CẢ HAI điều kiện (AND) để tránh false positive!
             if is_horizontal and is_very_low:

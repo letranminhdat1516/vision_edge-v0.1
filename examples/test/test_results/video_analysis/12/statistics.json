@@ -1,0 +1,18 @@
+{
+  "video_name": "12",
+  "total_frames": 434,
+  "total_people_detected_frames": 220,
+  "max_people_in_frame": 1,
+  "fall_count": 1,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 200,
+      "time": 6.666666666666667,
+      "confidence": 0.7083333333333333,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T06:46:37.824627"
+}

@@ -1,0 +1,66 @@
+{
+  "video_name": "4",
+  "total_frames": 1135,
+  "total_people_detected_frames": 865,
+  "max_people_in_frame": 1,
+  "fall_count": 9,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 10,
+      "time": 0.3333333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 103,
+      "time": 3.433333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 193,
+      "time": 6.433333333333334,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 364,
+      "time": 12.133333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 455,
+      "time": 15.166666666666666,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 557,
+      "time": 18.566666666666666,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 775,
+      "time": 25.833333333333332,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 898,
+      "time": 29.933333333333334,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 989,
+      "time": 32.96666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T09:12:30.589906"
+}

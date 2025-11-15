@@ -39,7 +39,7 @@ class VSViGSeizureDetector:
                  pose_model_path: Optional[str] = None,
                  dynamic_order_path: Optional[str] = None,
                  device: str = 'auto',
-                 confidence_threshold: float = 0.30):  # BALANCED: Tăng từ 0.01 lên 0.30 để giảm false positive
+                 confidence_threshold: float = 0.70):  # STRICT: Tăng từ 0.30 lên 0.70 để giảm false positive
         """
         Initialize VSViG seizure detector
         
@@ -255,7 +255,7 @@ class VSViGSeizureDetector:
                     return result
                 
                 # Normal activity detection - reset seizure state
-                if seizure_confidence < 0.3:  # Very low confidence = normal activity
+                if seizure_confidence < 0.80:  # Tăng từ 0.70→0.80 - confidence thấp = normal activity
                     self.current_seizure_state = False
                     result['status'] = 'normal_activity'
                     result['seizure_detected'] = False
@@ -337,16 +337,16 @@ class VSViGSeizureDetector:
             # Calculate velocity magnitudes
             vel_magnitudes = np.sqrt(np.sum(velocities**2, axis=2))  # (T-1, 15)
             
-            # VERY SENSITIVE THRESHOLDS - detect any irregular movement
+            # STRICT THRESHOLDS - minimize false positives
             # 1. High velocity variance (irregular movement)
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 50.0) if velocity_variance > 20 else 0.0
+            velocity_score = np.tanh(velocity_variance / 50.0) if velocity_variance > 60 else 0.0  # Tăng từ 40→60
             
             # 2. Acceleration peaks  
             accelerations = np.diff(velocities, axis=0)  # (T-2, 15, 2)
             acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))  # (T-2, 15)
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 100.0) if acceleration_peaks > 50 else 0.0
+            acceleration_score = np.tanh(acceleration_peaks / 100.0) if acceleration_peaks > 120 else 0.0  # Tăng từ 80→120
             
             # 3. Frequency analysis - count rapid direction changes
             direction_changes = 0
@@ -355,20 +355,20 @@ class VSViGSeizureDetector:
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 50.0) if direction_changes > 15 else 0.0
+                frequency_score = np.tanh(direction_changes / 50.0) if direction_changes > 35 else 0.0  # Tăng từ 25→35
             else:
                 frequency_score = 0.0
             
             # 4. Overall movement intensity
             total_movement = np.mean(vel_magnitudes)
-            intensity_score = np.tanh(total_movement / 25.0) if total_movement > 10 else 0.0
+            intensity_score = np.tanh(total_movement / 25.0) if total_movement > 30 else 0.0  # Tăng từ 20→30
             
             # 5. Sudden movement spikes (seizure characteristic)
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 40.0) if movement_spikes > 20 else 0.0
+            spike_score = np.tanh(movement_spikes / 40.0) if movement_spikes > 50 else 0.0  # Tăng từ 35→50
             
-            # VERY SENSITIVE: Only need 1 indicator above low threshold
-            sensitive_threshold = 0.15  # Giảm xuống 0.15 để cực kỳ nhạy
+            # VERY STRICT: Require multiple indicators to minimize false positives
+            sensitive_threshold = 0.45  # Tăng từ 0.35→0.45 để giảm false positives
             indicators = [
                 velocity_score > sensitive_threshold,
                 acceleration_score > sensitive_threshold, 
@@ -378,8 +378,8 @@ class VSViGSeizureDetector:
             ]
             
             active_indicators = sum(indicators)
-            if active_indicators < 1:
-                return 0.0  # Need at least 1 indicator
+            if active_indicators < 2:
+                return 0.0  # Need at least 2 indicators (not just 1)
             
             # Weighted combination
             seizure_confidence = (
@@ -396,8 +396,8 @@ class VSViGSeizureDetector:
             if frame_count % 30 == 0:  # Log every 30 frames
                 self.logger.info(f"Seizure Scores - Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Int:{intensity_score:.3f}, Spike:{spike_score:.3f}, Final:{seizure_confidence:.3f}, Active:{active_indicators}")
             
-            # BALANCED: Tăng threshold để giảm false positive
-            if seizure_confidence < 0.30:  # Tăng từ 0.1 lên 0.30
+            # VERY STRICT: Tăng threshold cao để giảm false positives
+            if seizure_confidence < 0.80:  # Tăng từ 0.70→0.80 (80% confidence minimum)
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)

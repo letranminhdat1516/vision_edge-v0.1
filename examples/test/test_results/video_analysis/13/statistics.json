@@ -1,0 +1,138 @@
+{
+  "video_name": "13",
+  "total_frames": 3009,
+  "total_people_detected_frames": 2210,
+  "max_people_in_frame": 1,
+  "fall_count": 21,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 46,
+      "time": 1.5333333333333334,
+      "confidence": 0.7796790320243443,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 189,
+      "time": 6.3,
+      "confidence": 0.7291666666666666,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 295,
+      "time": 9.833333333333334,
+      "confidence": 0.6875,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 539,
+      "time": 17.966666666666665,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 723,
+      "time": 24.1,
+      "confidence": 0.6792398427260813,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 940,
+      "time": 31.333333333333332,
+      "confidence": 0.8666666666666667,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1030,
+      "time": 34.333333333333336,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1121,
+      "time": 37.36666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1212,
+      "time": 40.4,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1316,
+      "time": 43.86666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1614,
+      "time": 53.8,
+      "confidence": 0.7625,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1705,
+      "time": 56.833333333333336,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1806,
+      "time": 60.2,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1897,
+      "time": 63.233333333333334,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1988,
+      "time": 66.26666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 2194,
+      "time": 73.13333333333334,
+      "confidence": 0.7833333333333333,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 2285,
+      "time": 76.16666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 2524,
+      "time": 84.13333333333334,
+      "confidence": 0.8514374436542121,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 2621,
+      "time": 87.36666666666666,
+      "confidence": 0.725,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 2712,
+      "time": 90.4,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 2803,
+      "time": 93.43333333333334,
+      "confidence": 0.8458333333333333,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T06:51:35.875494"
+}

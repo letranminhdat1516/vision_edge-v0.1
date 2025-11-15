@@ -1,0 +1,18 @@
+{
+  "video_name": "19",
+  "total_frames": 687,
+  "total_people_detected_frames": 528,
+  "max_people_in_frame": 1,
+  "fall_count": 1,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 78,
+      "time": 2.6,
+      "confidence": 0.7747252747252747,
+      "method": "bbox_analysis_static"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T07:01:05.553027"
+}
