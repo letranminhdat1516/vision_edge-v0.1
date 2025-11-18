@@ -238,6 +238,7 @@ class AdvancedHealthcarePipeline:
                 import uuid
                 
                 event_id = None
+                snapshot_id = None
                 try:
                         bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                         event_data = {
@@ -260,34 +261,37 @@ class AdvancedHealthcarePipeline:
                                 'method': fall_method
                             },
                             'camera_id': self.camera_id,
-                            'user_id': self.user_id
+                            'user_id': self.user_id,
+                            # NO frame - snapshot will be created separately
                         }
                         
-                        # Publish event to get event_id
+                        # Publish event to get event_id (without snapshot yet)
                         event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
                         event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                         print(f"✅ Fall event created: {event_id}")
+                        
+                        # Capture 5 snapshots directly from RTSP (no lag!)
+                        snapshot_ids = self.capture_5_snapshots_from_rtsp(
+                            event_type='fall',
+                            confidence=base_fall_confidence,
+                            event_id=event_id,
+                            metadata={
+                                'motion_level': motion_level,
+                                'detection_type': 'direct',
+                                'person_bbox': person_bbox,
+                                'method': fall_method
+                            }
+                        )
+                        
+                        # Update event with snapshot_id
+                        if snapshot_ids and len(snapshot_ids) > 0:
+                            snapshot_id = snapshot_ids[0]
+                            self.event_publisher.postgresql_service.update_event_snapshot(event_id, snapshot_id)
+                            print(f"📸 {len(snapshot_ids)} Fall images saved and linked to event!")
+                        
                 except Exception as e:
                     print(f"❌ Failed to create fall event: {e}")
                     event_id = str(uuid.uuid4())
-                
-                # Capture 5 snapshots directly from RTSP (no lag!) with event_id
-                snapshot_ids = self.capture_5_snapshots_from_rtsp(
-                    event_type='fall',
-                    confidence=base_fall_confidence,
-                    event_id=event_id,  # 🔥 Pass event_id to link snapshots
-                    metadata={
-                        'motion_level': motion_level,
-                        'detection_type': 'direct',
-                        'person_bbox': person_bbox,
-                        'method': fall_method
-                    }
-                )
-                
-                # Use first snapshot ID for legacy compatibility
-                snapshot_id = snapshot_ids[0] if snapshot_ids else None
-                if snapshot_ids:
-                    print(f"📸 {len(snapshot_ids)} Fall images saved to MinIO!")
                 
                 # Send notification (dispatcher won't create duplicate event now)
                 try:
@@ -499,11 +503,11 @@ class AdvancedHealthcarePipeline:
                                 print(f"❌ Failed to create seizure event: {e}")
                                 event_id = str(uuid.uuid4())
                             
-                            # Capture 5 snapshots directly from RTSP (no lag!) with event_id
+                            # Capture 5 snapshots directly from RTSP (no lag!)
                             snapshot_ids = self.capture_5_snapshots_from_rtsp(
                                 event_type='seizure',
                                 confidence=final_seizure_confidence,
-                                event_id=event_id,  # 🔥 Pass event_id to link snapshots
+                                event_id=event_id,
                                 metadata={
                                     'motion_level': motion_level,
                                     'detection_type': 'confirmation',
@@ -514,10 +518,12 @@ class AdvancedHealthcarePipeline:
                                 }
                             )
                             
-                            # Use first snapshot ID for legacy compatibility
-                            snapshot_id = snapshot_ids[0] if snapshot_ids else None
-                            if snapshot_ids:
-                                print(f"📸 {len(snapshot_ids)} Seizure images saved to MinIO!")
+                            # Update event with snapshot_id
+                            snapshot_id = None
+                            if snapshot_ids and len(snapshot_ids) > 0:
+                                snapshot_id = snapshot_ids[0]
+                                self.event_publisher.postgresql_service.update_event_snapshot(event_id, snapshot_id)
+                                print(f"📸 {len(snapshot_ids)} Seizure images saved and linked to event!")
                             
                             # Send notification (dispatcher won't create duplicate event now)
                             try:
@@ -1039,46 +1045,68 @@ class AdvancedHealthcarePipeline:
                 print(f"❌ Failed to open RTSP stream: {rtsp_url}")
                 return []
             
-            # Capture 5 frames with 0.5s delay between each
-            for i in range(5):
-                ret, frame = cap.read()
+            # Create ONE snapshot record for all 5 images
+            main_snapshot_id = None
+            if self.snapshot_service:
+                # Create the main snapshot record first
+                snapshot_metadata = {
+                    'detection_time': datetime.now().isoformat(),
+                    'total_images': 5,
+                    **(metadata or {})
+                }
                 
-                if not ret or frame is None:
-                    print(f"⚠️ Failed to capture frame {i+1}/5")
-                    continue
+                if event_id:
+                    snapshot_metadata['event_id'] = event_id
                 
-                # Save to MinIO with sequential numbering
-                if self.snapshot_service:
-                    snapshot_metadata = {
-                        'detection_time': datetime.now().isoformat(),
-                        'sequence_number': i + 1,  # 1-5
-                        'total_snapshots': 5,
-                        **(metadata or {})
-                    }
-                    
-                    # Add event_id if provided
-                    if event_id:
-                        snapshot_metadata['event_id'] = event_id
-                    
-                    snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
+                # Capture first frame to create snapshot
+                ret, first_frame = cap.read()
+                if ret and first_frame is not None:
+                    main_snapshot_id, first_image_id = self.snapshot_service.create_detection_snapshot(
                         camera_id=self.camera_id,
                         user_id=self.user_id,
                         event_type=event_type,
                         confidence=confidence,
-                        frame=frame,
-                        metadata=snapshot_metadata
+                        frame=first_frame,
+                        metadata={**snapshot_metadata, 'sequence_number': 1}
                     )
-                    
-                    if snapshot_id:
-                        snapshot_ids.append(snapshot_id)
-                        print(f"✅ Snapshot {i+1}/5 saved: {snapshot_id[:8]}...")
-                
-                # Delay 0.5s before next capture (except last frame)
-                if i < 4:
+                    snapshot_ids.append(main_snapshot_id)
+                    print(f"✅ Snapshot created: {main_snapshot_id[:8]}... (Image 1/5)")
                     time.sleep(0.5)
             
+            # Capture remaining 4 frames and add to same snapshot
+            if main_snapshot_id:
+                for i in range(1, 5):  # Images 2-5
+                    ret, frame = cap.read()
+                    
+                    if not ret or frame is None:
+                        print(f"⚠️ Failed to capture frame {i+1}/5")
+                        continue
+                    
+                    # Add image to existing snapshot
+                    try:
+                        image_id = self.snapshot_service.add_image_to_snapshot(
+                            snapshot_id=main_snapshot_id,
+                            frame=frame,
+                            camera_id=self.camera_id,
+                            user_id=self.user_id,
+                            event_type=event_type,
+                            confidence=confidence,
+                            is_primary=False,
+                            metadata={
+                                'sequence_number': i + 1,
+                                'detection_time': datetime.now().isoformat()
+                            }
+                        )
+                        print(f"✅ Image {i+1}/5 added: {image_id[:8]}...")
+                    except Exception as e:
+                        print(f"❌ Failed to add image {i+1}/5: {e}")
+                    
+                    # Delay 0.5s before next capture (except last frame)
+                    if i < 4:
+                        time.sleep(0.5)
+            
             cap.release()
-            print(f"📸 Captured {len(snapshot_ids)}/5 snapshots successfully!")
+            print(f"📸 Captured 1 snapshot with {5 if main_snapshot_id else 0} images successfully!")
             
         except Exception as e:
             print(f"❌ Error capturing RTSP snapshots: {e}")

@@ -187,6 +187,84 @@ class SnapshotService:
         finally:
             db.close()
     
+    def add_image_to_snapshot(
+        self,
+        snapshot_id: str,
+        frame: np.ndarray,
+        camera_id: str,
+        user_id: str,
+        event_type: str,
+        confidence: float,
+        is_primary: bool = False,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Add additional image to existing snapshot (for multi-image snapshots)
+        
+        Args:
+            snapshot_id: Existing snapshot UUID to add image to
+            frame: OpenCV frame to save
+            camera_id: Camera UUID (for MinIO path)
+            user_id: User UUID (for MinIO path)
+            event_type: Type of detection
+            confidence: Detection confidence
+            is_primary: Whether this is primary image
+            metadata: Additional metadata
+        
+        Returns:
+            image_id: UUID of created image
+        """
+        db = self.SessionLocal()
+        try:
+            image_id = str(uuid.uuid4())
+            
+            # Upload image to MinIO
+            if not self.minio_service:
+                raise Exception("MinIO service not available")
+            
+            upload_result = self.minio_service.upload_frame_image(
+                frame=frame,
+                camera_id=camera_id,
+                event_type=event_type,
+                confidence=confidence,
+                user_id=user_id,
+                metadata={
+                    'snapshot_id': snapshot_id,
+                    'image_id': image_id,
+                    'user_id': user_id,
+                    **(metadata or {})
+                }
+            )
+            
+            if upload_result is None:
+                raise Exception("MinIO upload failed")
+            
+            object_name, cloud_url, file_size = upload_result
+            
+            # Create snapshot image record
+            snapshot_image = SnapshotImages(
+                image_id=image_id,
+                snapshot_id=snapshot_id,
+                is_primary=is_primary,
+                image_path=object_name,
+                cloud_url=cloud_url,
+                created_at=datetime.now(),
+                file_size=str(file_size)
+            )
+            
+            db.add(snapshot_image)
+            db.commit()
+            
+            logger.info(f"✅ Image added to snapshot {snapshot_id}: {image_id}")
+            return image_id
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"❌ Error adding image to snapshot: {e}")
+            raise
+        finally:
+            db.close()
+    
     def create_manual_snapshot(
         self,
         camera_id: str,

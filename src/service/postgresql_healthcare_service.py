@@ -539,6 +539,40 @@ class PostgreSQLHealthcareService:
         
         return reliability_score
     
+    def update_event_snapshot(self, event_id: str, snapshot_id: str) -> bool:
+        """
+        Update event with snapshot_id after snapshot is created separately
+        
+        Args:
+            event_id: Event UUID to update
+            snapshot_id: Snapshot UUID to link
+            
+        Returns:
+            bool: True if successful
+        """
+        if not self.is_connected:
+            logger.error("PostgreSQL not connected")
+            return False
+        
+        conn = self.get_connection()
+        if not conn:
+            logger.error("Could not get database connection")
+            return False
+        
+        try:
+            with conn.cursor() as cursor:
+                update_sql = "UPDATE event_detections SET snapshot_id = %s WHERE event_id = %s"
+                cursor.execute(update_sql, (snapshot_id, event_id))
+                conn.commit()
+                logger.info(f"✅ Updated event {event_id} with snapshot {snapshot_id}")
+                return True
+        except Exception as e:
+            logger.error(f"❌ Failed to update event snapshot: {e}")
+            conn.rollback()
+            return False
+        finally:
+            self.return_connection(conn)
+    
     def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
         """
         Generate intelligent action message for event_description field
@@ -567,18 +601,18 @@ class PostgreSQLHealthcareService:
                 # Create intelligent action using test description
                 if event_type in ['abnormal_behavior', 'seizure']:
                     if confidence >= 0.50:
-                        result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                        result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                     elif confidence >= 0.30:
-                        result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {fallback_description} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                        result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {fallback_description} - Cần theo dõi chặt chẽ"
                     else:
-                        result = f"📊 QUAN SÁT: {fallback_description} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                        result = f"📊 QUAN SÁT: {fallback_description} - Tiếp tục theo dõi"
                 elif event_type == 'fall':
                     if confidence >= 0.60:
-                        result = f"🚨 KHẨN CẤP - TÉ NGÃ: {fallback_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                        result = f"🚨 KHẨN CẤP - TÉ NGÃ: {fallback_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
                     elif confidence >= 0.40:
-                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {fallback_description} - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {fallback_description} - Cần theo dõi"
                     else:
-                        result = f"📊 THEO DÕI: {fallback_description} - Quan sát (Tin cậy: {confidence:.0%})"
+                        result = f"📊 THEO DÕI: {fallback_description} - Quan sát"
                 
                 print(f"🎯 RETURNING TEST-BASED ACTION: {result}")
                 return result
@@ -633,28 +667,28 @@ class PostgreSQLHealthcareService:
                             # Create full intelligent action message like in main.py
                             if event_type in ['abnormal_behavior', 'seizure']:
                                 if confidence >= 0.50:
-                                    result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                                    result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                                     logger.info(f"🚨 Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
-                                    result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                                    result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} - Cần theo dõi chặt chẽ"
                                     logger.info(f"⚠️ Generated abnormal action: {result}")
                                     return result
                                 else:
-                                    result = f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                                    result = f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
                                     logger.info(f"📊 Generated observation action: {result}")
                                     return result
                             elif event_type == 'fall':
                                 if confidence >= 0.60:
-                                    result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                                    result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
                                     logger.info(f"🚨 Generated fall emergency action: {result}")
                                     return result
                                 elif confidence >= 0.40:
-                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                                    result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi"
                                     logger.info(f"⚠️ Generated fall warning action: {result}")
                                     return result
                                 else:
-                                    result = f"📊 THEO DỔI: {vietnamese_caption} - Quan sát (Tin cậy: {confidence:.0%})"
+                                    result = f"📊 THEO DỔI: {vietnamese_caption} - Quan sát"
                                     logger.info(f"📊 Generated fall observation action: {result}")
                                     return result
                     else:
@@ -668,23 +702,23 @@ class PostgreSQLHealthcareService:
             logger.info("📋 Using fallback action messages")
             if event_type == 'fall':
                 if confidence >= 0.60:
-                    return f"🚨 KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
+                    return f"🚨 KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
                 elif confidence >= 0.40:
-                    return f"⚠️ CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Cần kiểm tra (Tin cậy: {confidence:.0%})"
+                    return f"⚠️ CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Cần kiểm tra"
                 else:
-                    return f"📊 THEO DÕI: Nghi ngờ té ngã - Quan sát (Tin cậy: {confidence:.0%})"
+                    return f"📊 THEO DÕI: Nghi ngờ té ngã - Quan sát"
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
                 if confidence >= 0.50:
-                    return f"🆘 KHẨN CẤP - BẤT THƯỜNG: Phát hiện hành vi bất thường nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                    return f"🆘 KHẨN CẤP - BẤT THƯỜNG: Phát hiện hành vi bất thường nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                 elif confidence >= 0.30:
-                    return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                    return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ"
                 else:
-                    return f"📊 QUAN SÁT: Nghi ngờ hành vi bất thường - Tiếp tục theo dõi (Tin cậy: {confidence:.0%})"
+                    return f"📊 QUAN SÁT: Nghi ngờ hành vi bất thường - Tiếp tục theo dõi"
                     
             else:
                 # Unknown event type
-                return f"🔍 PHÁT HIỆN: Sự kiện {event_type} - Cần đánh giá (Tin cậy: {confidence:.0%})"
+                return f"🔍 PHÁT HIỆN: Sự kiện {event_type} - Cần đánh giá"
                 
         except Exception as e:
             logger.error(f"❌ Error generating intelligent action: {e}")
@@ -811,9 +845,13 @@ class PostgreSQLHealthcareService:
                     import traceback
                     traceback.print_exc()
             
-            # Fallback: Create snapshot using old method if MinIO upload failed
+            # Use snapshot_id from parameter if provided (means snapshot created separately)
             if not snapshot_id:
-                snapshot_id = event_data.get('snapshot_id') or self._create_default_snapshot(
+                snapshot_id = event_data.get('snapshot_id')
+            
+            # Only create default snapshot if still no snapshot_id (legacy compatibility)
+            if not snapshot_id:
+                snapshot_id = self._create_default_snapshot(
                     camera_id=camera_id,
                     user_id=user_id
                 )
