@@ -166,14 +166,19 @@ class ProfessionalVietnameseCaptionPipeline:
     def _rule_based_translation(self, english_text):
         """Rule-based translation as fallback"""
         translations = {
-            # People - Fixed order for better matching
-            "a woman": "một phụ nữ",
-            "a man": "một người đàn ông", 
-            "a person": "một người",
-            "woman": "phụ nữ",
-            "man": "người đàn ông",
-            "person": "người", 
-            "people": "những người",
+            # People - Dùng "bệnh nhân" cho hệ thống healthcare
+            "two people": "hai người",        # 2 người trở lên
+            "three people": "ba người",       # 3 người
+            "several people": "nhiều người",  # Nhiều người
+            "people": "những người",          # Nhiều người (fallback)
+            
+            "a woman": "bệnh nhân",   # Healthcare context - 1 người
+            "a man": "bệnh nhân",      # Healthcare context - 1 người
+            "a person": "bệnh nhân",
+            "woman": "bệnh nhân",      # Healthcare context
+            "man": "bệnh nhân",        # Healthcare context
+            "person": "bệnh nhân", 
+            
             "child": "đứa trẻ",
             
             # Actions - Fixed order
