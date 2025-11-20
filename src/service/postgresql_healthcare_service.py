@@ -625,9 +625,9 @@ class PostgreSQLHealthcareService:
                 # Create intelligent action using test description
                 if event_type in ['abnormal_behavior', 'seizure']:
                     if confidence >= 0.50:
-                        result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                        result = f"🆘 KHẨN CẤP - CO GIẬT: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                     elif confidence >= 0.30:
-                        result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {fallback_description} - Cần theo dõi chặt chẽ"
+                        result = f"⚠️ CẢNH BÁO CO GIẬT: {fallback_description} - Cần theo dõi chặt chẽ"
                     else:
                         result = f"📊 QUAN SÁT: {fallback_description} - Tiếp tục theo dõi"
                 elif event_type == 'fall':
@@ -665,7 +665,8 @@ class PostgreSQLHealthcareService:
                         vietnamese_result = self.vietnamese_caption.generate_professional_caption(
                             image_file_to_use,
                             event_type=event_type,  # Pass event_type to avoid filename confusion
-                            camera_name=camera_name  # Pass camera name for location context
+                            camera_name=camera_name,  # Pass camera name for location context
+                            confidence=confidence  # Pass confidence to smart caption replacement
                         )
                         vietnamese_caption = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
                         
@@ -675,12 +676,12 @@ class PostgreSQLHealthcareService:
                             # Create full intelligent action message like in main.py
                             if event_type in ['abnormal_behavior', 'seizure']:
                                 if confidence >= 0.50:
-                                    result = f"🆘 KHẨN CẤP - BẤT THƯỜNG: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                    result = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                                     logger.info(f"🚨 Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
-                                    result = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} - Cần theo dõi chặt chẽ"
-                                    logger.info(f"⚠️ Generated abnormal action: {result}")
+                                    result = f"⚠️ CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
+                                    logger.info(f"⚠️ Generated seizure warning action: {result}")
                                     return result
                                 else:
                                     result = f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
@@ -718,11 +719,11 @@ class PostgreSQLHealthcareService:
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
                 if confidence >= 0.50:
-                    return f"🆘 KHẨN CẤP - BẤT THƯỜNG: Phát hiện hành vi bất thường nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                    return f"🆘 KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                 elif confidence >= 0.30:
-                    return f"⚠️ CẢNH BÁO BẤT THƯỜNG: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ"
+                    return f"⚠️ CẢNH BÁO CO GIẬT: Phát hiện co giật - Cần theo dõi chặt chẽ"
                 else:
-                    return f"📊 QUAN SÁT: Nghi ngờ hành vi bất thường - Tiếp tục theo dõi"
+                    return f"📊 QUAN SÁT: Nghi ngờ co giật - Tiếp tục theo dõi"
                     
             else:
                 # Unknown event type
@@ -751,7 +752,7 @@ class PostgreSQLHealthcareService:
                 if event_type == 'fall':
                     return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
                 elif event_type in ['abnormal_behavior', 'seizure']:
-                    return f"Phát hiện hành vi bất thường (tin cậy: {confidence:.0%})"
+                    return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
                 else:
                     return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
             
@@ -778,7 +779,7 @@ class PostgreSQLHealthcareService:
             if event_type == 'fall':
                 return f"Phát hiện té ngã (tin cậy: {confidence:.0%})"
             elif event_type in ['abnormal_behavior', 'seizure']:
-                return f"Phát hiện hành vi bất thường (tin cậy: {confidence:.0%})"
+                return f"Phát hiện co giật (tin cậy: {confidence:.0%})"
             else:
                 return f"Phát hiện sự kiện {event_type} (tin cậy: {confidence:.0%})"
     

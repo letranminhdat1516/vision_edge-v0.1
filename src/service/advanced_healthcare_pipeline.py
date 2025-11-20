@@ -198,9 +198,8 @@ class AdvancedHealthcarePipeline:
             result['fall_confidence'] = 0.0  # Force reset để tránh spam
             return result  # 🔥 RETURN IMMEDIATELY - skip all fall detection logic during cooldown!
         
-        # 🔥 UPDATE last_fall_time IMMEDIATELY after passing cooldown check
-        # This prevents race condition where multiple frames pass cooldown at same time
-        self.stats['last_fall_time'] = current_time
+        # ❌ REMOVED: Don't update last_fall_time here - only update when ACTUALLY detecting a fall!
+        # The old code was causing every frame to trigger cooldown even without fall detection
         
         # Now proceed with fall detection
         # DEBUG: Check if fall detector exists (disabled)
@@ -219,15 +218,18 @@ class AdvancedHealthcarePipeline:
             
             # Debug: Log fall detection attempt - ENABLED để debug
             if self.stats['total_frames'] % 30 == 0:  # Every 1 second
-                print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}, Threshold=0.20, Method={fall_method}")
+                print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}, Threshold=0.28, Method={fall_method}")
             
-            # FALL DETECTION THRESHOLD: GIẢM MẠNH để té ngã là ưu tiên cao nhất!
-            # Giảm từ 0.30 → 0.20 (20%) để SIÊU NHẠY với té ngã
-            if base_fall_confidence >= 0.20:  # SIÊU NHẠY: chỉ cần 20% confidence!
+            # FALL DETECTION THRESHOLD: TĂNG NHẠY để detect fall tốt hơn
+            # Giảm từ 0.35 → 0.28 (28%) để tăng sensitivity, vẫn có motion check
+            # Yêu cầu thêm: motion_level > 0.015 để đảm bảo có chuyển động thực sự
+            has_real_motion = motion_level > 0.015  # Motion thật sự, giảm từ 0.02→0.015 để nhạy hơn
+            if base_fall_confidence >= 0.28 and has_real_motion:  # NHẠY HƠN: 28% + motion check nhẹ hơn
                 result['fall_detected'] = True
                 result['fall_confidence'] = base_fall_confidence
                 self.stats['fall_detections'] += 1
-                # last_fall_time already updated above to prevent race condition!
+                # 🔥 UPDATE last_fall_time NOW when fall is actually detected!
+                self.stats['last_fall_time'] = current_time
                 print(f"🚨🚨🚨 TÉ NGÃ PHÁT HIỆN! 🚨🚨🚨")
                 print(f"📊 Confidence: {base_fall_confidence:.2f} | Motion: {motion_level:.2f}")
                 print(f"📊 Method: {fall_method} | Alert Level: CRITICAL")

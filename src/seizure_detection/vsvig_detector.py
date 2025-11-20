@@ -78,7 +78,7 @@ class VSViGSeizureDetector:
         
         # Seizure detection state management
         self.last_seizure_detection_time = 0  # Timestamp of last seizure
-        self.seizure_cooldown = 15.0  # Tăng lên 15 seconds cooldown
+        self.seizure_cooldown = 45.0  # Tăng lên 45 seconds cooldown - tránh spam
         self.current_seizure_state = False  # Track if currently in seizure
         
         # Components
@@ -213,6 +213,16 @@ class VSViGSeizureDetector:
             
             result['keypoints'] = keypoints
             
+            # Check if person is standing - don't detect seizure if standing
+            is_standing = self._check_if_standing(keypoints)
+            if is_standing:
+                # Person is standing, skip seizure detection
+                result['status'] = 'standing'
+                result['seizure_detected'] = False
+                result['alert_level'] = 'normal'
+                self.stats['total_frames_processed'] += 1
+                return result
+            
             # Add to temporal buffer
             self.frame_buffer.append({
                 'keypoints': keypoints,
@@ -255,7 +265,7 @@ class VSViGSeizureDetector:
                     return result
                 
                 # Normal activity detection - reset seizure state
-                if seizure_confidence < 0.65:  # Giảm: 0.80→0.65 - nhạy hơn để phát hiện co giật
+                if seizure_confidence < 0.80:  # Tăng: 0.75→0.80 - giảm false positive
                     self.current_seizure_state = False
                     result['status'] = 'normal_activity'
                     result['seizure_detected'] = False
@@ -396,8 +406,8 @@ class VSViGSeizureDetector:
             if frame_count % 30 == 0:  # Log every 30 frames
                 self.logger.info(f"Seizure Scores - Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Int:{intensity_score:.3f}, Spike:{spike_score:.3f}, Final:{seizure_confidence:.3f}, Active:{active_indicators}")
             
-            # NHẠY HƠN: Giảm threshold để phát hiện dễ hơn
-            if seizure_confidence < 0.65:  # Giảm: 0.80→0.65 (nhạy hơn nhưng vẫn chắc chắn)
+            # GIẢM FALSE POSITIVE: Tăng threshold để chỉ detect co giật thật
+            if seizure_confidence < 0.80:  # Tăng: 0.75→0.80 - giảm false positive
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)
@@ -531,7 +541,7 @@ class VSViGSeizureDetector:
         return tensor
     
     def _create_empty_result(self) -> Dict:
-        """Create empty detection result"""
+        """Create empty result for error cases"""
         return {
             'seizure_detected': False,
             'confidence': 0.0,
@@ -539,6 +549,53 @@ class VSViGSeizureDetector:
             'temporal_ready': False,
             'alert_level': 'normal'
         }
+    
+    def _check_if_standing(self, keypoints: np.ndarray) -> bool:
+        """Check if person is standing based on keypoints
+        
+        Args:
+            keypoints: Array of shape (15, 3) or (17, 3) with [x, y, confidence]
+            
+        Returns:
+            bool: True if person is standing, False otherwise
+        """
+        try:
+            # Keypoints indices (COCO format)
+            # 0: nose, 5: left_shoulder, 6: right_shoulder
+            # 11: left_hip, 12: right_hip
+            # 13: left_knee, 14: right_knee
+            # 15: left_ankle, 16: right_ankle
+            
+            # Check if we have enough keypoints
+            if len(keypoints) < 15:
+                return False  # Can't determine, assume laying to be safe
+            
+            # Get shoulder, hip, knee positions
+            shoulders_y = (keypoints[5][1] + keypoints[6][1]) / 2  # Average shoulder Y
+            hips_y = (keypoints[11][1] + keypoints[12][1]) / 2  # Average hip Y
+            
+            # Check if ankles/knees are visible
+            knees_visible = keypoints[13][2] > 0.3 and keypoints[14][2] > 0.3
+            
+            if knees_visible:
+                knees_y = (keypoints[13][1] + keypoints[14][1]) / 2
+            else:
+                knees_y = hips_y + 100  # Estimate if not visible
+            
+            # Person is standing if:
+            # 1. Shoulders are ABOVE hips (smaller Y value)
+            # 2. Vertical distance between shoulders and knees is significant
+            vertical_distance = knees_y - shoulders_y
+            
+            # Standing: shoulders much higher than knees (>80px vertical distance)
+            # Laying/Sitting: shoulders close to same level as knees (<50px)
+            is_standing = vertical_distance > 80
+            
+            return is_standing
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to check standing pose: {e}")
+            return False  # Assume laying to be safe
     
     def reset_buffer(self):
         """Reset temporal frame buffer"""

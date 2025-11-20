@@ -264,7 +264,7 @@ class ProfessionalVietnameseCaptionPipeline:
         
         return result
     
-    def enhance_medical_context(self, base_caption, image_path, event_type=None, camera_name=None):
+    def enhance_medical_context(self, base_caption, image_path, event_type=None, camera_name=None, confidence=None):
         """
         Add medical context based on event_type or detection results
         
@@ -273,10 +273,41 @@ class ProfessionalVietnameseCaptionPipeline:
             image_path: Path to image file
             event_type: Actual event type ('fall', 'seizure', 'abnormal_behavior', etc.)
             camera_name: Optional camera name to add location context
+            confidence: Optional confidence score to determine if caption should be modified
         """
         filename = Path(image_path).name.lower()
         
-        # Add or replace location with camera name
+        # 🔥 STEP 1: SMART Caption Replacement based on CONFIDENCE
+        # LOGIC THÔNG MINH:
+        # - Confidence CAO → Event THẬT → Thay đổi caption để phản ánh sự kiện
+        # - Confidence THẤP → False positive → Giữ nguyên pose description từ BLIP
+        #
+        # THRESHOLD:
+        # - Fall: confidence >= 0.60 → Té thật → Thay "ngồi/nằm" thành "ngã"
+        # - Seizure: confidence >= 0.75 → Co giật thật → Thay "ngồi/nằm" thành "co giật"
+        
+        if confidence is not None and event_type:
+            if event_type == 'fall' and confidence >= 0.60:
+                # Confidence cao → Té THẬT → Thay đổi caption
+                base_caption = base_caption.replace("đang ngồi", "đang ngã")
+                base_caption = base_caption.replace("đang nằm", "đang nằm sau khi té")
+                base_caption = base_caption.replace("đang quỳ", "đang ngã")
+                base_caption = base_caption.replace("quỳ gối", "ngã")
+                # Giữ "nằm" nếu đã có "sau khi té", không thay nữa
+                if "sau khi té" not in base_caption:
+                    base_caption = base_caption.replace("nằm trên", "ngã trên")
+                    
+            elif event_type in ['seizure', 'abnormal_behavior'] and confidence >= 0.75:
+                # Confidence cao → Co giật THẬT → Thay đổi caption
+                base_caption = base_caption.replace("đang ngồi", "đang co giật")
+                base_caption = base_caption.replace("đang nằm", "đang co giật")
+                base_caption = base_caption.replace("đang quỳ", "đang co giật")
+                base_caption = base_caption.replace("quỳ gối", "co giật")
+                base_caption = base_caption.replace("ngồi trên", "co giật trên")
+                base_caption = base_caption.replace("nằm trên", "co giật trên")
+            # else: Confidence thấp → GIỮ NGUYÊN caption gốc từ BLIP
+        
+        # STEP 2: Add or replace location with camera name
         if camera_name:
             # Replace existing location phrases
             base_caption = base_caption.replace("trong phòng của mình", f"trong {camera_name}")
@@ -297,7 +328,7 @@ class ProfessionalVietnameseCaptionPipeline:
         
         medical_additions = []
         
-        # Detect emergency type - prioritize event_type parameter over filename
+        # STEP 3: Detect emergency type - prioritize event_type parameter over filename
         if event_type:
             # Use actual event_type (most reliable source)
             if event_type == 'fall':
@@ -327,7 +358,7 @@ class ProfessionalVietnameseCaptionPipeline:
         
         return base_caption
     
-    def generate_professional_caption(self, image_path, event_type=None, camera_name=None):
+    def generate_professional_caption(self, image_path, event_type=None, camera_name=None, confidence=None):
         """
         Generate professional Vietnamese caption
         
@@ -335,6 +366,7 @@ class ProfessionalVietnameseCaptionPipeline:
             image_path: Path to image file
             event_type: Optional event type for accurate medical context ('fall', 'seizure', etc.)
             camera_name: Optional camera name to include in location context
+            confidence: Optional confidence score to determine if caption should be modified
         """
         metadata = {
             "pipeline_steps": [],
@@ -355,8 +387,8 @@ class ProfessionalVietnameseCaptionPipeline:
                 metadata["pipeline_steps"].append(f"Translation: {translation_method}")
                 metadata["vietnamese_base"] = vietnamese_caption
                 
-                # Step 3: Enhance with medical context (pass event_type + camera_name)
-                final_caption = self.enhance_medical_context(vietnamese_caption, image_path, event_type, camera_name)
+                # Step 3: Enhance with medical context (pass event_type + camera_name + confidence)
+                final_caption = self.enhance_medical_context(vietnamese_caption, image_path, event_type, camera_name, confidence)
                 metadata["final_caption"] = final_caption
                 metadata["success"] = True
                 

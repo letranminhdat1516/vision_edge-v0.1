@@ -27,7 +27,7 @@ class SimpleFallDetector:
         self.previous_timestamp = None
         self.min_time_interval = 0.15  # Giảm từ 0.2→0.15s: yêu cầu rơi NHANH trong thời gian ngắn
         self.frame_buffer = []
-        self.max_buffer_size = 3  # Giảm từ 7→5: chỉ giữ 5 frames (0.15s) để detect rapid movement
+        self.max_buffer_size = 5  # Giảm từ 7→5: chỉ giữ 5 frames (0.15s) để detect rapid movement
         
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
@@ -158,9 +158,12 @@ class SimpleFallDetector:
             
         return None
     
-    def _analyze_movement_pattern(self):
+    def _analyze_movement_pattern(self, motion_level=None):
         """
         Analyze movement pattern for fall detection using simplified heuristics.
+        
+        Args:
+            motion_level: Global motion level (0.0-1.0) to filter bbox jitter
         
         Returns:
             dict or None: Fall detection result
@@ -177,7 +180,7 @@ class SimpleFallDetector:
             if (first_frame['bbox'] is not None and 
                 last_frame['bbox'] is not None):
                 
-                return self._analyze_bbox_changes(first_frame['bbox'], last_frame['bbox'])
+                return self._analyze_bbox_changes(first_frame['bbox'], last_frame['bbox'], motion_level)
             
             # Fallback to frame difference analysis
             return self._analyze_frame_difference(first_frame['frame'], last_frame['frame'])
@@ -186,13 +189,14 @@ class SimpleFallDetector:
             log.error(f"Movement analysis error: {e}")
             return None
     
-    def _analyze_bbox_changes(self, bbox1, bbox2):
+    def _analyze_bbox_changes(self, bbox1, bbox2, motion_level=None):
         """
         Analyze bounding box changes to detect falls.
         
         Args:
             bbox1: First bounding box [x1, y1, x2, y2]
             bbox2: Second bounding box [x1, y1, x2, y2]
+            motion_level: Global motion level (0.0-1.0) to filter bbox jitter
             
         Returns:
             dict or None: Fall result
@@ -239,13 +243,14 @@ class SimpleFallDetector:
             
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
-            # TĂNG NGƯỠNG: 120px trong 0.15s = 800px/s (CHỈ DETECT FALL THỰC SỰ, KHÔNG PHẢI ĐI BỘ)
-            if vertical_movement > 120 and center2_y > center1_y:  # TĂNG từ 80→120px: loại bỏ hoàn toàn đi bộ
+            # CÂN BẰNG: 90px trong 0.15s = 600px/s (DETECT TÉ THẬT + FILTER JITTER)
+            if vertical_movement > 90 and center2_y > center1_y:  # 90px: đủ để detect té, không quá cao
                 # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
                 # When person is laying still, bbox can jitter 100-200px due to detection variance
                 # Only allow rapid fall detection if there's actual motion in the scene
-                if motion_level is not None and motion_level < 0.15:
-                    log.debug(f"⚠️ Rejected bbox jitter: vertical_movement={vertical_movement:.1f}px but motion_level={motion_level:.3f} too low")
+                motion_str = f"{motion_level:.3f}" if motion_level is not None else "None"
+                if motion_level is not None and motion_level < 0.05:  # Giảm 0.15→0.05: chỉ reject jitter thực sự
+                    log.debug(f"⚠️ Rejected bbox jitter: vertical_movement={vertical_movement:.1f}px but motion_level={motion_str} too low")
                     return {
                         'fall_detected': False,
                         'confidence': 0.0,
@@ -254,9 +259,9 @@ class SimpleFallDetector:
                         'method': 'bbox_jitter_filtered'
                     }
                 
-                downward_confidence = min(0.9, 0.65 + (vertical_movement / 180))  # Tăng base 0.60→0.65
-                if downward_confidence >= 0.65:  # Tăng threshold từ 0.60→0.65
-                    log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, motion_level={motion_level:.3f}, confidence={downward_confidence:.3f}")
+                downward_confidence = min(0.9, 0.60 + (vertical_movement / 150))  # Base 0.60
+                if downward_confidence >= 0.60:  # Threshold 0.60
+                    log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, motion_level={motion_str}, confidence={downward_confidence:.3f}")
                     return {
                         'fall_detected': True,
                         'confidence': downward_confidence,
@@ -266,12 +271,12 @@ class SimpleFallDetector:
                     }
             
             # STRATEGY 1: Dynamic Fall Detection - Person transitioning from standing to lying
-            # TRÁNH FALSE POSITIVE: Yêu cầu thay đổi aspect ratio LỚN (1.8x) và rơi xuống nhiều (40px)
-            if (aspect_change > 1.8 and  # TĂNG từ 1.4→1.8: chỉ detect khi THỰC SỰ nằm ngang
-                vertical_movement > 40 and  # TĂNG từ 20→40px: phải rơi xuống đáng kể
+            # TĂNG NHẠY: Aspect ratio 1.5x và rơi 35px để detect fall tốt hơn
+            if (aspect_change > 1.5 and  # Giảm 1.6→1.5: nhạy hơn
+                vertical_movement > 35 and  # Giảm 40→35px: detect nhạy hơn
                 center2_y > center1_y):  # Moving downward
                 
-                confidence = min(0.9, 0.65 + (aspect_change - 1.8) * 0.4 + min(vertical_movement / 120, 0.3))  # Tăng base 0.55→0.65
+                confidence = min(0.9, 0.58 + (aspect_change - 1.5) * 0.4 + min(vertical_movement / 120, 0.3))  # Giảm base 0.60→0.58
                 
                 if confidence >= self.confidence_threshold:
                     log.info(f"🚨 DYNAMIC FALL: aspect_change={aspect_change:.2f}, vertical_movement={vertical_movement:.1f}px")
@@ -293,7 +298,7 @@ class SimpleFallDetector:
             is_very_low = frame_bottom > 430  # TĂNG từ 420 → 430: chặt hơn nữa
             
             # Check if aspect ratio indicates horizontal position
-            is_horizontal = aspect_ratio2 > 1.5  # TĂNG từ 1.4 → 1.5: chỉ detect khi THỰC SỰ nằm ngang!
+            is_horizontal = aspect_ratio2 > 1.6  # TĂNG từ 1.5 → 1.6: chặt hơn nữa!
             
             # Yêu cầu CẢ HAI điều kiện (AND) để tránh false positive!
             if is_horizontal and is_very_low:
@@ -303,8 +308,8 @@ class SimpleFallDetector:
                 
                 horizontal_confidence = horizontal_factor + position_factor
                 
-                # STRICT THRESHOLD: cần ít nhất 0.35 confidence
-                if horizontal_confidence >= 0.35:  # TĂNG từ 0.25 → 0.35
+                # STRICT THRESHOLD: cần ít nhất 0.40 confidence
+                if horizontal_confidence >= 0.40:  # TĂNG từ 0.35 → 0.40
                     log.info(f"🚨 STATIC LYING DETECTED: aspect_ratio={aspect_ratio2:.2f}, frame_bottom={frame_bottom:.1f}, confidence={horizontal_confidence:.3f}")
                     return {
                         'fall_detected': True,
