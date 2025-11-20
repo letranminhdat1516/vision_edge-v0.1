@@ -1,0 +1,36 @@
+{
+  "video_name": "20",
+  "total_frames": 339,
+  "total_people_detected_frames": 259,
+  "max_people_in_frame": 1,
+  "fall_count": 4,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 14,
+      "time": 0.7,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 95,
+      "time": 4.75,
+      "confidence": 0.8762688713156003,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 156,
+      "time": 7.8,
+      "confidence": 0.8458333333333333,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 216,
+      "time": 10.8,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T07:03:57.131546"
+}

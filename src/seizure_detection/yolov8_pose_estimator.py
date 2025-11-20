@@ -116,7 +116,10 @@ class YOLOv8PoseEstimator:
                 person_bbox = confidence_threshold
             else:
                 # Normal case: second parameter is confidence threshold
-                if isinstance(confidence_threshold, (list, tuple)):
+                if isinstance(confidence_threshold, np.ndarray):
+                    # Handle numpy array
+                    actual_confidence_threshold = float(confidence_threshold.item()) if confidence_threshold.size == 1 else float(confidence_threshold.flat[0])
+                elif isinstance(confidence_threshold, (list, tuple)):
                     if len(confidence_threshold) > 0:
                         actual_confidence_threshold = float(confidence_threshold[0])
                     else:
@@ -220,6 +223,93 @@ class YOLOv8PoseEstimator:
             self.logger.debug(f"Error details: {type(e).__name__}: {str(e)}")
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return None
+    
+    def extract_all_keypoints(self, frame: np.ndarray, confidence_threshold: float = 0.5):
+        """
+        Extract keypoints for ALL persons in frame
+        
+        Args:
+            frame: Input image (H, W, 3)
+            confidence_threshold: Minimum confidence for person detection
+            
+        Returns:
+            list: List of dicts with 'keypoints' (17, 3) and 'bbox' [x1, y1, x2, y2] for each person
+                  Empty list if no persons detected
+        """
+        if not self.model_loaded:
+            return []
+            
+        try:
+            # Run inference
+            results = self.model(frame, verbose=False)
+            
+            all_persons = []
+            
+            # Process results
+            if len(results) > 0 and hasattr(results[0], 'boxes') and results[0].boxes is not None:
+                boxes = results[0].boxes
+                
+                for i in range(len(boxes)):
+                    box = boxes[i]
+                    
+                    # Extract confidence
+                    conf_value = 0.0
+                    if hasattr(box, 'conf') and box.conf is not None:
+                        try:
+                            conf_tensor = box.conf
+                            if hasattr(conf_tensor, 'item'):
+                                conf_value = conf_tensor.item()
+                            else:
+                                conf_value = float(conf_tensor)
+                        except:
+                            conf_value = 0.0
+                    
+                    # Skip if confidence too low
+                    if conf_value < confidence_threshold:
+                        continue
+                    
+                    # Extract bounding box
+                    bbox = None
+                    if hasattr(box, 'xyxy') and box.xyxy is not None:
+                        try:
+                            bbox_tensor = box.xyxy[0] if len(box.xyxy) > 0 else box.xyxy
+                            if hasattr(bbox_tensor, 'cpu'):
+                                bbox = bbox_tensor.cpu().numpy().tolist()
+                            else:
+                                bbox = list(bbox_tensor)
+                        except:
+                            bbox = None
+                    
+                    # Extract keypoints
+                    if hasattr(results[0], 'keypoints') and results[0].keypoints is not None:
+                        keypoints_tensor = results[0].keypoints.data
+                        if len(keypoints_tensor) > i:
+                            keypoints_data = keypoints_tensor[i]
+                            
+                            try:
+                                if hasattr(keypoints_data, 'cpu'):
+                                    keypoints = keypoints_data.cpu().numpy()
+                                elif hasattr(keypoints_data, 'numpy'):
+                                    keypoints = keypoints_data.numpy()
+                                else:
+                                    keypoints = np.array(keypoints_data)
+                                
+                                # Validate keypoints
+                                if self._validate_keypoints(keypoints):
+                                    all_persons.append({
+                                        'keypoints': keypoints,
+                                        'bbox': bbox,
+                                        'confidence': conf_value
+                                    })
+                            except Exception as e:
+                                self.logger.debug(f"Failed to process person {i}: {e}")
+                                continue
+            
+            return all_persons
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to extract all keypoints: {e}")
+            return []
     
     def _validate_keypoints(self, keypoints: np.ndarray, min_visible_points: int = 5) -> bool:
         """Validate keypoints quality"""

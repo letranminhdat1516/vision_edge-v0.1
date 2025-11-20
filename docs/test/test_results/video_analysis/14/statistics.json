@@ -1,0 +1,108 @@
+{
+  "video_name": "14",
+  "total_frames": 1813,
+  "total_people_detected_frames": 1604,
+  "max_people_in_frame": 1,
+  "fall_count": 16,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 12,
+      "time": 0.4,
+      "confidence": 0.7375925925925926,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 148,
+      "time": 4.933333333333334,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 239,
+      "time": 7.966666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 331,
+      "time": 11.033333333333333,
+      "confidence": 0.7749999999999999,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 431,
+      "time": 14.366666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 542,
+      "time": 18.066666666666666,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 633,
+      "time": 21.1,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 724,
+      "time": 24.133333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 815,
+      "time": 27.166666666666668,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 906,
+      "time": 30.2,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 996,
+      "time": 33.2,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1087,
+      "time": 36.233333333333334,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1179,
+      "time": 39.3,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1270,
+      "time": 42.333333333333336,
+      "confidence": 0.8666666666666667,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1404,
+      "time": 46.8,
+      "confidence": 0.7458333333333333,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1532,
+      "time": 51.06666666666667,
+      "confidence": 0.7124999999999999,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T06:54:53.146027"
+}

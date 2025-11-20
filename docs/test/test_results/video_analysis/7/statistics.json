@@ -1,0 +1,24 @@
+{
+  "video_name": "7",
+  "total_frames": 262,
+  "total_people_detected_frames": 175,
+  "max_people_in_frame": 1,
+  "fall_count": 2,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 14,
+      "time": 0.5,
+      "confidence": 0.7210202045690612,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 180,
+      "time": 6.428571428571429,
+      "confidence": 0.9,
+      "method": "bbox_analysis_dynamic"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T10:00:28.171147"
+}

@@ -1,0 +1,48 @@
+{
+  "video_name": "15",
+  "total_frames": 673,
+  "total_people_detected_frames": 471,
+  "max_people_in_frame": 1,
+  "fall_count": 6,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 29,
+      "time": 1.380952380952381,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 103,
+      "time": 4.904761904761905,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 207,
+      "time": 9.857142857142858,
+      "confidence": 0.7041666666666666,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 271,
+      "time": 12.904761904761905,
+      "confidence": 0.75,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 335,
+      "time": 15.952380952380953,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 517,
+      "time": 24.61904761904762,
+      "confidence": 0.7291666666666666,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T06:55:57.542143"
+}

@@ -1,0 +1,138 @@
+{
+  "video_name": "31",
+  "total_frames": 2009,
+  "total_people_detected_frames": 1491,
+  "max_people_in_frame": 1,
+  "fall_count": 21,
+  "seizure_count": 0,
+  "fall_events": [
+    {
+      "frame": 22,
+      "time": 0.7333333333333333,
+      "confidence": 0.75,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 115,
+      "time": 3.8333333333333335,
+      "confidence": 0.9,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 223,
+      "time": 7.433333333333334,
+      "confidence": 0.6256194125159643,
+      "method": "bbox_analysis_dynamic"
+    },
+    {
+      "frame": 314,
+      "time": 10.466666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 439,
+      "time": 14.633333333333333,
+      "confidence": 0.875,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 530,
+      "time": 17.666666666666668,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 649,
+      "time": 21.633333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 750,
+      "time": 25.0,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 841,
+      "time": 28.033333333333335,
+      "confidence": 0.7124999999999999,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 933,
+      "time": 31.1,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1031,
+      "time": 34.36666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1122,
+      "time": 37.4,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1213,
+      "time": 40.43333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1304,
+      "time": 43.46666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1395,
+      "time": 46.5,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1486,
+      "time": 49.53333333333333,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1577,
+      "time": 52.56666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1683,
+      "time": 56.1,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1777,
+      "time": 59.233333333333334,
+      "confidence": 0.7958333333333334,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1885,
+      "time": 62.833333333333336,
+      "confidence": 0.8291666666666666,
+      "method": "rapid_downward"
+    },
+    {
+      "frame": 1979,
+      "time": 65.96666666666667,
+      "confidence": 0.9,
+      "method": "rapid_downward"
+    }
+  ],
+  "seizure_events": [],
+  "analysis_timestamp": "2025-11-15T08:29:22.075632"
+}
