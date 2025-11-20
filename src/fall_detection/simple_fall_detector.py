@@ -243,8 +243,8 @@ class SimpleFallDetector:
             
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
-            # CÂN BẰNG: 90px trong 0.15s = 600px/s (DETECT TÉ THẬT + FILTER JITTER)
-            if vertical_movement > 90 and center2_y > center1_y:  # 90px: đủ để detect té, không quá cao
+            # TĂNG: 90px→130px để phân biệt NGỒI XUỐNG (100px) vs TÉ NGÃ (>130px)
+            if vertical_movement > 130 and center2_y > center1_y:  # 130px: tránh nhầm ngồi xuống
                 # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
                 # When person is laying still, bbox can jitter 100-200px due to detection variance
                 # Only allow rapid fall detection if there's actual motion in the scene
@@ -259,7 +259,7 @@ class SimpleFallDetector:
                         'method': 'bbox_jitter_filtered'
                     }
                 
-                downward_confidence = min(0.9, 0.60 + (vertical_movement / 150))  # Base 0.60
+                downward_confidence = min(0.9, 0.55 + (vertical_movement / 180))  # Base 0.55, cao hơn
                 if downward_confidence >= 0.60:  # Threshold 0.60
                     log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, motion_level={motion_str}, confidence={downward_confidence:.3f}")
                     return {

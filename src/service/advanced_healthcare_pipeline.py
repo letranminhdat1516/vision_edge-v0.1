@@ -415,10 +415,11 @@ class AdvancedHealthcarePipeline:
                     temporal_status = "READY" if seizure_result.get('temporal_ready') else "NOT_READY"
                     print(f"🧠 Seizure Detector Status: {temporal_status} | Raw Confidence: {seizure_result.get('confidence', 0):.3f}")
                     if not seizure_result.get('temporal_ready'):
-                        print("💡 Seizure Detection Tips: Cần đứng thẳng trước camera và thực hiện các chuyển động:")
-                        print("   - Vẫy tay liên tục và mạnh")
-                        print("   - Lắc đầu qua lại nhiều lần") 
-                        print("   - Cử động cơ thể đột ngột và không đều")
+                        print("💡 Hướng dẫn test co giật (threshold=0.70):")
+                        print("   ⚠️ Phải NGỒI hoặc NẰM (không đứng - bị chặn bởi bộ lọc)")
+                        print("   ✅ Vẫy tay NHANH qua lại liên tục (5-7 lần)")
+                        print("   ✅ Lắc đầu + vai đột ngột và mạnh")
+                        print("   ✅ Động tác GIẬT GIẬT - không mượt, có dừng đột ngột")
                 
                 if seizure_result.get('temporal_ready'):
                     # Update seizure predictor nếu có
