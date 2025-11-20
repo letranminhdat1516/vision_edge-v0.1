@@ -221,7 +221,7 @@ class HealthcareEventPublisher:
             image_path = self._get_recent_alert_image_path(event_type, confidence)
         
         # Generate action message based on status, event type, and optionally image content
-        action = self._generate_action_message(status, event_type, confidence, image_path)
+        action = self._generate_action_message(status, event_type, confidence, image_path, camera_id)
         
         return {
             "imageUrl": image_url,
@@ -231,13 +231,13 @@ class HealthcareEventPublisher:
         }
     
     def _generate_action_message(self, status: str, event_type: str, confidence: float, 
-                                image_path: Optional[str] = None) -> str:
+                                image_path: Optional[str] = None, camera_id: Optional[str] = None) -> str:
         """Generate action message based on status, event type, and optionally image content"""
         
         # Try to generate intelligent action from image content first
         if image_path and IMAGE_CAPTION_AVAILABLE:
             try:
-                intelligent_action = self._generate_intelligent_action(image_path, status, event_type, confidence)
+                intelligent_action = self._generate_intelligent_action(image_path, status, event_type, confidence, camera_id)
                 if intelligent_action:
                     return intelligent_action
             except Exception as e:
@@ -246,17 +246,29 @@ class HealthcareEventPublisher:
         # Fallback to static action messages
         return self._generate_static_action_message(status, event_type, confidence)
     
-    def _generate_intelligent_action(self, image_path: str, status: str, event_type: str, confidence: float) -> Optional[str]:
+    def _generate_intelligent_action(self, image_path: str, status: str, event_type: str, confidence: float, camera_id: Optional[str] = None) -> Optional[str]:
         """Generate intelligent action message using BLIP + Translation pipeline"""
         try:
             if not IMAGE_CAPTION_AVAILABLE:
                 return None
+            
+            # Get camera name for location context
+            camera_name = None
+            if camera_id and self.postgresql_service:
+                try:
+                    camera_name = self.postgresql_service._get_camera_name(camera_id)
+                    if camera_name:
+                        logger.info(f"📍 Using camera location: {camera_name}")
+                except AttributeError:
+                    logger.debug("_get_camera_name method not available")
+                except Exception as e:
+                    logger.warning(f"Failed to get camera name: {e}")
                 
             # Get image caption pipeline
             caption_pipeline = get_professional_caption_pipeline()
             
-            # Generate Vietnamese caption from image
-            vietnamese_caption, metadata = caption_pipeline.generate_professional_caption(image_path)
+            # Generate Vietnamese caption from image with camera location
+            vietnamese_caption, metadata = caption_pipeline.generate_professional_caption(image_path, event_type=event_type, camera_name=camera_name)
             
             if not metadata.get("success", False):
                 logger.warning("Image captioning failed, using static action")
@@ -393,8 +405,12 @@ class HealthcareEventPublisher:
             # Create mobile response format
             mobile_status = self._map_status_for_mobile(severity)
             
-            # Try to find alert image for intelligent action generation
-            alert_image_path = self._get_recent_alert_image_path('fall', confidence)
+            # 🔥 FIX: Use image_path from context (already saved by pipeline)
+            # Do NOT use _get_recent_alert_image_path as it finds OLD images!
+            alert_image_path = context.get('image_path') if context else None
+            if not alert_image_path:
+                # Only as fallback - try to find recent image
+                alert_image_path = self._get_recent_alert_image_path('fall', confidence)
             
             response = self._create_event_response(
                 event_id=event_id,
@@ -522,8 +538,12 @@ class HealthcareEventPublisher:
             # Create mobile response format
             mobile_status = self._map_status_for_mobile(severity)
             
-            # Try to find alert image for intelligent action generation
-            alert_image_path = self._get_recent_alert_image_path('seizure', confidence)
+            # 🔥 FIX: Use image_path from context (already saved by pipeline)
+            # Do NOT use _get_recent_alert_image_path as it finds OLD images!
+            alert_image_path = context.get('image_path') if context else None
+            if not alert_image_path:
+                # Only as fallback - try to find recent image
+                alert_image_path = self._get_recent_alert_image_path('seizure', confidence)
             
             response = self._create_event_response(
                 event_id=event_id,

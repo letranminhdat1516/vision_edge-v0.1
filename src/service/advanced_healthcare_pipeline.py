@@ -240,6 +240,32 @@ class AdvancedHealthcarePipeline:
                 event_id = None
                 snapshot_id = None
                 try:
+                        # 🔥 FIX: Save alert image IMMEDIATELY to get correct image_path
+                        # This prevents using OLD images from alerts folder for caption generation
+                        alert_image_path = None
+                        if frame is not None:
+                            try:
+                                import os
+                                from datetime import datetime
+                                
+                                # Create alerts directory if needed
+                                alerts_dir = "examples/data/saved_frames/alerts"
+                                os.makedirs(alerts_dir, exist_ok=True)
+                                
+                                # Save current frame as alert image with timestamp
+                                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                                alert_image_path = os.path.join(
+                                    alerts_dir,
+                                    f"fall_detected_{timestamp_str}_conf_{base_fall_confidence:.2f}.jpg"
+                                )
+                                
+                                import cv2
+                                cv2.imwrite(alert_image_path, frame)
+                                print(f"💾 Saved alert image BEFORE caption: {alert_image_path}")
+                            except Exception as save_err:
+                                print(f"⚠️ Failed to save alert image: {save_err}")
+                                alert_image_path = None
+                        
                         bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                         event_data = {
                             'event_type': 'fall',
@@ -262,6 +288,7 @@ class AdvancedHealthcarePipeline:
                             },
                             'camera_id': self.camera_id,
                             'user_id': self.user_id,
+                            'image_path': alert_image_path,  # 🔥 FIX: Pass current image path
                             # NO frame - snapshot will be created separately
                         }
                         
@@ -302,6 +329,7 @@ class AdvancedHealthcarePipeline:
                         'frame_number': self.stats['total_frames'],
                         'snapshot_id': snapshot_id,
                         'event_id': event_id,  # 🔥 Pass event_id to skip duplicate creation
+                        'image_path': alert_image_path,  # 🔥 FIX: Pass alert image saved earlier
                         'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence'
                     }
                     
@@ -356,32 +384,10 @@ class AdvancedHealthcarePipeline:
                     if snapshot_id:
                         print(f"📸 Fall confirmation image saved: {snapshot_id[:8]}...")
                     
-                    # Publish fall detection to Supabase realtime
-                    try:
-                        bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
-                        context_data = {
-                            'motion_level': motion_level,
-                            'detection_type': 'confirmation',
-                            'confirmation_frames': self.detection_history['fall_confirmation_frames'],
-                            'processing_time': time.time() - fall_start,
-                            'frame_number': self.stats['total_frames'],
-                            'snapshot_id': snapshot_id,
-                            'description': f'Fall activity detected with {smoothed_fall_confidence:.1%} confidence'  # Add description
-                        }
-                        
-                        response = self.event_publisher.publish_fall_detection(
-                            confidence=smoothed_fall_confidence,
-                            bounding_boxes=bounding_boxes,
-                            context=context_data
-                        )
-                        
-                        if response.get('alert_created'):
-                            print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
-                        else:
-                            print(f"📵 Fall alert skipped: Lower priority than existing alerts")
-                            
-                    except Exception as e:
-                        print(f"Error publishing fall detection: {e}")
+                    # ❌ DISABLED: Confirmation notification removed to prevent duplicate events
+                    # Event was already created with cooldown + 5 snapshots in direct detection path (lines 240-295)
+                    # Supabase Realtime will handle notifications automatically when event is inserted
+                    print(f"✅ Fall confirmation complete - event already published with cooldown")
                         
                 else:
                     result['fall_confidence'] = smoothed_fall_confidence
@@ -468,7 +474,30 @@ class AdvancedHealthcarePipeline:
                             import uuid
                             
                             event_id = None
+                            alert_image_path = None
                             try:
+                                # 🔥 FIX: Save alert image IMMEDIATELY
+                                if frame is not None:
+                                    try:
+                                        import os
+                                        
+                                        # Create alerts directory if needed
+                                        alerts_dir = "examples/data/saved_frames/alerts"
+                                        os.makedirs(alerts_dir, exist_ok=True)
+                                        
+                                        # Save current frame as alert image
+                                        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                                        alert_image_path = os.path.join(
+                                            alerts_dir,
+                                            f"seizure_detected_{timestamp_str}_conf_{final_seizure_confidence:.2f}.jpg"
+                                        )
+                                        
+                                        import cv2
+                                        cv2.imwrite(alert_image_path, frame)
+                                        print(f"💾 Saved seizure alert image: {alert_image_path}")
+                                    except Exception as save_err:
+                                        print(f"⚠️ Failed to save seizure alert image: {save_err}")
+                                
                                 bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                                 event_data = {
                                     'event_type': 'abnormal_behavior',
@@ -492,7 +521,8 @@ class AdvancedHealthcarePipeline:
                                         'person_bbox': person_bbox
                                     },
                                     'camera_id': self.camera_id,
-                                    'user_id': self.user_id
+                                    'user_id': self.user_id,
+                                    'image_path': alert_image_path  # 🔥 FIX: Pass current image path
                                 }
                                 
                                 # Publish event to get event_id
@@ -536,6 +566,7 @@ class AdvancedHealthcarePipeline:
                                     'frame_number': self.stats['total_frames'],
                                     'snapshot_id': snapshot_id,
                                     'event_id': event_id,  # 🔥 Pass event_id to skip duplicate creation
+                                    'image_path': alert_image_path,  # 🔥 FIX: Pass current image path
                                     'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence'  # Add description
                                 }
                                 
@@ -587,33 +618,30 @@ class AdvancedHealthcarePipeline:
                 result['alert_level'] = 'critical'
                 result['emergency_type'] = 'seizure'
                 self.stats['critical_alerts'] += 1
-                self.save_alert_image(frame, 'seizure_detected', result['seizure_confidence'])
+                # ❌ REMOVED: save_alert_image already called at detection time (lines 523-536)
                 print(f"⚖️ Both detected, seizure wins ({result['seizure_confidence']:.2f} > {result['fall_confidence']:.2f})")
             else:
                 result['alert_level'] = 'high'
                 result['emergency_type'] = 'fall'
-                self.save_alert_image(frame, 'fall_detected', result['fall_confidence'])
+                # ❌ REMOVED: save_alert_image already called at detection time (lines 246-268)
                 print(f"⚖️ Both detected, fall wins ({result['fall_confidence']:.2f} > {result['seizure_confidence']:.2f})")
         elif result['seizure_detected']:
             result['alert_level'] = 'critical'
             result['emergency_type'] = 'seizure'
             self.stats['critical_alerts'] += 1
-            # Save seizure alert image
-            self.save_alert_image(frame, 'seizure_detected', result['seizure_confidence'])
+            # ❌ REMOVED: Alert image already saved at detection time (lines 523-536)
         elif result['fall_detected']:
             result['alert_level'] = 'high'
             result['emergency_type'] = 'fall'
-            # Save fall alert image
-            self.save_alert_image(frame, 'fall_detected', result['fall_confidence'])
+            # ❌ REMOVED: Alert image already saved at detection time (lines 246-268)
         elif result['seizure_confidence'] > 0.45 and motion_level > 0.7:  # Giảm từ 0.5 xuống 0.45, từ 0.8 xuống 0.7 để nhạy hơn
             result['alert_level'] = 'warning'
             result['emergency_type'] = 'seizure_warning'
-            # Save seizure warning image
-            self.save_alert_image(frame, 'seizure_warning', result['seizure_confidence'])
+            # ❌ REMOVED: Warning images not needed - only save critical/high alerts
         elif result['fall_confidence'] > 0.50:  # Tăng từ 0.18 lên 0.50 để giảm false positive
             result['alert_level'] = 'warning'
             result['emergency_type'] = 'fall_warning'
-            self.save_alert_image(frame, 'fall_warning', result['fall_confidence'])
+            # ❌ REMOVED: Warning images not needed - only save critical/high alerts
             
         if result['alert_level'] != 'normal':
             self.stats['total_alerts'] += 1

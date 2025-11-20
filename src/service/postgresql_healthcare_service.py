@@ -319,6 +319,29 @@ class PostgreSQLHealthcareService:
         finally:
             self.return_connection(conn)
     
+    def _get_camera_name(self, camera_id: str) -> Optional[str]:
+        """Get camera name from camera_id"""
+        if not camera_id:
+            return None
+            
+        conn = self.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT camera_name FROM cameras WHERE camera_id = %s",
+                    (camera_id,)
+                )
+                result = cursor.fetchone()
+                return result['camera_name'] if result else None
+        except Exception as e:
+            logger.warning(f"Error getting camera name: {e}")
+            return None
+        finally:
+            self.return_connection(conn)
+    
     def _get_any_camera_id(self) -> Optional[str]:
         """Get any available camera_id as fallback"""
         print(f"🔍 DEBUG: _get_any_camera_id called")
@@ -573,7 +596,7 @@ class PostgreSQLHealthcareService:
         finally:
             self.return_connection(conn)
     
-    def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str) -> str:
+    def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str, camera_name: str = None) -> str:
         """
         Generate intelligent action message for event_description field
         This should contain the FULL intelligent action with Vietnamese caption
@@ -583,6 +606,7 @@ class PostgreSQLHealthcareService:
             confidence: Detection confidence
             image_path: Path to event image/snapshot
             fallback_description: Original description as fallback
+            camera_name: Optional camera name for location context
             
         Returns:
             Full intelligent action message (like: "🆘 KHẨN CẤP - CO GIẬT: Two young men are đứng trong phòng...")
@@ -623,30 +647,13 @@ class PostgreSQLHealthcareService:
             # If image_path not provided, try to find latest alert image
             image_file_to_use = image_path
             if not image_file_to_use or not os.path.exists(image_file_to_use):
-                # Try to find latest alert image
-                try:
-                    import glob
-                    from pathlib import Path
-                    
-                    # Try multiple alert directories
-                    alert_dirs = [
-                        "examples/data/saved_frames/alerts",
-                        "data/saved_frames/alerts",
-                        os.path.join(os.getcwd(), "examples/data/saved_frames/alerts"),
-                        os.path.join(os.getcwd(), "data/saved_frames/alerts")
-                    ]
-                    
-                    for alerts_dir in alert_dirs:
-                        alerts_path = Path(alerts_dir)
-                        if alerts_path.exists():
-                            image_files = list(alerts_path.glob("*.jpg"))
-                            if image_files:
-                                # Get most recent image
-                                image_file_to_use = str(max(image_files, key=lambda p: p.stat().st_ctime))
-                                logger.info(f"🔍 Found latest alert image: {image_file_to_use}")
-                                break
-                except Exception as e:
-                    logger.warning(f"⚠️ Could not find alert image: {e}")
+                logger.warning(f"⚠️ No valid image_path provided (got: {image_path})")
+                logger.warning(f"⚠️ SKIPPING caption generation - will use fallback description")
+                # 🔥 FIX: Do NOT use old images from alerts folder!
+                # This was causing captions like "a camera is shown" or "man standing"
+                # when the actual event had different content.
+                # If no image_path, return fallback description instead.
+                return fallback_description if fallback_description else f"Fall detected with {confidence:.1%} confidence"
             
             if image_file_to_use and os.path.exists(image_file_to_use):
                 logger.info(f"🔍 Attempting to generate Vietnamese caption for image: {image_file_to_use}")
@@ -657,7 +664,8 @@ class PostgreSQLHealthcareService:
                         # Generate Vietnamese caption from image with event_type for accurate medical context
                         vietnamese_result = self.vietnamese_caption.generate_professional_caption(
                             image_file_to_use,
-                            event_type=event_type  # Pass event_type to avoid filename confusion
+                            event_type=event_type,  # Pass event_type to avoid filename confusion
+                            camera_name=camera_name  # Pass camera name for location context
                         )
                         vietnamese_caption = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
                         
@@ -865,6 +873,12 @@ class PostgreSQLHealthcareService:
                 snapshot_id = str(uuid.uuid4())
                 logger.warning("Using dummy snapshot_id due to snapshot creation failure")
             
+            # Get camera name for location context
+            camera_name = None
+            if camera_id:
+                camera_name = self._get_camera_name(camera_id)
+                logger.info(f"📍 Camera location: {camera_name}")
+            
             # Generate Vietnamese description for the event
             print(f"🔥 DEBUG BEFORE _generate_event_description:")
             print(f"   event_data description: '{event_data.get('description', '')}'")
@@ -873,7 +887,8 @@ class PostgreSQLHealthcareService:
                 event_data.get('event_type', ''),
                 event_data.get('confidence', 0.0),
                 event_data.get('image_path', ''),
-                event_data.get('description', '')
+                event_data.get('description', ''),
+                camera_name=camera_name
             )
             
             print(f"🔥 DEBUG AFTER _generate_event_description:")

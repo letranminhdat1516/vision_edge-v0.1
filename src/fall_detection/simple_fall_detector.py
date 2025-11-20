@@ -27,11 +27,11 @@ class SimpleFallDetector:
         self.previous_timestamp = None
         self.min_time_interval = 0.15  # Giảm từ 0.2→0.15s: yêu cầu rơi NHANH trong thời gian ngắn
         self.frame_buffer = []
-        self.max_buffer_size = 5  # Giảm từ 7→5: chỉ giữ 5 frames (0.15s) để detect rapid movement
+        self.max_buffer_size = 3  # Giảm từ 7→5: chỉ giữ 5 frames (0.15s) để detect rapid movement
         
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
-    def detect_fall(self, current_frame, timestamp=None, person_bbox=None):
+    def detect_fall(self, current_frame, timestamp=None, person_bbox=None, motion_level=None):
         """
         Detect fall in current frame using simplified approach.
         
@@ -39,6 +39,7 @@ class SimpleFallDetector:
             current_frame: Current video frame (numpy array)
             timestamp: Frame timestamp (optional)
             person_bbox: Person bounding box from YOLO (optional)
+            motion_level: Global motion level (0.0-1.0) to filter bbox jitter (optional)
             
         Returns:
             dict: Fall detection result
@@ -97,8 +98,8 @@ class SimpleFallDetector:
                     
                     # Check time interval
                     if (current_time - first_timestamp) >= self.min_time_interval:
-                        # Process simplified fall detection
-                        fall_result = self._analyze_movement_pattern()
+                        # Process simplified fall detection with motion_level
+                        fall_result = self._analyze_movement_pattern(motion_level=motion_level)
                         
                         if fall_result:
                             result.update(fall_result)
@@ -240,9 +241,22 @@ class SimpleFallDetector:
             # Detect large vertical movement downward - HIGHEST PRIORITY!
             # TĂNG NGƯỠNG: 120px trong 0.15s = 800px/s (CHỈ DETECT FALL THỰC SỰ, KHÔNG PHẢI ĐI BỘ)
             if vertical_movement > 120 and center2_y > center1_y:  # TĂNG từ 80→120px: loại bỏ hoàn toàn đi bộ
+                # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
+                # When person is laying still, bbox can jitter 100-200px due to detection variance
+                # Only allow rapid fall detection if there's actual motion in the scene
+                if motion_level is not None and motion_level < 0.15:
+                    log.debug(f"⚠️ Rejected bbox jitter: vertical_movement={vertical_movement:.1f}px but motion_level={motion_level:.3f} too low")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'no-fall',
+                        'method': 'bbox_jitter_filtered'
+                    }
+                
                 downward_confidence = min(0.9, 0.65 + (vertical_movement / 180))  # Tăng base 0.60→0.65
                 if downward_confidence >= 0.65:  # Tăng threshold từ 0.60→0.65
-                    log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, confidence={downward_confidence:.3f}")
+                    log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, motion_level={motion_level:.3f}, confidence={downward_confidence:.3f}")
                     return {
                         'fall_detected': True,
                         'confidence': downward_confidence,

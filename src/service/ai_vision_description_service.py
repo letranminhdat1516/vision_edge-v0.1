@@ -264,7 +264,7 @@ class ProfessionalVietnameseCaptionPipeline:
         
         return result
     
-    def enhance_medical_context(self, base_caption, image_path, event_type=None):
+    def enhance_medical_context(self, base_caption, image_path, event_type=None, camera_name=None):
         """
         Add medical context based on event_type or detection results
         
@@ -272,8 +272,28 @@ class ProfessionalVietnameseCaptionPipeline:
             base_caption: Base Vietnamese caption
             image_path: Path to image file
             event_type: Actual event type ('fall', 'seizure', 'abnormal_behavior', etc.)
+            camera_name: Optional camera name to add location context
         """
         filename = Path(image_path).name.lower()
+        
+        # Add or replace location with camera name
+        if camera_name:
+            # Replace existing location phrases
+            base_caption = base_caption.replace("trong phòng của mình", f"trong {camera_name}")
+            base_caption = base_caption.replace("in a room", f"trong {camera_name}")
+            base_caption = base_caption.replace("in the room", f"trong {camera_name}")
+            base_caption = base_caption.replace("trong một căn phòng", f"trong {camera_name}")
+            
+            # If no location found, append camera name at the end
+            location_keywords = ["trong phòng", "trong một căn", "trong {", "in a room", "in the room"]
+            has_location = any(keyword in base_caption for keyword in location_keywords)
+            
+            if not has_location:
+                # Add location before the last punctuation or at the end
+                if base_caption.endswith("."):
+                    base_caption = base_caption[:-1] + f" trong {camera_name}."
+                else:
+                    base_caption = base_caption + f" trong {camera_name}"
         
         medical_additions = []
         
@@ -307,13 +327,14 @@ class ProfessionalVietnameseCaptionPipeline:
         
         return base_caption
     
-    def generate_professional_caption(self, image_path, event_type=None):
+    def generate_professional_caption(self, image_path, event_type=None, camera_name=None):
         """
         Generate professional Vietnamese caption
         
         Args:
             image_path: Path to image file
             event_type: Optional event type for accurate medical context ('fall', 'seizure', etc.)
+            camera_name: Optional camera name to include in location context
         """
         metadata = {
             "pipeline_steps": [],
@@ -334,8 +355,8 @@ class ProfessionalVietnameseCaptionPipeline:
                 metadata["pipeline_steps"].append(f"Translation: {translation_method}")
                 metadata["vietnamese_base"] = vietnamese_caption
                 
-                # Step 3: Enhance with medical context (pass event_type for accuracy)
-                final_caption = self.enhance_medical_context(vietnamese_caption, image_path, event_type)
+                # Step 3: Enhance with medical context (pass event_type + camera_name)
+                final_caption = self.enhance_medical_context(vietnamese_caption, image_path, event_type, camera_name)
                 metadata["final_caption"] = final_caption
                 metadata["success"] = True
                 
