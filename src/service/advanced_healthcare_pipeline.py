@@ -299,8 +299,11 @@ class AdvancedHealthcarePipeline:
                         event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                         print(f"✅ Fall event created: {event_id}")
                         
-                        # Capture 5 snapshots directly from RTSP (no lag!)
-                        snapshot_ids = self.capture_5_snapshots_from_rtsp(
+                        # 🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN!
+                        # Image 1: Frame hiện tại (đang phát hiện event)
+                        # Image 2-5: Capture realtime từ RTSP (0.3s interval)
+                        snapshot_ids = self.capture_5_snapshots_immediate(
+                            current_frame=frame,  # Frame ĐANG phát hiện event
                             event_type='fall',
                             confidence=base_fall_confidence,
                             event_id=event_id,
@@ -536,8 +539,9 @@ class AdvancedHealthcarePipeline:
                                 print(f"❌ Failed to create seizure event: {e}")
                                 event_id = str(uuid.uuid4())
                             
-                            # Capture 5 snapshots directly from RTSP (no lag!)
-                            snapshot_ids = self.capture_5_snapshots_from_rtsp(
+                            # 🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN CO GIẬT!
+                            snapshot_ids = self.capture_5_snapshots_immediate(
+                                current_frame=frame,  # Frame ĐANG phát hiện seizure
                                 event_type='seizure',
                                 confidence=final_seizure_confidence,
                                 event_id=event_id,
@@ -1040,6 +1044,107 @@ class AdvancedHealthcarePipeline:
                 
         except Exception as e:
             print(f"❌ Emergency Event Logging Error: {e}")
+
+    def capture_5_snapshots_immediate(self, current_frame, event_type, confidence, event_id=None, metadata=None):
+        """
+        🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN EVENT!
+        - Image 1: Frame hiện tại (đang phát hiện)
+        - Image 2-5: Realtime từ RTSP (0.3s interval) - Bắt diễn biến sau đó
+        
+        Args:
+            current_frame: Frame đang phát hiện event (QUAN TRỌNG!)
+            event_type: fall, seizure, etc.
+            confidence: Detection confidence
+            event_id: Event ID to link
+            metadata: Additional metadata
+            
+        Returns:
+            list of snapshot IDs
+        """
+        if not self.camera_id or not self.user_id:
+            print(f"⚠️ Cannot save snapshots - missing camera_id or user_id")
+            return []
+        
+        snapshot_ids = []
+        print(f"📸 Capturing snapshots IMMEDIATELY for {event_type}...")
+        
+        try:
+            # Create ONE snapshot record for all 5 images
+            main_snapshot_id = None
+            if self.snapshot_service and current_frame is not None:
+                snapshot_metadata = {
+                    'detection_time': datetime.now().isoformat(),
+                    'total_images': 5,
+                    'capture_mode': 'immediate',  # Đánh dấu capture ngay
+                    **(metadata or {})
+                }
+                
+                if event_id:
+                    snapshot_metadata['event_id'] = event_id
+                
+                # 🔥 IMAGE 1: Frame HIỆN TẠI (đang phát hiện event)
+                main_snapshot_id, first_image_id = self.snapshot_service.create_detection_snapshot(
+                    camera_id=self.camera_id,
+                    user_id=self.user_id,
+                    event_type=event_type,
+                    confidence=confidence,
+                    frame=current_frame,  # Frame CHÍNH XÁC lúc phát hiện!
+                    metadata={**snapshot_metadata, 'sequence_number': 1, 'is_detection_frame': True}
+                )
+                snapshot_ids.append(main_snapshot_id)
+                print(f"✅ Snapshot created with CURRENT frame (Image 1/5): {main_snapshot_id[:8]}...")
+            
+            # 🔥 IMAGE 2-5: Capture realtime từ RTSP để bắt diễn biến tiếp theo
+            if main_snapshot_id:
+                rtsp_url = getattr(self.camera, 'rtsp_url', None)
+                if rtsp_url:
+                    cap = cv2.VideoCapture(rtsp_url)
+                    
+                    if cap.isOpened():
+                        for i in range(1, 5):  # Images 2-5
+                            ret, frame = cap.read()
+                            
+                            if not ret or frame is None:
+                                print(f"⚠️ Failed to capture frame {i+1}/5 from RTSP")
+                                time.sleep(0.3)  # Vẫn delay để sync timing
+                                continue
+                            
+                            # Add image to existing snapshot
+                            try:
+                                image_id = self.snapshot_service.add_image_to_snapshot(
+                                    snapshot_id=main_snapshot_id,
+                                    frame=frame,
+                                    camera_id=self.camera_id,
+                                    user_id=self.user_id,
+                                    event_type=event_type,
+                                    confidence=confidence,
+                                    is_primary=False,
+                                    metadata={
+                                        'sequence_number': i + 1,
+                                        'detection_time': datetime.now().isoformat(),
+                                        'time_offset_ms': i * 300  # 300ms interval
+                                    }
+                                )
+                                print(f"✅ Image {i+1}/5 added: {image_id[:8]}...")
+                            except Exception as e:
+                                print(f"❌ Failed to add image {i+1}/5: {e}")
+                            
+                            # Delay 0.3s before next capture (nhanh hơn để bắt diễn biến)
+                            if i < 4:
+                                time.sleep(0.3)
+                        
+                        cap.release()
+                    else:
+                        print(f"⚠️ Could not open RTSP for additional frames")
+                
+                print(f"📸 Captured 1 snapshot with 5 images (1 current + 4 realtime)!")
+            
+        except Exception as e:
+            print(f"❌ Error capturing immediate snapshots: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return snapshot_ids
 
     def capture_5_snapshots_from_rtsp(self, event_type, confidence, event_id=None, metadata=None):
         """
