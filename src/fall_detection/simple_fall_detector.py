@@ -29,6 +29,11 @@ class SimpleFallDetector:
         self.frame_buffer = []
         self.max_buffer_size = 5  # Giảm từ 7→5: chỉ giữ 5 frames (0.15s) để detect rapid movement
         
+        # 🔥 NEW: Fall velocity tracking for stroke detection
+        self.fall_start_time = None  # Thời điểm bắt đầu té
+        self.fall_start_position = None  # Vị trí Y khi bắt đầu té
+        self.fall_velocity_history = []  # Lịch sử vận tốc rơi
+        
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
     def detect_fall(self, current_frame, timestamp=None, person_bbox=None, motion_level=None):
@@ -259,16 +264,71 @@ class SimpleFallDetector:
                         'method': 'bbox_jitter_filtered'
                     }
                 
+                # 🔥 NEW: FALL VELOCITY ANALYSIS (Phân tích tốc độ té)
+                current_time = time.time()
+                
+                # Bắt đầu tracking nếu chưa có
+                if self.fall_start_time is None:
+                    self.fall_start_time = current_time
+                    self.fall_start_position = center1_y
+                    log.debug(f"⏱️ Fall tracking started: position={center1_y:.1f}px")
+                
+                # Tính fall duration và fall velocity
+                fall_duration = current_time - self.fall_start_time
+                total_fall_distance = center2_y - self.fall_start_position
+                
+                # Tính vận tốc rơi (pixels/second)
+                if fall_duration > 0:
+                    fall_velocity = total_fall_distance / fall_duration
+                else:
+                    fall_velocity = 0
+                
+                # Phân loại loại té dựa trên duration
+                fall_type = "unknown"
+                severity_multiplier = 1.0
+                
+                if fall_duration < 0.5:
+                    fall_type = "fast_fall"  # TÉ NHANH - Fall bình thường
+                    severity_multiplier = 1.0
+                    log.info(f"⚡ FAST FALL DETECTED: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
+                elif fall_duration >= 1.0:
+                    fall_type = "slow_collapse"  # TÉ CHẬM - Đột quỵ/yếu sức
+                    severity_multiplier = 1.3  # Tăng severity vì nguy hiểm hơn!
+                    log.warning(f"🏥 SLOW COLLAPSE (Possible Stroke): duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
+                else:
+                    fall_type = "moderate_fall"
+                    severity_multiplier = 1.1
+                    log.info(f"⚠️ MODERATE FALL: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
+                
                 downward_confidence = min(0.9, 0.55 + (vertical_movement / 180))  # Base 0.55, cao hơn
+                downward_confidence *= severity_multiplier  # Điều chỉnh theo loại té
+                downward_confidence = min(0.95, downward_confidence)  # Cap ở 0.95
+                
                 if downward_confidence >= 0.60:  # Threshold 0.60
-                    log.info(f"🚨 RAPID FALL: vertical_movement={vertical_movement:.1f}px downward, motion_level={motion_str}, confidence={downward_confidence:.3f}")
+                    log.info(f"🚨 FALL DETECTED: type={fall_type}, vertical_movement={vertical_movement:.1f}px, duration={fall_duration:.2f}s, motion_level={motion_str}, confidence={downward_confidence:.3f}")
+                    
+                    # Reset tracking sau khi detect
+                    self.fall_start_time = None
+                    self.fall_start_position = None
+                    
                     return {
                         'fall_detected': True,
                         'confidence': downward_confidence,
                         'angle': 60.0,
                         'category': 'fall',
-                        'method': 'rapid_downward'
+                        'method': 'rapid_downward',
+                        'fall_type': fall_type,  # NEW: Loại té
+                        'fall_duration': fall_duration,  # NEW: Thời gian té
+                        'fall_velocity': fall_velocity  # NEW: Vận tốc té
                     }
+            else:
+                # Reset tracking nếu không có vertical movement
+                if self.fall_start_time is not None:
+                    elapsed = time.time() - self.fall_start_time
+                    if elapsed > 2.0:  # Timeout sau 2s
+                        log.debug(f"⏹️ Fall tracking reset (timeout after {elapsed:.1f}s)")
+                        self.fall_start_time = None
+                        self.fall_start_position = None
             
             # STRATEGY 1: Dynamic Fall Detection - Person transitioning from standing to lying
             # TĂNG NHẠY: Aspect ratio 1.5x và rơi 35px để detect fall tốt hơn

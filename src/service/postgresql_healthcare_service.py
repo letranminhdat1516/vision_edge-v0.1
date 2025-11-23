@@ -444,42 +444,84 @@ class PostgreSQLHealthcareService:
         
         return None
     
-    def _determine_event_status(self, confidence: float, event_type: str) -> str:
+    def _determine_event_status(self, confidence: float, event_type: str, context: dict = None) -> str:
         """
         Determine event status based on confidence and event type
-        Aligned with healthcare_event_publisher SEVERITY_THRESHOLDS
+        
+        5 STATUS LEVELS:
+        - danger: Nằm ngã bất động, nguy hiểm cao (fall confirmed, seizure critical)
+        - warning: Mang tính báo động chưa tới mức nguy hiểm (fall suspected, seizure warning)
+        - suspect: Nghi ngờ hành động có thể xảy ra nguy hiểm (unusual movements, pre-fall)
+        - normal: Hoạt động bình thường (walking, sitting, standing)
+        - unknown: Hành động không rõ ràng (low confidence, ambiguous detection)
         
         Args:
             confidence: Detection confidence (0.0 - 1.0)
             event_type: Type of event ('fall', 'abnormal_behavior', etc.)
+            context: Additional context (fall_type, duration, etc.)
             
         Returns:
-            Status: 'normal', 'warning', or 'danger'
+            Status: 'danger', 'warning', 'suspect', 'normal', or 'unknown'
         """
+        # Extract context information
+        fall_type = context.get('fall_type') if context else None
+        fall_duration = context.get('fall_duration', 0) if context else 0
+        
         if event_type == 'fall':
-            if confidence >= 0.60:        # high threshold for falls
-                return 'danger'     
-            elif confidence >= 0.40:      # medium threshold for falls
-                return 'warning'    
+            # DANGER: Té ngã xác nhận với confidence cao
+            if confidence >= 0.60:
+                # Extra danger: Slow collapse (đột quỵ)
+                if fall_type == 'slow_collapse':
+                    return 'danger'  # ĐỘT QUỴ - nằm bất động
+                return 'danger'  # Té ngã nguy hiểm
+                
+            # WARNING: Té ngã có confidence trung bình
+            elif confidence >= 0.40:
+                return 'warning'  # Có thể té nhưng chưa chắc
+                
+            # SUSPECT: Confidence thấp nhưng có dấu hiệu
+            elif confidence >= 0.20:
+                return 'suspect'  # Nghi ngờ sắp té
+                
+            # UNKNOWN: Confidence quá thấp
             else:
-                return 'normal'     # low confidence = normal monitoring
+                return 'unknown'  # Không rõ ràng
                 
         elif event_type in ['abnormal_behavior', 'seizure']:
-            if confidence >= 0.50:        # high threshold for seizures
-                return 'danger'     
-            elif confidence >= 0.30:      # medium threshold for seizures  
-                return 'warning'    
-            else:
-                return 'normal'     # low confidence = normal monitoring
+            # DANGER: Co giật xác nhận
+            if confidence >= 0.50:
+                return 'danger'  # Co giật nguy hiểm
                 
+            # WARNING: Co giật nghi ngờ
+            elif confidence >= 0.30:
+                return 'warning'  # Chưa chắc co giật
+                
+            # SUSPECT: Chuyển động bất thường
+            elif confidence >= 0.15:
+                return 'suspect'  # Nghi ngờ hành động lạ
+                
+            # UNKNOWN: Không rõ
+            else:
+                return 'unknown'
+                
+        elif event_type in ['seizure_warning', 'fall_warning']:
+            # Warning events always return warning status
+            return 'warning'
+            
+        elif event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
+            # Normal activities
+            return 'normal'
+            
         else:
-            # Unknown event type - use conservative thresholds
+            # Unknown event type - classify by confidence
             if confidence >= 0.60:
-                return 'danger'    
+                return 'danger'
             elif confidence >= 0.40:
                 return 'warning'
+            elif confidence >= 0.20:
+                return 'suspect'
             else:
-                return 'normal'
+                return 'unknown'
     
     def _calculate_reliability_score(self, confidence: float, event_type: str, 
                                      bounding_boxes: list = None, context: dict = None) -> float:
@@ -962,8 +1004,9 @@ class PostgreSQLHealthcareService:
                 'confidence_score': str(event_data.get('confidence', 0.0)),  # FIX: Convert to string for DB
                 'bounding_boxes': json.dumps(event_data.get('bounding_boxes', [])),
                 'status': self._determine_event_status(
-                    event_data.get('confidence', 0.0),
-                    event_data.get('event_type', '')
+                    confidence=event_data.get('confidence', 0.0),
+                    event_type=event_data.get('event_type', ''),
+                    context=context_data  # 🔥 Pass context for fall_type analysis
                 ),
                 'context_data': json.dumps(context_data),  # FIX: Use cleaned context without frames,
                 'detected_at': datetime.now(timezone.utc),

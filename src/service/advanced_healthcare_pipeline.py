@@ -86,8 +86,14 @@ class AdvancedHealthcarePipeline:
         self._prev_frame = None
         self._current_frame = None
 
-    def process_frame(self, frame):
-        """Process frame với skip frame logic và keyframe detection như file mẫu"""
+    def process_frame(self, frame, other_cameras=None):
+        """
+        Process frame với skip frame logic và keyframe detection như file mẫu
+        
+        Args:
+            frame: Current frame to process
+            other_cameras: List of other camera dicts in same room (for multi-angle capture)
+        """
         # Cập nhật total frames
         self.stats['total_frames'] += 1
         
@@ -216,6 +222,11 @@ class AdvancedHealthcarePipeline:
             base_fall_confidence = fall_result['confidence']
             fall_method = fall_result.get('method', 'unknown')
             
+            # 🔥 NEW: Extract fall velocity information
+            fall_type = fall_result.get('fall_type', 'unknown')  # fast_fall, slow_collapse, moderate_fall
+            fall_duration = fall_result.get('fall_duration', 0.0)  # Thời gian té (seconds)
+            fall_velocity = fall_result.get('fall_velocity', 0.0)  # Vận tốc té (px/s)
+            
             # Debug: Log fall detection attempt - ENABLED để debug
             if self.stats['total_frames'] % 30 == 0:  # Every 1 second
                 print(f"🔍 Fall Detection Debug: Confidence={base_fall_confidence:.3f}, Motion={motion_level:.3f}, Threshold=0.28, Method={fall_method}")
@@ -230,8 +241,20 @@ class AdvancedHealthcarePipeline:
                 self.stats['fall_detections'] += 1
                 # 🔥 UPDATE last_fall_time NOW when fall is actually detected!
                 self.stats['last_fall_time'] = current_time
-                print(f"🚨🚨🚨 TÉ NGÃ PHÁT HIỆN! 🚨🚨🚨")
-                print(f"📊 Confidence: {base_fall_confidence:.2f} | Motion: {motion_level:.2f}")
+                
+                # 🔥 Log fall type information
+                if fall_type == "slow_collapse":
+                    print(f"🚨🏥 SLOW COLLAPSE DETECTED (POSSIBLE STROKE)! 🚨🏥")
+                    print(f"⏱️ Duration: {fall_duration:.2f}s | Velocity: {fall_velocity:.1f}px/s")
+                    print(f"🩺 HIGH PRIORITY - Medical attention needed!")
+                elif fall_type == "fast_fall":
+                    print(f"🚨⚡ FAST FALL DETECTED! 🚨⚡")
+                    print(f"⏱️ Duration: {fall_duration:.2f}s | Velocity: {fall_velocity:.1f}px/s")
+                else:
+                    print(f"🚨🚨🚨 TÉ NGÃ PHÁT HIỆN! 🚨🚨🚨")
+                    print(f"⏱️ Duration: {fall_duration:.2f}s | Velocity: {fall_velocity:.1f}px/s")
+                
+                print(f"📊 Confidence: {base_fall_confidence:.2f} | Motion: {motion_level:.2f} | Type: {fall_type}")
                 print(f"📊 Method: {fall_method} | Alert Level: CRITICAL")
                 print(f"🏥 Emergency Type: FALL (TÉ NGÃ)")
                 
@@ -269,16 +292,26 @@ class AdvancedHealthcarePipeline:
                                 alert_image_path = None
                         
                         bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
+                        
+                        # 🔥 Determine severity based on fall type
+                        severity = 'critical' if fall_type == 'slow_collapse' else 'high'
+                        description = f'{fall_type.replace("_", " ").title()} detected with {base_fall_confidence:.1%} confidence'
+                        if fall_type == 'slow_collapse':
+                            description += ' - POSSIBLE STROKE OR WEAKNESS'
+                        
                         event_data = {
                             'event_type': 'fall',
-                            'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence',
+                            'description': description,
                             'detection_data': {
                                 'algorithm': 'yolo_fall_detection',
                                 'model_version': 'v1.0',
                                 'detection_timestamp': datetime.now().isoformat(),
-                                'severity': 'high',
+                                'severity': severity,
                                 'method': fall_method,
-                                'motion_level': motion_level
+                                'motion_level': motion_level,
+                                'fall_type': fall_type,  # 🔥 NEW
+                                'fall_duration': fall_duration,  # 🔥 NEW
+                                'fall_velocity': fall_velocity  # 🔥 NEW
                             },
                             'confidence': base_fall_confidence,
                             'bounding_boxes': bounding_boxes,
@@ -286,7 +319,10 @@ class AdvancedHealthcarePipeline:
                                 'motion_level': motion_level,
                                 'detection_type': 'direct',
                                 'person_bbox': person_bbox,
-                                'method': fall_method
+                                'method': fall_method,
+                                'fall_type': fall_type,  # 🔥 NEW
+                                'fall_duration': fall_duration,  # 🔥 NEW
+                                'fall_velocity': fall_velocity  # 🔥 NEW
                             },
                             'camera_id': self.camera_id,
                             'user_id': self.user_id,
@@ -301,7 +337,7 @@ class AdvancedHealthcarePipeline:
                         
                         # 🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN!
                         # Image 1: Frame hiện tại (đang phát hiện event)
-                        # Image 2-5: Capture realtime từ RTSP (0.3s interval)
+                        # Image 2-5: Multi-angle (if same room) hoặc Temporal (if different rooms)
                         snapshot_ids = self.capture_5_snapshots_immediate(
                             current_frame=frame,  # Frame ĐANG phát hiện event
                             event_type='fall',
@@ -311,7 +347,10 @@ class AdvancedHealthcarePipeline:
                                 'motion_level': motion_level,
                                 'detection_type': 'direct',
                                 'person_bbox': person_bbox,
-                                'method': fall_method
+                                'method': fall_method,
+                                'fall_type': fall_type,  # 🔥 NEW
+                                'fall_duration': fall_duration,  # 🔥 NEW
+                                'fall_velocity': fall_velocity  # 🔥 NEW
                             }
                         )
                         
@@ -552,7 +591,8 @@ class AdvancedHealthcarePipeline:
                                     'temporal_ready': seizure_result.get('temporal_ready', False),
                                     'person_bbox': person_bbox,
                                     'keypoints': seizure_result.get('keypoints')
-                                }
+                                },
+                                other_cameras=other_cameras  # 🎥 Pass multi-camera info
                             )
                             
                             # Update event with snapshot_id
@@ -617,46 +657,203 @@ class AdvancedHealthcarePipeline:
                 
         self.performance['seizure_detection_time'] = time.time() - seizure_time_start
         
-        # Enhanced alert level determination - CONFIDENCE-BASED PRIORITY
-        # Nếu cả fall và seizure cùng detected, ưu tiên cái có confidence cao hơn
+        # 🔥 NEW: 5-LEVEL STATUS DETERMINATION
+        # danger, warning, suspect, normal, unknown
+        
+        # Get fall_type for danger classification
+        fall_type = result.get('fall_type', 'unknown')
+        
         if result['seizure_detected'] and result['fall_detected']:
             # Cả 2 đều detected - so sánh confidence
             if result['seizure_confidence'] > result['fall_confidence']:
-                result['alert_level'] = 'critical'
+                result['alert_level'] = 'danger'  # danger: Co giật xác nhận
                 result['emergency_type'] = 'seizure'
                 self.stats['critical_alerts'] += 1
-                # ❌ REMOVED: save_alert_image already called at detection time (lines 523-536)
                 print(f"⚖️ Both detected, seizure wins ({result['seizure_confidence']:.2f} > {result['fall_confidence']:.2f})")
             else:
-                result['alert_level'] = 'high'
+                # Fall detected - check fall_type for severity
+                if fall_type == 'slow_collapse':
+                    result['alert_level'] = 'danger'  # danger: Đột quỵ - nằm bất động
+                    print(f"⚖️ Both detected, SLOW COLLAPSE (stroke) - DANGER!")
+                else:
+                    result['alert_level'] = 'danger'  # danger: Té ngã xác nhận
                 result['emergency_type'] = 'fall'
-                # ❌ REMOVED: save_alert_image already called at detection time (lines 246-268)
                 print(f"⚖️ Both detected, fall wins ({result['fall_confidence']:.2f} > {result['seizure_confidence']:.2f})")
+                
         elif result['seizure_detected']:
-            result['alert_level'] = 'critical'
+            result['alert_level'] = 'danger'  # danger: Co giật xác nhận
             result['emergency_type'] = 'seizure'
             self.stats['critical_alerts'] += 1
-            # ❌ REMOVED: Alert image already saved at detection time (lines 523-536)
-        elif result['fall_detected']:
-            result['alert_level'] = 'high'
-            result['emergency_type'] = 'fall'
-            # ❌ REMOVED: Alert image already saved at detection time (lines 246-268)
-        elif result['seizure_confidence'] > 0.45 and motion_level > 0.7:  # Giảm từ 0.5 xuống 0.45, từ 0.8 xuống 0.7 để nhạy hơn
-            result['alert_level'] = 'warning'
-            result['emergency_type'] = 'seizure_warning'
-            # ❌ REMOVED: Warning images not needed - only save critical/high alerts
-        elif result['fall_confidence'] > 0.50:  # Tăng từ 0.18 lên 0.50 để giảm false positive
-            result['alert_level'] = 'warning'
-            result['emergency_type'] = 'fall_warning'
-            # ❌ REMOVED: Warning images not needed - only save critical/high alerts
             
-        if result['alert_level'] != 'normal':
+        elif result['fall_detected']:
+            # Fall detected - classify based on fall_type
+            if fall_type == 'slow_collapse':
+                result['alert_level'] = 'danger'  # danger: Đột quỵ - nằm bất động
+                result['emergency_type'] = 'fall_stroke'  # Specific type
+            else:
+                result['alert_level'] = 'danger'  # danger: Té ngã xác nhận
+                result['emergency_type'] = 'fall'
+                
+        # WARNING: Có dấu hiệu nhưng chưa chắc chắn
+        elif result['seizure_confidence'] > 0.45 and motion_level > 0.7:
+            result['alert_level'] = 'warning'  # warning: Nghi ngờ co giật
+            result['emergency_type'] = 'seizure_warning'
+            
+        elif result['fall_confidence'] >= 0.40 and result['fall_confidence'] < 0.60:
+            result['alert_level'] = 'warning'  # warning: Nghi ngờ té
+            result['emergency_type'] = 'fall_warning'
+            
+        # SUSPECT: Chuyển động đáng ngờ
+        elif result['seizure_confidence'] >= 0.15 and result['seizure_confidence'] < 0.45:
+            result['alert_level'] = 'suspect'  # suspect: Chuyển động bất thường
+            result['emergency_type'] = 'abnormal_movement'
+            
+        elif result['fall_confidence'] >= 0.20 and result['fall_confidence'] < 0.40:
+            result['alert_level'] = 'suspect'  # suspect: Có thể sắp té
+            result['emergency_type'] = 'pre_fall_risk'
+            
+        # UNKNOWN: Không rõ ràng
+        elif result['seizure_confidence'] > 0 or result['fall_confidence'] > 0:
+            result['alert_level'] = 'unknown'  # unknown: Phát hiện nhưng không rõ
+            result['emergency_type'] = 'unclear_activity'
+        
+        # 🔥 OPTIMIZED: SMART NORMAL LOGGING
+        # Chiến lược tối ưu cho NORMAL để giảm storage:
+        # 1. Chỉ log khi có CHUYỂN ĐỘNG (motion > threshold)
+        # 2. Log mỗi 5 GIÂY thay vì 1 giây (giảm 80% storage)
+        # 3. KHÔNG log snapshot nếu giống snapshot trước đó (similarity check)
+        # 4. Aggregate summary mỗi 5 phút
+        
+        # NORMAL: Log mỗi 150 frames (5 giây @ 30 FPS) + có motion
+        should_log_normal = (
+            self.stats['total_frames'] % 150 == 0 and  # Mỗi 5 giây
+            motion_level > 0.03  # Có chuyển động (giảm từ 0.05 để không bỏ sót)
+        )
+        
+        if result['alert_level'] != 'normal' or should_log_normal:
             self.stats['total_alerts'] += 1
             self.stats['last_alert_time'] = time.time()
             self.stats['alert_type'] = result['alert_level']
             
-            # Send FCM notification for critical/high alerts
-            self.send_emergency_notification(result)
+            # 🔥 CAPTURE IMAGES FOR ALL STATUS LEVELS
+            # Tất cả status đều chụp ảnh để lưu lại hình ảnh
+            snapshot_ids = []
+            try:
+                if self.camera_id and self.user_id and frame is not None:
+                    # Determine confidence based on alert level
+                    if result['alert_level'] in ['danger']:
+                        log_confidence = max(result['fall_confidence'], result['seizure_confidence'])
+                    elif result['alert_level'] in ['warning']:
+                        log_confidence = max(result['fall_confidence'], result['seizure_confidence'], 0.4)
+                    elif result['alert_level'] in ['suspect']:
+                        log_confidence = max(result['fall_confidence'], result['seizure_confidence'], 0.2)
+                    else:
+                        log_confidence = 0.1  # normal or unknown
+                    
+                    # 📸 CAPTURE IMAGES: 5 ảnh cho danger/warning, 1 ảnh cho suspect/normal/unknown
+                    if result['alert_level'] in ['danger', 'warning']:
+                        # Capture 5 images with multi-angle (if available)
+                        print(f"📸 Capturing 5 images for {result['alert_level'].upper()} status...")
+                        snapshot_ids = self.capture_5_snapshots_immediate(
+                            current_frame=frame,
+                            event_type=result.get('emergency_type', 'activity'),
+                            confidence=log_confidence,
+                            metadata={
+                                'alert_level': result['alert_level'],
+                                'fall_confidence': result['fall_confidence'],
+                                'seizure_confidence': result['seizure_confidence'],
+                                'motion_level': motion_level,
+                                'fall_type': result.get('fall_type'),
+                                'fall_duration': result.get('fall_duration'),
+                                'fall_velocity': result.get('fall_velocity')
+                            },
+                            other_cameras=other_cameras if 'other_cameras' in locals() else None
+                        )
+                    else:
+                        # 🔥 OPTIMIZATION: Chỉ capture snapshot nếu NORMAL có motion đủ lớn
+                        # Giảm storage cho những khoảnh khắc đứng/ngồi yên
+                        should_capture = True
+                        
+                        if result['alert_level'] == 'normal':
+                            # NORMAL: Chỉ capture nếu motion > 0.05 (có hoạt động)
+                            if motion_level <= 0.05:
+                                should_capture = False
+                                if self.stats['total_frames'] % 300 == 0:  # Log mỗi 10s
+                                    print(f"⏭️ NORMAL: Skipping snapshot (motion too low: {motion_level:.3f})")
+                        
+                        if should_capture:
+                            # Capture single snapshot for suspect/normal/unknown
+                            print(f"📸 Capturing snapshot for {result['alert_level'].upper()} status...")
+                            if self.snapshot_service:
+                                snapshot_id, _ = self.snapshot_service.create_detection_snapshot(
+                                camera_id=self.camera_id,
+                                user_id=self.user_id,
+                                event_type=result.get('emergency_type', 'normal_activity'),
+                                confidence=log_confidence,
+                                frame=frame,
+                                metadata={
+                                    'alert_level': result['alert_level'],
+                                    'fall_confidence': result['fall_confidence'],
+                                    'seizure_confidence': result['seizure_confidence'],
+                                    'motion_level': motion_level,
+                                    'detection_timestamp': datetime.now().isoformat()
+                                }
+                            )
+                            snapshot_ids = [snapshot_id] if snapshot_id else []
+            except Exception as snap_err:
+                print(f"⚠️ Failed to capture snapshot: {snap_err}")
+            
+            # 🔥 Log ALL events to database with snapshot_id
+            try:
+                # Only log if we have valid IDs
+                if self.camera_id and self.user_id:
+                    # Create event data for all activities
+                    activity_event_data = {
+                        'event_type': result.get('emergency_type', 'normal_activity'),
+                        'description': f"{result['alert_level'].upper()}: {result.get('emergency_type', 'activity')}",
+                        'detection_data': {
+                            'alert_level': result['alert_level'],
+                            'fall_confidence': result['fall_confidence'],
+                            'seizure_confidence': result['seizure_confidence'],
+                            'motion_level': motion_level,
+                            'fall_type': result.get('fall_type'),
+                            'fall_duration': result.get('fall_duration'),
+                            'fall_velocity': result.get('fall_velocity'),
+                            'detection_timestamp': datetime.now().isoformat()
+                        },
+                        'confidence': log_confidence,
+                        'context': {
+                            'alert_level': result['alert_level'],
+                            'emergency_type': result.get('emergency_type'),
+                            'fall_type': result.get('fall_type'),
+                            'fall_duration': result.get('fall_duration'),
+                            'fall_velocity': result.get('fall_velocity'),
+                            'motion_level': motion_level
+                        },
+                        'camera_id': self.camera_id,
+                        'user_id': self.user_id
+                    }
+                    
+                    # Log to DB with snapshot
+                    if result['alert_level'] != 'normal' or should_log_normal:
+                        event_result = self.event_publisher.postgresql_service.publish_event_detection(activity_event_data)
+                        
+                        # Link snapshot to event
+                        if snapshot_ids and len(snapshot_ids) > 0 and event_result:
+                            event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
+                            snapshot_id = snapshot_ids[0]
+                            try:
+                                self.event_publisher.postgresql_service.update_event_snapshot(event_id, snapshot_id)
+                                print(f"✅ {result['alert_level'].upper()} event logged with {len(snapshot_ids)} image(s)")
+                            except Exception as link_err:
+                                print(f"⚠️ Failed to link snapshot: {link_err}")
+                        
+            except Exception as log_err:
+                print(f"⚠️ Failed to log activity to database: {log_err}")
+            
+            # Send FCM notification ONLY for danger/warning (not suspect/normal/unknown)
+            if result['alert_level'] in ['danger', 'warning']:
+                self.send_emergency_notification(result)
             
         self.performance['total_detection_time'] = time.time() - start_time
         return result
@@ -1045,11 +1242,11 @@ class AdvancedHealthcarePipeline:
         except Exception as e:
             print(f"❌ Emergency Event Logging Error: {e}")
 
-    def capture_5_snapshots_immediate(self, current_frame, event_type, confidence, event_id=None, metadata=None):
+    def capture_5_snapshots_immediate(self, current_frame, event_type, confidence, event_id=None, metadata=None, other_cameras=None):
         """
         🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN EVENT!
         - Image 1: Frame hiện tại (đang phát hiện)
-        - Image 2-5: Realtime từ RTSP (0.3s interval) - Bắt diễn biến sau đó
+        - Image 2-5: MULTI-ANGLE (if same room) or TEMPORAL (if different rooms)
         
         Args:
             current_frame: Frame đang phát hiện event (QUAN TRỌNG!)
@@ -1057,6 +1254,7 @@ class AdvancedHealthcarePipeline:
             confidence: Detection confidence
             event_id: Event ID to link
             metadata: Additional metadata
+            other_cameras: List of other camera dicts in same room (for multi-angle)
             
         Returns:
             list of snapshot IDs
@@ -1066,7 +1264,15 @@ class AdvancedHealthcarePipeline:
             return []
         
         snapshot_ids = []
-        print(f"📸 Capturing snapshots IMMEDIATELY for {event_type}...")
+        
+        # Determine capture mode
+        has_multi_camera = other_cameras and len(other_cameras) > 0
+        capture_mode = 'multi_angle' if has_multi_camera else 'temporal'
+        
+        if has_multi_camera:
+            print(f"📸📹 MULTI-ANGLE CAPTURE: {len(other_cameras) + 1} cameras (same room)")
+        else:
+            print(f"📸 TEMPORAL CAPTURE: Single camera")
         
         try:
             # Create ONE snapshot record for all 5 images
@@ -1075,7 +1281,9 @@ class AdvancedHealthcarePipeline:
                 snapshot_metadata = {
                     'detection_time': datetime.now().isoformat(),
                     'total_images': 5,
-                    'capture_mode': 'immediate',  # Đánh dấu capture ngay
+                    'capture_mode': capture_mode,
+                    'multi_angle': has_multi_camera,
+                    'camera_count': len(other_cameras) + 1 if has_multi_camera else 1,
                     **(metadata or {})
                 }
                 
@@ -1089,55 +1297,32 @@ class AdvancedHealthcarePipeline:
                     event_type=event_type,
                     confidence=confidence,
                     frame=current_frame,  # Frame CHÍNH XÁC lúc phát hiện!
-                    metadata={**snapshot_metadata, 'sequence_number': 1, 'is_detection_frame': True}
+                    metadata={
+                        **snapshot_metadata, 
+                        'sequence_number': 1, 
+                        'camera_angle': 'primary',
+                        'time_offset_ms': 0,
+                        'is_detection_frame': True
+                    }
                 )
                 snapshot_ids.append(main_snapshot_id)
-                print(f"✅ Snapshot created with CURRENT frame (Image 1/5): {main_snapshot_id[:8]}...")
+                print(f"✅ Image 1/5 (Detection frame): {main_snapshot_id[:8]}...")
             
-            # 🔥 IMAGE 2-5: Capture realtime từ RTSP để bắt diễn biến tiếp theo
+            # 🔥 IMAGE 2-5: MULTI-ANGLE or TEMPORAL
             if main_snapshot_id:
-                rtsp_url = getattr(self.camera, 'rtsp_url', None)
-                if rtsp_url:
-                    cap = cv2.VideoCapture(rtsp_url)
-                    
-                    if cap.isOpened():
-                        for i in range(1, 5):  # Images 2-5
-                            ret, frame = cap.read()
-                            
-                            if not ret or frame is None:
-                                print(f"⚠️ Failed to capture frame {i+1}/5 from RTSP")
-                                time.sleep(0.3)  # Vẫn delay để sync timing
-                                continue
-                            
-                            # Add image to existing snapshot
-                            try:
-                                image_id = self.snapshot_service.add_image_to_snapshot(
-                                    snapshot_id=main_snapshot_id,
-                                    frame=frame,
-                                    camera_id=self.camera_id,
-                                    user_id=self.user_id,
-                                    event_type=event_type,
-                                    confidence=confidence,
-                                    is_primary=False,
-                                    metadata={
-                                        'sequence_number': i + 1,
-                                        'detection_time': datetime.now().isoformat(),
-                                        'time_offset_ms': i * 300  # 300ms interval
-                                    }
-                                )
-                                print(f"✅ Image {i+1}/5 added: {image_id[:8]}...")
-                            except Exception as e:
-                                print(f"❌ Failed to add image {i+1}/5: {e}")
-                            
-                            # Delay 0.3s before next capture (nhanh hơn để bắt diễn biến)
-                            if i < 4:
-                                time.sleep(0.3)
-                        
-                        cap.release()
-                    else:
-                        print(f"⚠️ Could not open RTSP for additional frames")
+                if has_multi_camera:
+                    # 📹 MULTI-ANGLE MODE: Capture từ nhiều camera
+                    self._capture_multi_angle_images(
+                        main_snapshot_id, event_type, confidence,
+                        other_cameras, snapshot_metadata
+                    )
+                else:
+                    # ⏱️ TEMPORAL MODE: Capture theo thời gian
+                    self._capture_temporal_images(
+                        main_snapshot_id, event_type, confidence, snapshot_metadata
+                    )
                 
-                print(f"📸 Captured 1 snapshot with 5 images (1 current + 4 realtime)!")
+                print(f"📸 Captured 1 snapshot with 5 images ({capture_mode} mode)!")
             
         except Exception as e:
             print(f"❌ Error capturing immediate snapshots: {e}")
@@ -1145,6 +1330,190 @@ class AdvancedHealthcarePipeline:
             traceback.print_exc()
         
         return snapshot_ids
+
+    def _capture_multi_angle_images(self, snapshot_id, event_type, confidence, 
+                                    other_cameras, snapshot_metadata):
+        """
+        Capture Images 2-5 from multiple cameras (same room)
+        
+        Strategy:
+        - Image 2: Camera 2 @ T+0.0s (other angle, simultaneous)
+        - Image 3: Camera 1 @ T+0.5s
+        - Image 4: Camera 2 @ T+0.5s
+        - Image 5: Camera 1 @ T+1.0s (final state)
+        """
+        try:
+            # Setup cameras
+            primary_rtsp = getattr(self.camera, 'rtsp_url', None)
+            primary_cap = cv2.VideoCapture(primary_rtsp) if primary_rtsp else None
+            
+            # Get first other camera
+            other_camera = other_cameras[0] if other_cameras else None
+            other_cap = None
+            
+            if other_camera and 'rtsp_url' in other_camera:
+                other_cap = cv2.VideoCapture(other_camera['rtsp_url'])
+                print(f"🎥 Opened secondary camera: {other_camera.get('camera_id', 'unknown')}")
+            
+            # IMAGE 2: Other camera @ T+0
+            if other_cap and other_cap.isOpened():
+                ret, frame = other_cap.read()
+                if ret and frame is not None:
+                    self.snapshot_service.add_image_to_snapshot(
+                        snapshot_id=snapshot_id,
+                        frame=frame,
+                        camera_id=other_camera.get('camera_id'),
+                        user_id=self.user_id,
+                        event_type=event_type,
+                        confidence=confidence,
+                        is_primary=False,
+                        metadata={
+                            'sequence_number': 2,
+                            'camera_angle': 'secondary',
+                            'time_offset_ms': 0,
+                            'capture_method': 'multi_angle'
+                        }
+                    )
+                    print(f"✅ Image 2/5 (Cam2 T+0.0s)")
+            
+            # Sleep 0.5s before next batch
+            time.sleep(0.5)
+            
+            # IMAGE 3: Primary camera @ T+0.5s
+            if primary_cap and primary_cap.isOpened():
+                ret, frame = primary_cap.read()
+                if ret and frame is not None:
+                    self.snapshot_service.add_image_to_snapshot(
+                        snapshot_id=snapshot_id,
+                        frame=frame,
+                        camera_id=self.camera_id,
+                        user_id=self.user_id,
+                        event_type=event_type,
+                        confidence=confidence,
+                        is_primary=False,
+                        metadata={
+                            'sequence_number': 3,
+                            'camera_angle': 'primary',
+                            'time_offset_ms': 500,
+                            'capture_method': 'multi_angle'
+                        }
+                    )
+                    print(f"✅ Image 3/5 (Cam1 T+0.5s)")
+            
+            # IMAGE 4: Other camera @ T+0.5s
+            if other_cap and other_cap.isOpened():
+                ret, frame = other_cap.read()
+                if ret and frame is not None:
+                    self.snapshot_service.add_image_to_snapshot(
+                        snapshot_id=snapshot_id,
+                        frame=frame,
+                        camera_id=other_camera.get('camera_id'),
+                        user_id=self.user_id,
+                        event_type=event_type,
+                        confidence=confidence,
+                        is_primary=False,
+                        metadata={
+                            'sequence_number': 4,
+                            'camera_angle': 'secondary',
+                            'time_offset_ms': 500,
+                            'capture_method': 'multi_angle'
+                        }
+                    )
+                    print(f"✅ Image 4/5 (Cam2 T+0.5s)")
+            
+            # Sleep 0.5s before final capture
+            time.sleep(0.5)
+            
+            # IMAGE 5: Primary camera @ T+1.0s (final state)
+            if primary_cap and primary_cap.isOpened():
+                ret, frame = primary_cap.read()
+                if ret and frame is not None:
+                    self.snapshot_service.add_image_to_snapshot(
+                        snapshot_id=snapshot_id,
+                        frame=frame,
+                        camera_id=self.camera_id,
+                        user_id=self.user_id,
+                        event_type=event_type,
+                        confidence=confidence,
+                        is_primary=False,
+                        metadata={
+                            'sequence_number': 5,
+                            'camera_angle': 'primary',
+                            'time_offset_ms': 1000,
+                            'capture_method': 'multi_angle'
+                        }
+                    )
+                    print(f"✅ Image 5/5 (Cam1 T+1.0s)")
+            
+            # Cleanup
+            if primary_cap:
+                primary_cap.release()
+            if other_cap:
+                other_cap.release()
+                
+        except Exception as e:
+            print(f"❌ Multi-angle capture error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _capture_temporal_images(self, snapshot_id, event_type, confidence, snapshot_metadata):
+        """
+        Capture Images 2-5 from single camera over time
+        
+        Strategy:
+        - Images 2-5: Primary camera @ 0.3s intervals
+        """
+        try:
+            rtsp_url = getattr(self.camera, 'rtsp_url', None)
+            if not rtsp_url:
+                print("⚠️ No RTSP URL for temporal capture")
+                return
+            
+            cap = cv2.VideoCapture(rtsp_url)
+            if not cap.isOpened():
+                print(f"⚠️ Could not open RTSP for temporal capture")
+                return
+            
+            # Capture Images 2-5 with 0.3s intervals
+            for i in range(1, 5):  # Images 2-5
+                ret, frame = cap.read()
+                
+                if not ret or frame is None:
+                    print(f"⚠️ Failed to capture frame {i+1}/5 from RTSP")
+                    time.sleep(0.3)
+                    continue
+                
+                # Add image to snapshot
+                try:
+                    self.snapshot_service.add_image_to_snapshot(
+                        snapshot_id=snapshot_id,
+                        frame=frame,
+                        camera_id=self.camera_id,
+                        user_id=self.user_id,
+                        event_type=event_type,
+                        confidence=confidence,
+                        is_primary=False,
+                        metadata={
+                            'sequence_number': i + 1,
+                            'camera_angle': 'primary',
+                            'time_offset_ms': i * 300,
+                            'capture_method': 'temporal'
+                        }
+                    )
+                    print(f"✅ Image {i+1}/5 (T+{i*0.3:.1f}s)")
+                except Exception as e:
+                    print(f"❌ Failed to add image {i+1}/5: {e}")
+                
+                # Delay before next capture
+                if i < 4:
+                    time.sleep(0.3)
+            
+            cap.release()
+            
+        except Exception as e:
+            print(f"❌ Temporal capture error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def capture_5_snapshots_from_rtsp(self, event_type, confidence, event_id=None, metadata=None):
         """

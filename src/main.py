@@ -330,7 +330,24 @@ if __name__ == "__main__":
                     if frame is None:
                         continue
                     
-                    result = cam_data['pipeline'].process_frame(frame)
+                    # 🎥 Find other cameras in same room for multi-angle capture
+                    current_location = None
+                    for cam in all_cameras:
+                        if cam['id'] == cam_data['id']:
+                            current_location = cam.get('location')
+                            break
+                    
+                    other_cameras_same_room = []
+                    if current_location:
+                        for cam in all_cameras:
+                            if cam['id'] != cam_data['id'] and cam.get('location') == current_location:
+                                other_cameras_same_room.append(cam)
+                    
+                    # Process frame with multi-camera context
+                    result = cam_data['pipeline'].process_frame(
+                        frame, 
+                        other_cameras=other_cameras_same_room if other_cameras_same_room else None
+                    )
                     detection_result = result["detection_result"]
                     person_detections = result["person_detections"]
                     
@@ -560,7 +577,8 @@ if __name__ == "__main__":
             break
         
         frame_count += 1
-        result = pipeline.process_frame(frame)
+        # Single camera mode: no other cameras
+        result = pipeline.process_frame(frame, other_cameras=None)
         detection_result = result["detection_result"]
         person_detections = result["person_detections"]
         
