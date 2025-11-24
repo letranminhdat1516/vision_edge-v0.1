@@ -91,6 +91,9 @@ class AdvancedHealthcarePipeline:
         from collections import deque
         self._frame_buffer = deque(maxlen=5)  # Lưu tối đa 5 frames gần nhất
         self._frame_timestamps = deque(maxlen=5)  # Timestamp tương ứng
+        
+        # 🕐 NORMAL EVENT THROTTLE: Chỉ log NORMAL mỗi 10 giây
+        self._last_normal_log_time = 0
 
     def process_frame(self, frame, other_cameras=None):
         """
@@ -245,9 +248,17 @@ class AdvancedHealthcarePipeline:
             
             # FALL DETECTION THRESHOLD: TĂNG NHẠY để detect fall tốt hơn
             # Giảm từ 0.35 → 0.28 (28%) để tăng sensitivity, vẫn có motion check
-            # Yêu cầu thêm: motion_level > 0.015 để đảm bảo có chuyển động thực sự
+            # 🔥 EXCEPTION: STRATEGY 0 (rapid_downward) BYPASS motion check vì đã có vertical>100px check cực kỳ chặt
             has_real_motion = motion_level > 0.015  # Motion thật sự, giảm từ 0.02→0.015 để nhạy hơn
-            if base_fall_confidence >= 0.28 and has_real_motion:  # NHẠY HƠN: 28% + motion check nhẹ hơn
+            is_rapid_fall = fall_method == 'rapid_downward'  # STRATEGY 0: vertical>100px đã đủ chặt
+            
+            # 🔥 DEBUG: Log fall detection decision
+            if base_fall_confidence >= 0.28:
+                print(f"🔍 FALL DECISION: conf={base_fall_confidence:.3f}, motion={motion_level:.3f}, method={fall_method}")
+                print(f"   has_real_motion={has_real_motion} (need >0.015), is_rapid_fall={is_rapid_fall}")
+                print(f"   WILL CREATE EVENT: {has_real_motion or is_rapid_fall}")
+            
+            if base_fall_confidence >= 0.28 and (has_real_motion or is_rapid_fall):  # BYPASS motion cho rapid fall
                 result['fall_detected'] = True
                 result['fall_confidence'] = base_fall_confidence
                 self.stats['fall_detections'] += 1
@@ -331,12 +342,13 @@ class AdvancedHealthcarePipeline:
                                 'method': fall_method,
                                 'fall_type': fall_type,  # 🔥 NEW
                                 'fall_duration': fall_duration,  # 🔥 NEW
-                                'fall_velocity': fall_velocity  # 🔥 NEW
+                                'fall_velocity': fall_velocity,  # 🔥 NEW
+                                'frame': frame.copy() if frame is not None else None  # 🎬 Pass frame for BLIP caption fallback
                             },
                             'camera_id': self.camera_id,
                             'user_id': self.user_id,
                             'image_path': alert_image_path,  # 🔥 FIX: Pass current image path
-                            # NO frame - snapshot will be created separately
+                            # Frame added to context for BLIP caption fallback if image_path fails
                         }
                         
                         # Publish event to get event_id (without snapshot yet)
@@ -580,7 +592,8 @@ class AdvancedHealthcarePipeline:
                                         'detection_type': 'confirmation',
                                         'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
                                         'temporal_ready': seizure_result.get('temporal_ready', False),
-                                        'person_bbox': person_bbox
+                                        'person_bbox': person_bbox,
+                                        'frame': frame.copy() if frame is not None else None  # 🎬 Pass frame for BLIP caption fallback
                                     },
                                     'camera_id': self.camera_id,
                                     'user_id': self.user_id,
@@ -747,19 +760,23 @@ class AdvancedHealthcarePipeline:
         
         # 🔥 OPTIMIZED: SMART NORMAL LOGGING
         # Chiến lược tối ưu cho NORMAL để giảm storage:
-        # 1. Chỉ log khi có CHUYỂN ĐỘNG (motion > threshold)
-        # 2. Log mỗi 5 GIÂY thay vì 1 giây (giảm 80% storage)
-        # 3. KHÔNG log snapshot nếu giống snapshot trước đó (similarity check)
-        # 4. Aggregate summary mỗi 5 phút
+        # 🎯 NORMAL EVENT LOGIC - Chỉ log khi:
+        # 1. Có CHUYỂN ĐỘNG rõ ràng (motion > 0.05, dễ detect)
+        # 2. Đã qua 10 GIÂY từ lần log NORMAL trước
+        # Note: Bỏ check person detection vì YOLOv8 có thể miss detection
         
-        # NORMAL: Log bất cứ khi nào có motion (không giới hạn thời gian)
-        # Tần suất sẽ được kiểm soát bởi duplicate check trong DB (5 giây)
-        should_log_normal = motion_level > 0.01  # Chỉ cần có motion nhẹ là log
+        current_time = time.time()
+        time_since_last_normal = current_time - self._last_normal_log_time
+        
+        should_log_normal = (
+            motion_level > 0.05 and  # Chuyển động rõ ràng (5% pixel thay đổi)
+            time_since_last_normal >= 10.0  # Cách nhau ít nhất 10 giây
+        )
         
         # 🔥 DEBUG: Log để track NORMAL status mỗi 30 frames
         if result['alert_level'] == 'normal' and self.stats['total_frames'] % 30 == 0:
-            print(f"📊 NORMAL Status: frames={self.stats['total_frames']}, motion={motion_level:.3f}, should_log={should_log_normal}")
-            print(f"   Motion check: {motion_level:.3f} > 0.01 = {motion_level > 0.01}")
+            print(f"📊 NORMAL Status: motion={motion_level:.3f}, time_gap={time_since_last_normal:.1f}s")
+            print(f"   Should log: {should_log_normal} (motion>0.05 AND time>=10s)")
         
         if result['alert_level'] != 'normal' or should_log_normal:
             self.stats['total_alerts'] += 1
@@ -869,6 +886,11 @@ class AdvancedHealthcarePipeline:
                                 # Log success
                                 event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                                 print(f"✅ {result['alert_level'].upper()} event logged: {event_id[:8]}...")
+                                
+                                # 🕐 Update timestamp nếu là NORMAL event
+                                if result['alert_level'] == 'normal':
+                                    self._last_normal_log_time = current_time
+                                    print(f"   ⏰ Next NORMAL log allowed after: {time.strftime('%H:%M:%S', time.localtime(current_time + 10))}")
                                 
                                 # Link snapshot to event (if available)
                                 if snapshot_ids and len(snapshot_ids) > 0:
@@ -1013,13 +1035,14 @@ class AdvancedHealthcarePipeline:
             bbox = person['bbox']
             confidence = person.get('confidence', 0)
             x, y, w, h = map(int, bbox)
-            color = (0, 255, 0)
-            if detection_result.get('alert_level') == 'critical':
-                color = (0, 0, 255)
-            elif detection_result.get('alert_level') == 'high':
-                color = (0, 165, 255)
+            color = (0, 255, 0)  # Green - Normal
+            # 🎯 FIX: Match alert_level values with pipeline logic
+            if detection_result.get('alert_level') == 'danger':
+                color = (0, 0, 255)  # Red - Danger (critical emergency)
             elif detection_result.get('alert_level') == 'warning':
-                color = (0, 255, 255)
+                color = (0, 140, 255)  # Orange - Warning (needs attention)
+            elif detection_result.get('alert_level') == 'suspect':
+                color = (0, 255, 255)  # Yellow - Suspect (unusual activity)
             cv2.rectangle(frame_vis, (x, y), (x + w, y + h), color, 2)
             cv2.putText(frame_vis, f"Person: {confidence:.2f}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 

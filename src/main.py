@@ -361,10 +361,11 @@ if __name__ == "__main__":
                     # Debug logging removed for cleaner output
                     
                     # Generate intelligent action when alert detected
-                    if detection_result.get('alert_level') in ['critical', 'high']:
+                    # 🎯 FIX: Match alert_level values with pipeline ('danger', 'warning', 'suspect', 'normal')
+                    if detection_result.get('alert_level') == 'danger':
                         emergency_type = detection_result.get('emergency_type', 'unknown')
                         confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
-                        print(f"🚨 EMERGENCY ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
+                        print(f"🚨 DANGER ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
                         
                         # ✅ Event creation is now handled by advanced_healthcare_pipeline.py
                         # with cooldown logic + 5-snapshot RTSP capture. No need to duplicate here.

@@ -691,15 +691,18 @@ class PostgreSQLHealthcareService:
             image_file_to_use = image_path
             if not image_file_to_use or not os.path.exists(image_file_to_use):
                 logger.warning(f"⚠️ No valid image_path provided (got: {image_path})")
-                logger.warning(f"⚠️ SKIPPING caption generation - will use default description")
+                logger.warning(f"⚠️ Attempting BLIP caption from frame in context...")
                 
-                # 🔥 SPECIAL HANDLING for normal_activity: Use BLIP with current frame from context
-                if event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
+                # 🔥 SPECIAL HANDLING: Use BLIP with current frame from context (for ALL event types)
+                if event_type in ['normal_activity', 'walking', 'sitting', 'standing', 'fall', 'seizure', 'abnormal_behavior']:
                     # Try to use frame from context for BLIP captioning
                     frame = context.get('frame') if context else None
                     
+                    logger.info(f"🎬 NORMAL CAPTION DEBUG: frame={'present' if frame is not None else 'missing'}, blip_service={'enabled' if self.vietnamese_caption is not None else 'disabled'}")
+                    
                     if frame is not None and self.vietnamese_caption is not None:
                         try:
+                            logger.info("📸 Generating BLIP caption for NORMAL event...")
                             # Generate BLIP caption directly from frame (no file save)
                             import tempfile
                             import cv2
@@ -709,34 +712,74 @@ class PostgreSQLHealthcareService:
                                 cv2.imwrite(tmp.name, frame)
                                 temp_path = tmp.name
                             
-                            # Generate Vietnamese caption
+                            logger.info(f"📁 Temp image saved: {temp_path}")
+                            
+                            # Generate Vietnamese caption with correct event_type
                             vietnamese_result = self.vietnamese_caption.generate_professional_caption(
                                 temp_path,
-                                event_type='normal_activity',
+                                event_type=event_type,  # Use actual event_type (fall, seizure, normal_activity, etc.)
                                 confidence=confidence
                             )
                             vietnamese_caption = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
                             
                             # Cleanup temp file
-                            import os
                             try:
                                 os.unlink(temp_path)
                             except:
                                 pass
                             
                             if vietnamese_caption and len(vietnamese_caption.strip()) > 0:
-                                return f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                logger.info(f"✅ BLIP caption generated: {vietnamese_caption}")
+                                
+                                # 🔥 BUILD RESPONSE based on event_type and confidence
+                                if event_type == 'fall':
+                                    fall_type = context.get('fall_type') if context else None
+                                    fall_duration = context.get('fall_duration', 0) if context else 0
+                                    
+                                    if confidence >= 0.60:
+                                        if fall_type == 'slow_collapse' or fall_duration >= 1.0:
+                                            return f"🏥🆘 KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! ⚠️ Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
+                                        else:
+                                            return f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! 🆘 Người đang nằm trên sàn!"
+                                    elif confidence >= 0.40:
+                                        return f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi"
+                                    else:
+                                        return f"📊 THEO DÕI: {vietnamese_caption} - Quan sát"
+                                
+                                elif event_type in ['abnormal_behavior', 'seizure']:
+                                    if confidence >= 0.50:
+                                        return f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                    elif confidence >= 0.30:
+                                        return f"⚠️ CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
+                                    else:
+                                        return f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
+                                
+                                elif event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
+                                    return f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                
+                                else:
+                                    return f"🔍 THEO DÕI: {vietnamese_caption} - Cần đánh giá thêm"
+                            else:
+                                logger.warning("⚠️ BLIP returned empty caption")
                         except Exception as e:
-                            logger.warning(f"BLIP caption for normal_activity failed: {e}")
-                    
-                    # Fallback: Simple description based on motion
-                    motion_level = context.get('motion_level', 0) if context else 0
-                    if motion_level > 0.05:
-                        return "✅ BÌNH THƯỜNG: Người đang di chuyển trong phòng - Hoạt động thường ngày"
-                    elif motion_level > 0.02:
-                        return "✅ BÌNH THƯỜNG: Người đang đứng/ngồi với chuyển động nhẹ - Hoạt động bình thường"
+                            logger.error(f"❌ BLIP caption failed for {event_type}: {e}")
+                            import traceback
+                            traceback.print_exc()
                     else:
-                        return "✅ BÌNH THƯỜNG: Người đang đứng/ngồi tại chỗ - Không có bất thường"
+                        if frame is None:
+                            logger.warning("⚠️ No frame in context for BLIP captioning")
+                        if self.vietnamese_caption is None:
+                            logger.warning("⚠️ Vietnamese caption service not initialized")
+                    
+                    # Fallback: Simple description based on event_type
+                    if event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
+                        motion_level = context.get('motion_level', 0) if context else 0
+                        if motion_level > 0.05:
+                            return "✅ BÌNH THƯỜNG: Người đang di chuyển trong phòng - Hoạt động thường ngày"
+                        elif motion_level > 0.02:
+                            return "✅ BÌNH THƯỜNG: Người đang đứng/ngồi với chuyển động nhẹ - Hoạt động bình thường"
+                        else:
+                            return "✅ BÌNH THƯỜNG: Người đang đứng/ngồi tại chỗ - Không có bất thường"
                 
                 # For fall/seizure without image, return fallback
                 return fallback_description if fallback_description else f"Phát hiện sự kiện với độ tin cậy {confidence:.1%}"
@@ -1026,6 +1069,7 @@ class PostgreSQLHealthcareService:
                 logger.info(f"📍 Camera location: {camera_name}")
             
             # Generate Vietnamese description for the event
+            # 🎬 IMPORTANT: Pass context BEFORE removing frame (for BLIP captioning)
             print(f"🔥 DEBUG BEFORE _generate_event_description:")
             print(f"   event_data description: '{event_data.get('description', '')}'")
             
@@ -1035,7 +1079,7 @@ class PostgreSQLHealthcareService:
                 event_data.get('image_path', ''),
                 event_data.get('description', ''),
                 camera_name=camera_name,
-                context=event_data.get('detection_data', {})  # Pass detection_data as context
+                context=event_data.get('context', {})  # 🎬 Pass full context (with frame) for BLIP
             )
             
             print(f"🔥 DEBUG AFTER _generate_event_description:")
@@ -1056,7 +1100,7 @@ class PostgreSQLHealthcareService:
                         duplicate_check_sql = """
                         SELECT event_id FROM event_detections 
                         WHERE event_type = %s AND user_id = %s AND camera_id = %s 
-                        AND detected_at > NOW() - INTERVAL '30 seconds'
+                        AND detected_at > NOW() - INTERVAL '10 seconds'
                         ORDER BY detected_at DESC LIMIT 1
                         """
                         cursor.execute(duplicate_check_sql, (
