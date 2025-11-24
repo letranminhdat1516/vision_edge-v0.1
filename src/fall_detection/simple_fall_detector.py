@@ -325,6 +325,26 @@ class SimpleFallDetector:
                         'method': 'sitting_filtered'
                     }
                 
+                # 🧎 BENDING DETECTION: CÚI NGƯỜI (bending down) → WARNING
+                # Người CÚI: aspect < 1.0 (vẫn đứng, height > width) → confidence thấp
+                # Người TÉ: aspect >= 1.0 (nằm ngang, width >= height) → confidence cao
+                if aspect_ratio2 < 1.0:  # Tư thế cuối vẫn ĐỨNG/CÚI
+                    bending_confidence = 0.45  # WARNING level (0.40-0.59)
+                    log.warning(f"🧎 BENDING DETECTED: final_aspect={aspect_ratio2:.2f} < 1.0 (bending, not lying) - WARNING level, conf={bending_confidence}")
+                    
+                    # Update last danger time để tránh spam
+                    self.last_danger_fall_time = current_time
+                    
+                    return {
+                        'fall_detected': True,
+                        'confidence': bending_confidence,
+                        'angle': 0.0,
+                        'category': 'bending-posture',
+                        'method': 'bending_warning',
+                        'fall_type': 'bending_down',
+                        'alert_level': 'warning'  # Không phải CRITICAL
+                    }
+                
                 # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
                 # When person is laying still, bbox can jitter 100-200px due to detection variance
                 # Only allow rapid fall detection if there's actual motion in the scene

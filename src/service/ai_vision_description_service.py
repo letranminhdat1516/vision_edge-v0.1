@@ -155,6 +155,9 @@ class ProfessionalVietnameseCaptionPipeline:
                 # Clean up any weird symbols from translation
                 vietnamese_text = vietnamese_text.replace('♪', '').replace('_', '').strip()
                 
+                # Post-process: Replace bending patterns with stroke warning
+                vietnamese_text = self._replace_bending_patterns(vietnamese_text)
+                
                 return vietnamese_text, "ai_model"
             else:
                 return self._rule_based_translation(english_text), "fallback"
@@ -162,6 +165,29 @@ class ProfessionalVietnameseCaptionPipeline:
         except Exception as e:
             logger.error(f"❌ AI translation failed: {e}")
             return self._rule_based_translation(english_text), "error_fallback"
+    
+    def _replace_bending_patterns(self, vietnamese_text):
+        """Replace bending/leaning patterns with stroke warning"""
+        import re
+        
+        # Patterns indicating bending forward (stroke symptom)
+        bending_patterns = [
+            r'cúi\s+(người|xuống|thấp)',
+            r'chúi\s+người',
+            r'cong\s+người',
+            r'nghiêng\s+(người|về\s+phía\s+trước)',
+            r'gập\s+người',
+            r'đang\s+cúi',
+            r'đang\s+chúi',
+            r'đang\s+cong',
+            r'đang\s+nghiêng',
+            r'đang\s+gập'
+        ]
+        
+        for pattern in bending_patterns:
+            vietnamese_text = re.sub(pattern, 'có dấu hiệu đột quỵ', vietnamese_text, flags=re.IGNORECASE)
+        
+        return vietnamese_text
     
     def _rule_based_translation(self, english_text):
         """Rule-based translation as fallback"""
@@ -182,6 +208,14 @@ class ProfessionalVietnameseCaptionPipeline:
             "child": "đứa trẻ",
             
             # Actions - Fixed order
+            "is bending": "có dấu hiệu đột quỵ",
+            "is leaning forward": "có dấu hiệu đột quỵ",
+            "is stooping": "có dấu hiệu đột quỵ",
+            "bending over": "có dấu hiệu đột quỵ",
+            "bending down": "có dấu hiệu đột quỵ",
+            "leaning forward": "có dấu hiệu đột quỵ",
+            "bending": "có dấu hiệu đột quỵ",
+            "stooping": "có dấu hiệu đột quỵ",
             "is walking": "đang đi",
             "is standing": "đang đứng",
             "is sitting": "đang ngồi",
@@ -257,6 +291,9 @@ class ProfessionalVietnameseCaptionPipeline:
         # Clean up multiple spaces
         import re
         result = re.sub(r'\s+', ' ', result).strip()
+        
+        # Post-process: Replace bending patterns with stroke warning
+        result = self._replace_bending_patterns(result)
         
         # Capitalize first letter
         if result:
