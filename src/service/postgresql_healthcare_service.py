@@ -693,11 +693,44 @@ class PostgreSQLHealthcareService:
                 logger.warning(f"⚠️ No valid image_path provided (got: {image_path})")
                 logger.warning(f"⚠️ SKIPPING caption generation - will use default description")
                 
-                # 🔥 SPECIAL HANDLING for normal_activity: Create descriptive caption without image
+                # 🔥 SPECIAL HANDLING for normal_activity: Use BLIP with current frame from context
                 if event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
-                    # Generate descriptive caption based on context
-                    motion_level = context.get('motion_level', 0) if context else 0
+                    # Try to use frame from context for BLIP captioning
+                    frame = context.get('frame') if context else None
                     
+                    if frame is not None and self.vietnamese_caption is not None:
+                        try:
+                            # Generate BLIP caption directly from frame (no file save)
+                            import tempfile
+                            import cv2
+                            
+                            # Save frame to temp file for BLIP
+                            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+                                cv2.imwrite(tmp.name, frame)
+                                temp_path = tmp.name
+                            
+                            # Generate Vietnamese caption
+                            vietnamese_result = self.vietnamese_caption.generate_professional_caption(
+                                temp_path,
+                                event_type='normal_activity',
+                                confidence=confidence
+                            )
+                            vietnamese_caption = vietnamese_result[0] if isinstance(vietnamese_result, tuple) else vietnamese_result
+                            
+                            # Cleanup temp file
+                            import os
+                            try:
+                                os.unlink(temp_path)
+                            except:
+                                pass
+                            
+                            if vietnamese_caption and len(vietnamese_caption.strip()) > 0:
+                                return f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                        except Exception as e:
+                            logger.warning(f"BLIP caption for normal_activity failed: {e}")
+                    
+                    # Fallback: Simple description based on motion
+                    motion_level = context.get('motion_level', 0) if context else 0
                     if motion_level > 0.05:
                         return "✅ BÌNH THƯỜNG: Người đang di chuyển trong phòng - Hoạt động thường ngày"
                     elif motion_level > 0.02:

@@ -848,7 +848,8 @@ class AdvancedHealthcarePipeline:
                             'fall_type': result.get('fall_type'),
                             'fall_duration': result.get('fall_duration'),
                             'fall_velocity': result.get('fall_velocity'),
-                            'motion_level': motion_level
+                            'motion_level': motion_level,
+                            'frame': self._current_frame.copy() if self._current_frame is not None else None  # 🎬 Pass current frame for BLIP
                         },
                         'camera_id': self.camera_id,
                         'user_id': self.user_id
