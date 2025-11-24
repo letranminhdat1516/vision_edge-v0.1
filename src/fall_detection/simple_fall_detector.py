@@ -308,6 +308,23 @@ class SimpleFallDetector:
                         'method': 'danger_cooldown_filtered'
                     }
                 
+                # 🪑 SITTING FILTER: Reject NGỒI NHANH (sitting down quickly)
+                # Nếu vị trí cuối (center2_y) ở giữa frame = NGỒI, không phải TÉ NGÃ
+                # Frame height = 480px → NGỒI thường ở y=200-350px (40-70% chiều cao)
+                # TÉ NGÃ thật → người nằm sàn → y > 350px (>70% chiều cao)
+                frame_height = 480  # Assumed frame height
+                final_position_ratio = center2_y / frame_height
+                
+                if final_position_ratio < 0.70:  # Vị trí cuối < 70% = NGỒI hoặc ĐỨNG
+                    log.info(f"🪑 Rejected SITTING: final_y={center2_y:.1f}px ({final_position_ratio:.1%} < 70% frame) - Person sitting, not falling")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'sitting-down',
+                        'method': 'sitting_filtered'
+                    }
+                
                 # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
                 # When person is laying still, bbox can jitter 100-200px due to detection variance
                 # Only allow rapid fall detection if there's actual motion in the scene
