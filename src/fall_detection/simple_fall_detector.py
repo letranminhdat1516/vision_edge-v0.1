@@ -34,6 +34,10 @@ class SimpleFallDetector:
         self.fall_start_position = None  # Vị trí Y khi bắt đầu té
         self.fall_velocity_history = []  # Lịch sử vận tốc rơi
         
+        # 🚨 DANGER EVENT COOLDOWN: Tránh spam fall events liên tiếp
+        self.last_danger_fall_time = 0  # Thời điểm fall event DANGER cuối cùng
+        self.danger_cooldown = 30  # 30 giây cooldown cho DANGER events (conf >= 0.60)
+        
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
     def detect_fall(self, current_frame, timestamp=None, person_bbox=None, motion_level=None):
@@ -273,6 +277,37 @@ class SimpleFallDetector:
                 log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >80), downward={center2_y > center1_y}")
             
             if vertical_movement > 80 and center2_y > center1_y:  # GIẢM 100→80px: NHẠY HƠN để detect fall thật
+                # 🕐 GET CURRENT TIME for cooldown check
+                current_time = time.time()
+                
+                # 🚫 POSTURE FILTER: Reject if person is ALREADY LYING DOWN (not falling)
+                # Initial aspect > 1.3 = person lying horizontally (width > height)
+                # Only detect fall from STANDING/SITTING → LYING, not LYING → LYING movement
+                is_initially_lying = aspect_ratio1 > 1.3
+                
+                if is_initially_lying:
+                    log.info(f"⚠️ Rejected ALREADY LYING: initial_aspect={aspect_ratio1:.2f} > 1.3 (person already on ground, not falling)")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'already-lying',
+                        'method': 'already_lying_filtered'
+                    }
+                
+                # 🚨 DANGER COOLDOWN CHECK: Tránh spam DANGER fall events
+                # Chỉ cho phép 1 DANGER event mỗi 30 giây
+                time_since_last_danger = current_time - self.last_danger_fall_time
+                if time_since_last_danger < self.danger_cooldown:
+                    log.info(f"⏰ Rejected DANGER COOLDOWN: last_danger={time_since_last_danger:.1f}s ago (need >{self.danger_cooldown}s)")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'danger-cooldown',
+                        'method': 'danger_cooldown_filtered'
+                    }
+                
                 # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
                 # When person is laying still, bbox can jitter 100-200px due to detection variance
                 # Only allow rapid fall detection if there's actual motion in the scene
@@ -288,7 +323,7 @@ class SimpleFallDetector:
                     }
                 
                 # 🔥 NEW: FALL VELOCITY ANALYSIS (Phân tích tốc độ té)
-                current_time = time.time()
+                # Note: current_time already defined above for cooldown check
                 
                 # Bắt đầu tracking nếu chưa có
                 if self.fall_start_time is None:
@@ -329,6 +364,10 @@ class SimpleFallDetector:
                 
                 if downward_confidence >= 0.50:  # GIẢM threshold 0.60→0.50 để dễ detect
                     log.warning(f"🚨 RAPID FALL DETECTED: type={fall_type}, vertical={vertical_movement:.1f}px, duration={fall_duration:.2f}s, motion={motion_str}, conf={downward_confidence:.3f}")
+                    
+                    # 🚨 UPDATE LAST DANGER TIME: Bắt đầu cooldown 30s
+                    self.last_danger_fall_time = current_time
+                    log.info(f"⏰ DANGER cooldown started: next event allowed after {self.danger_cooldown}s")
                     
                     # Reset tracking sau khi detect
                     self.fall_start_time = None
