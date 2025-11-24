@@ -355,6 +355,78 @@ class FallDetector():
 
         return (l_angle, r_angle)
 
+    def detect_controlled_descent(self, current_pose, prev_pose, time_lapse):
+        """
+        Detect if movement is controlled descent (sitting/standing) vs fall.
+        
+        Characteristics of sitting/standing:
+        - Vertical descent is slow and controlled (> 0.5s)
+        - Horizontal position remains stable
+        - Hip keypoints move downward gradually
+        - Final position: hip lower than shoulders (seated position)
+        
+        Characteristics of falling:
+        - Rapid vertical descent (< 0.5s)
+        - Loss of horizontal stability
+        - Uncontrolled rotation
+        - Final position: body horizontal or sprawled
+        """
+        if not prev_pose or not current_pose:
+            return False
+        
+        # 1. CHECK VERTICAL VELOCITY (slow = sitting, fast = falling)
+        prev_hip_y = None
+        curr_hip_y = None
+        
+        # Get hip positions
+        if self.LEFT_HIP in prev_pose and self.LEFT_HIP in current_pose:
+            prev_hip_y = prev_pose[self.LEFT_HIP][0]  # Y coordinate
+            curr_hip_y = current_pose[self.LEFT_HIP][0]
+        elif self.RIGHT_HIP in prev_pose and self.RIGHT_HIP in current_pose:
+            prev_hip_y = prev_pose[self.RIGHT_HIP][0]
+            curr_hip_y = current_pose[self.RIGHT_HIP][0]
+        
+        if prev_hip_y is not None and curr_hip_y is not None:
+            vertical_movement = abs(curr_hip_y - prev_hip_y)
+            vertical_velocity = vertical_movement / max(time_lapse, 0.1)
+            
+            # 2. CHECK HORIZONTAL STABILITY
+            prev_hip_x = prev_pose.get(self.LEFT_HIP, prev_pose.get(self.RIGHT_HIP, [0, 0]))[1]
+            curr_hip_x = current_pose.get(self.LEFT_HIP, current_pose.get(self.RIGHT_HIP, [0, 0]))[1]
+            horizontal_movement = abs(curr_hip_x - prev_hip_x)
+            
+            # 3. CHECK FINAL POSITION (seated vs sprawled)
+            # For sitting: hip lower than shoulders but shoulders still upright
+            curr_shoulder_y = None
+            if self.LEFT_SHOULDER in current_pose:
+                curr_shoulder_y = current_pose[self.LEFT_SHOULDER][0]
+            elif self.RIGHT_SHOULDER in current_pose:
+                curr_shoulder_y = current_pose[self.RIGHT_SHOULDER][0]
+            
+            is_seated_position = False
+            if curr_shoulder_y is not None:
+                # Seated: hip lower than shoulders, shoulders relatively upright
+                shoulder_hip_distance = abs(curr_shoulder_y - curr_hip_y)
+                is_seated_position = shoulder_hip_distance > 30  # Reasonable distance
+            
+            # DECISION LOGIC
+            # Sitting/Standing characteristics:
+            # - Slow vertical velocity (< 100 px/s)
+            # - High horizontal stability (< 30 px movement)
+            # - Seated position maintained
+            is_controlled = (
+                vertical_velocity < 100 and  # Slow descent
+                horizontal_movement < 30 and  # Stable horizontally
+                is_seated_position  # In seated position
+            )
+            
+            if is_controlled:
+                log.info(f"🪑 Controlled descent detected: v_vel={vertical_velocity:.1f} px/s, h_move={horizontal_movement:.1f} px, seated={is_seated_position}")
+            
+            return is_controlled
+        
+        return False
+
     def estimate_spinal_vector_score(self, pose):
         pose_dix = {}
         is_leftVector = is_rightVector = False
@@ -468,6 +540,17 @@ class FallDetector():
                     else:
                         leaning_angle = self.find_changes_in_angle(pose_dix,
                                                                    inx=t)
+
+                        # 🔥 NEW: PREVENT FALSE POSITIVE - Detect sitting/standing
+                        is_sitting_or_standing = self.detect_controlled_descent(
+                            pose_dix, 
+                            self._prev_data[t][self.POSE_VAL],
+                            lapse
+                        )
+                        
+                        if is_sitting_or_standing:
+                            log.info("Detected controlled descent (sitting/standing) - NOT a fall")
+                            continue  # Skip this detection, not a fall
 
                         # Get leaning_probability by comparing leaning_angle
                         # with fall_factor probability.

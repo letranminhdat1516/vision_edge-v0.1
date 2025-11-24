@@ -364,32 +364,41 @@ class AdvancedHealthcarePipeline:
                     print(f"❌ Failed to create fall event: {e}")
                     event_id = str(uuid.uuid4())
                 
-                # Send notification (dispatcher won't create duplicate event now)
-                try:
-                    context_data = {
-                        'motion_level': motion_level,
-                        'detection_type': 'direct',
-                        'processing_time': time.time() - fall_start,
-                        'frame_number': self.stats['total_frames'],
-                        'snapshot_id': snapshot_id,
-                        'event_id': event_id,  # 🔥 Pass event_id to skip duplicate creation
-                        'image_path': alert_image_path,  # 🔥 FIX: Pass alert image saved earlier
-                        'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence'
-                    }
-                    
-                    response = self.event_publisher.publish_fall_detection(
-                        confidence=base_fall_confidence,
-                        bounding_boxes=bounding_boxes,
-                        context=context_data
-                    )
-                    
-                    if response.get('alert_created'):
-                        print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
-                    else:
-                        print(f"📵 Fall alert skipped: Lower priority than existing alerts")
-                        
-                except Exception as e:
-                    print(f"Error publishing fall detection: {e}")
+                # ❌ REMOVED: Duplicate event creation via dispatcher
+                # Event already created above (lines 240-295) with:
+                # - Cooldown check (45s)
+                # - 5 snapshots (temporal mode)
+                # - Vietnamese caption
+                # - Database event_detections record
+                # Dispatcher (publish_fall_detection) is disabled and no longer creates events!
+                
+                print(f"✅ Fall event created: {event_id[:8]}... (already saved to DB with cooldown + 5 snapshots)")
+                
+                # try:
+                #     context_data = {
+                #         'motion_level': motion_level,
+                #         'detection_type': 'direct',
+                #         'processing_time': time.time() - fall_start,
+                #         'frame_number': self.stats['total_frames'],
+                #         'snapshot_id': snapshot_id,
+                #         'event_id': event_id,
+                #         'image_path': alert_image_path,
+                #         'description': f'Fall activity detected with {base_fall_confidence:.1%} confidence'
+                #     }
+                #     
+                #     response = self.event_publisher.publish_fall_detection(
+                #         confidence=base_fall_confidence,
+                #         bounding_boxes=bounding_boxes,
+                #         context=context_data
+                #     )
+                #     
+                #     if response.get('alert_created'):
+                #         print(f"📡 Fall alert created: Priority {response.get('priority_level')}")
+                #     else:
+                #         print(f"📵 Fall alert skipped: Lower priority than existing alerts")
+                #         
+                # except Exception as e:
+                #     print(f"Error publishing fall detection: {e}")
                     
             else:
                 # Apply motion enhancement and smoothing for lower confidence cases
@@ -603,33 +612,43 @@ class AdvancedHealthcarePipeline:
                                 print(f"📸 {len(snapshot_ids)} Seizure images saved and linked to event!")
                             
                             # Send notification (dispatcher won't create duplicate event now)
-                            try:
-                                context_data = {
-                                    'motion_level': motion_level,
-                                    'detection_type': 'confirmation',
-                                    'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
-                                    'temporal_ready': seizure_result.get('temporal_ready', False),
-                                    'processing_time': time.time() - seizure_time_start,
-                                    'frame_number': self.stats['total_frames'],
-                                    'snapshot_id': snapshot_id,
-                                    'event_id': event_id,  # 🔥 Pass event_id to skip duplicate creation
-                                    'image_path': alert_image_path,  # 🔥 FIX: Pass current image path
-                                    'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence'  # Add description
-                                }
-                                
-                                response = self.event_publisher.publish_seizure_detection(
-                                    confidence=final_seizure_confidence,
-                                    bounding_boxes=bounding_boxes,
-                                    context=context_data
-                                )
-                                
-                                if response.get('alert_created'):
-                                    print(f"📡 Seizure alert created: Priority {response.get('priority_level')}")
-                                else:
-                                    print(f"📵 Seizure alert skipped: Lower priority than existing alerts")
-                                    
-                            except Exception as e:
-                                print(f"Error publishing seizure detection: {e}")
+                            # ❌ REMOVED: Duplicate event creation via dispatcher
+                            # Event already created above with:
+                            # - Cooldown check (45s)
+                            # - 5 snapshots (temporal mode)
+                            # - Vietnamese caption
+                            # - Database event_detections record
+                            # Dispatcher (publish_seizure_detection) is disabled!
+                            
+                            print(f"✅ Seizure event created: {event_id[:8] if event_id else 'N/A'}... (already saved to DB with cooldown + 5 snapshots)")
+                            
+                            # try:
+                            #     context_data = {
+                            #         'motion_level': motion_level,
+                            #         'detection_type': 'confirmation',
+                            #         'confirmation_frames': self.detection_history['seizure_confirmation_frames'],
+                            #         'temporal_ready': seizure_result.get('temporal_ready', False),
+                            #         'processing_time': time.time() - seizure_time_start,
+                            #         'frame_number': self.stats['total_frames'],
+                            #         'snapshot_id': snapshot_id,
+                            #         'event_id': event_id,
+                            #         'image_path': alert_image_path,
+                            #         'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence'
+                            #     }
+                            #     
+                            #     response = self.event_publisher.publish_seizure_detection(
+                            #         confidence=final_seizure_confidence,
+                            #         bounding_boxes=bounding_boxes,
+                            #         context=context_data
+                            #     )
+                            #     
+                            #     if response.get('alert_created'):
+                            #         print(f"📡 Seizure alert created: Priority {response.get('priority_level')}")
+                            #     else:
+                            #         print(f"📵 Seizure alert skipped: Lower priority than existing alerts")
+                            #         
+                            # except Exception as e:
+                            #     print(f"Error publishing seizure detection: {e}")
                             
                             # RESET confirmation frames after detection
                             self.detection_history['seizure_confirmation_frames'] = 0
