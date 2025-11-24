@@ -242,22 +242,24 @@ class SimpleFallDetector:
             vertical_movement = abs(center2_y - center1_y)
             
             # 🔍 AGGRESSIVE DEBUG LOGGING - Log mọi frame có movement để debug
-            if vertical_movement > 30 or aspect_change > 1.3:  # Log khi có thay đổi đáng kể
-                log.info(f"📊 FALL CHECK: aspect_change={aspect_change:.2f}x (need >1.7), vertical={vertical_movement:.1f}px (need >60)")
+            if vertical_movement > 30 or aspect_change > 1.2:  # Log khi có thay đổi đáng kể
+                log.info(f"📊 FALL CHECK: aspect_change={aspect_change:.2f}x (need >1.25 moderate / >1.6 dynamic), vertical={vertical_movement:.1f}px (need >65 moderate / >60 dynamic)")
                 log.info(f"   Aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f}")
                 log.info(f"   Position: center_y {center1_y:.1f} → {center2_y:.1f}")
                 log.info(f"   Bbox1: w={bbox1_arr[2]-bbox1_arr[0]:.1f} h={bbox1_arr[3]-bbox1_arr[1]:.1f}")
                 log.info(f"   Bbox2: w={bbox2_arr[2]-bbox2_arr[0]:.1f} h={bbox2_arr[3]-bbox2_arr[1]:.1f}")
                 
                 # Log kết quả check
-                if aspect_change > 1.7 and vertical_movement > 60 and center2_y > center1_y:
-                    log.info(f"   ✅ PASS all thresholds - calculating confidence...")
+                if aspect_change > 1.25 and vertical_movement > 65 and center2_y > center1_y:
+                    log.info(f"   ✅ PASS moderate thresholds - calculating confidence...")
+                elif aspect_change > 1.6 and vertical_movement > 60 and center2_y > center1_y:
+                    log.info(f"   ✅ PASS dynamic thresholds - calculating confidence...")
                 else:
                     reasons = []
-                    if aspect_change <= 1.7:
-                        reasons.append(f"aspect_change {aspect_change:.2f} <= 1.7")
+                    if aspect_change <= 1.25:
+                        reasons.append(f"aspect_change {aspect_change:.2f} <= 1.25 (need >1.25 moderate / >1.6 dynamic)")
                     if vertical_movement <= 60:
-                        reasons.append(f"vertical {vertical_movement:.1f} <= 60")
+                        reasons.append(f"vertical {vertical_movement:.1f} <= 60-65px")
                     if center2_y <= center1_y:
                         reasons.append(f"not moving down")
                     log.info(f"   ❌ FAIL: {', '.join(reasons)}")
@@ -267,10 +269,10 @@ class SimpleFallDetector:
             # 🎯 CÂN BẰNG: 100px để phân biệt di chuyển thường vs TÉ NGÃ
             
             # 🔍 Log STRATEGY 0 check
-            if vertical_movement > 80:  # Log khi gần threshold
-                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >100), downward={center2_y > center1_y}")
+            if vertical_movement > 70:  # Log khi gần threshold
+                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >80), downward={center2_y > center1_y}")
             
-            if vertical_movement > 100 and center2_y > center1_y:  # GIẢM 130→100px: dễ detect hơn
+            if vertical_movement > 80 and center2_y > center1_y:  # GIẢM 100→80px: NHẠY HƠN để detect fall thật
                 # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
                 # When person is laying still, bbox can jitter 100-200px due to detection variance
                 # Only allow rapid fall detection if there's actual motion in the scene
@@ -353,12 +355,43 @@ class SimpleFallDetector:
                         self.fall_start_time = None
                         self.fall_start_position = None
             
+            # STRATEGY 0.5: MODERATE FALL - Cân bằng giữa nhạy và chính xác
+            # 🎯 BALANCED: Detect fall thật nhưng TRÁNH NGỐI XUỐNG
+            # Kiểm tra: aspect tăng nhiều (>1.25) + vertical đủ lớn (>65px)
+            if (vertical_movement > 65 and  # TĂNG 50→65px: tránh ngồi xuống
+                aspect_change > 1.25 and  # TĂNG 1.1→1.25: người PHẢI nằm ngang thật sự
+                center2_y > center1_y):  # Moving downward
+                
+                # 🚫 FILTER NGỐI XUỐNG: Nếu aspect không tăng nhiều lắm = chỉ ngồi
+                if aspect_change < 1.35:  # Ngồi xuống thường aspect ~1.2-1.3x
+                    log.info(f"⚠️ Rejected SITTING: vertical={vertical_movement:.1f}px, aspect={aspect_change:.2f}x < 1.35 (likely sitting down)")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'sitting',
+                        'method': 'sitting_filtered'
+                    }
+                
+                confidence = min(0.85, 0.55 + (vertical_movement / 100) * 0.2 + (aspect_change - 1.25) * 0.15)
+                
+                if confidence >= 0.55:  # TĂNG threshold 0.50→0.55
+                    log.warning(f"🚨 MODERATE FALL DETECTED: vertical={vertical_movement:.1f}px, aspect={aspect_change:.2f}x, conf={confidence:.3f}")
+                    return {
+                        'fall_detected': True,
+                        'confidence': confidence,
+                        'angle': 50.0,
+                        'category': 'fall',
+                        'method': 'moderate_fall',
+                        'fall_type': 'moderate_fall'
+                    }
+            
             # STRATEGY 1: Dynamic Fall Detection - Person transitioning from standing to lying
-            # 🎯 BALANCED THRESHOLDS: Cân bằng giữa sensitivity và specificity
-            # - Aspect ratio 1.7x: Phát hiện khi người bắt đầu nằm nghiêng/ngang
-            # - Vertical 60px: Phát hiện khi rơi xuống đáng kể (không phải chỉ di chuyển)
-            if (aspect_change > 1.7 and  # CÂN BẰNG 1.5→2.0→1.7: detect fall nhưng tránh false positive
-                vertical_movement > 60 and  # CÂN BẰNG 35→80→60px: rơi rõ ràng nhưng không quá khó
+            # 🎯 STRICT THRESHOLDS: Chỉ detect fall rõ ràng (aspect tăng nhiều)
+            # - Aspect ratio 1.6x: Cân bằng giữa nhạy và chính xác
+            # - Vertical 60px: Rơi xuống đáng kể
+            if (aspect_change > 1.6 and  # TĂNG 1.5→1.6: chặt hơn để tránh false positive
+                vertical_movement > 60 and  # TĂNG 55→60px: đảm bảo rơi thật sự
                 center2_y > center1_y):  # Moving downward
                 
                 confidence = min(0.9, 0.60 + (aspect_change - 1.7) * 0.35 + min(vertical_movement / 140, 0.28))  # CÂN BẰNG base

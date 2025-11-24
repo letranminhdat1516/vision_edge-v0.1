@@ -159,9 +159,10 @@ class EmergencyAlarmHandlerPsycopg:
             
             # Check which channel sent the notification
             if notify.channel == self.stop_channel_name:
-                # Stop alarm request
+                # Stop alarm request - ANY state change should stop alarm
                 logger.info(f"🔇 STOP ALARM REQUEST received")
                 logger.info(f"   Event ID: {event_id}")
+                logger.info(f"   New State: {state}")
                 logger.info(f"   Reason: {message}")
                 self._process_alarm_stop_sync(data)
                 return
@@ -178,11 +179,11 @@ class EmergencyAlarmHandlerPsycopg:
             logger.info(f"   State: {state}")
             logger.info(f"   Message: {message}")
             
-            # Process alarm activation (trigger only fires for ALARM_ACTIVATED)
+            # Process ONLY alarm activation - trigger only fires for ALARM_ACTIVATED
             if state == 'ALARM_ACTIVATED':
                 self._process_alarm_activated_sync(data)
             else:
-                logger.warning(f"⚠️ Unexpected state: {state}")
+                logger.info(f"ℹ️ State {state} - no action needed")
 
             
         except json.JSONDecodeError as e:
@@ -243,7 +244,7 @@ class EmergencyAlarmHandlerPsycopg:
             logger.error(traceback.format_exc())
     
     def _process_alarm_activated_sync(self, event_data: Dict[str, Any]):
-        """Xử lý alarm_activated event (synchronous)"""
+        """Xử lý alarm_activated event - CHỈ PHÁ CÒI, KHÔNG UPDATE STATE"""
         try:
             event_id = str(event_data.get('event_id', ''))
             user_id = str(event_data.get('user_id', ''))
@@ -254,32 +255,22 @@ class EmergencyAlarmHandlerPsycopg:
             logger.info(f"   Old state: {event_data.get('old_lifecycle_state')}")
             logger.info(f"   New state: {event_data.get('new_lifecycle_state')}")
             
-            # Trigger alarm
+            # Trigger alarm - NO DURATION LIMIT (will play until stopped)
             import asyncio
             alarm_result = asyncio.run(audio_alert_service.play_emergency_alarm(
                 user_id=user_id,
                 triggered_by='alarm_activation',
-                duration=10
+                duration=0  # 0 = infinite, no auto-stop
             ))
             
             if alarm_result['success']:
-                logger.info("✅ ✅ ✅ ALARM ACTIVATED SUCCESSFULLY! ✅ ✅ ✅")
+                logger.info("✅ ✅ ✅ ALARM PLAYING! ✅ ✅ ✅")
                 logger.info(f"   Volume: {alarm_result.get('volume', 1.0) * 100:.0f}%")
-                
-                # Update event
-                self._update_event_status(
-                    event_id=event_id,
-                    lifecycle_state='ACKNOWLEDGED',
-                    notes=f"ALARM ACTIVATED FROM MOBILE at {datetime.now()}: {event_data.get('event_description', '')}"
-                )
+                logger.info(f"   Duration: INFINITE (until state change)")
+                logger.info(f"   📍 Alarm will play until lifecycle_state changes")
+                # ❌ KHÔNG UPDATE STATE - Để mobile/user tự update khi muốn dừng
             else:
                 logger.error(f"❌ ALARM FAILED: {alarm_result['message']}")
-                
-                self._update_event_status(
-                    event_id=event_id,
-                    lifecycle_state='CANCELED',
-                    notes=f"Alarm activation failed: {alarm_result['message']}"
-                )
             
             logger.info("=" * 80)
             

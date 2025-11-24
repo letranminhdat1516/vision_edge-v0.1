@@ -206,9 +206,12 @@ class AudioAlertService:
                 self.is_playing = True
                 self.current_sound = sound
                 
-                # Schedule auto-stop after 10 seconds
-                import asyncio
-                asyncio.create_task(self._auto_stop_after_duration())
+                # Schedule auto-stop ONLY if duration > 0
+                if self.alert_duration > 0:
+                    import asyncio
+                    asyncio.create_task(self._auto_stop_after_duration())
+                else:
+                    logger.info("   ⚡ Playing indefinitely (no auto-stop)")
             
             elif self.audio_backend == 'pydub':
                 from pydub.playback import play
@@ -222,9 +225,12 @@ class AudioAlertService:
                 play_thread = threading.Thread(target=play_loop, daemon=True)
                 play_thread.start()
                 
-                # Schedule auto-stop after 10 seconds
-                import asyncio
-                asyncio.create_task(self._auto_stop_after_duration())
+                # Schedule auto-stop ONLY if duration > 0
+                if self.alert_duration > 0:
+                    import asyncio
+                    asyncio.create_task(self._auto_stop_after_duration())
+                else:
+                    logger.info("   ⚡ Playing indefinitely (no auto-stop)")
             
             # Restore original duration
             actual_duration = self.alert_duration
