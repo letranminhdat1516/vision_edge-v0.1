@@ -483,9 +483,9 @@ class PostgreSQLHealthcareService:
             elif confidence >= 0.20:
                 return 'suspect'  # Nghi ngờ sắp té
                 
-            # UNKNOWN: Confidence quá thấp
+            # NORMAL: Confidence quá thấp = không có sự cố = bình thường
             else:
-                return 'unknown'  # Không rõ ràng
+                return 'normal'  # Hoạt động bình thường (không phát hiện té)
                 
         elif event_type in ['abnormal_behavior', 'seizure']:
             # DANGER: Co giật xác nhận
@@ -500,16 +500,16 @@ class PostgreSQLHealthcareService:
             elif confidence >= 0.15:
                 return 'suspect'  # Nghi ngờ hành động lạ
                 
-            # UNKNOWN: Không rõ
+            # NORMAL: Confidence quá thấp = không có co giật = bình thường
             else:
-                return 'unknown'
+                return 'normal'  # Hoạt động bình thường (không phát hiện co giật)
                 
         elif event_type in ['seizure_warning', 'fall_warning']:
             # Warning events always return warning status
             return 'warning'
             
         elif event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
-            # Normal activities
+            # Normal activities - return normal status
             return 'normal'
             
         else:
@@ -521,7 +521,7 @@ class PostgreSQLHealthcareService:
             elif confidence >= 0.20:
                 return 'suspect'
             else:
-                return 'unknown'
+                return 'normal'  # Low confidence = normal activity (không phải sự cố)
     
     def _calculate_reliability_score(self, confidence: float, event_type: str, 
                                      bounding_boxes: list = None, context: dict = None) -> float:
@@ -638,7 +638,7 @@ class PostgreSQLHealthcareService:
         finally:
             self.return_connection(conn)
     
-    def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str, camera_name: str = None) -> str:
+    def _generate_event_description(self, event_type: str, confidence: float, image_path: str, fallback_description: str, camera_name: str = None, context: dict = None) -> str:
         """
         Generate intelligent action message for event_description field
         This should contain the FULL intelligent action with Vietnamese caption
@@ -649,6 +649,7 @@ class PostgreSQLHealthcareService:
             image_path: Path to event image/snapshot
             fallback_description: Original description as fallback
             camera_name: Optional camera name for location context
+            context: Additional context (fall_type, duration, etc.)
             
         Returns:
             Full intelligent action message (like: "🆘 KHẨN CẤP - CO GIẬT: Two young men are đứng trong phòng...")
@@ -690,12 +691,22 @@ class PostgreSQLHealthcareService:
             image_file_to_use = image_path
             if not image_file_to_use or not os.path.exists(image_file_to_use):
                 logger.warning(f"⚠️ No valid image_path provided (got: {image_path})")
-                logger.warning(f"⚠️ SKIPPING caption generation - will use fallback description")
-                # 🔥 FIX: Do NOT use old images from alerts folder!
-                # This was causing captions like "a camera is shown" or "man standing"
-                # when the actual event had different content.
-                # If no image_path, return fallback description instead.
-                return fallback_description if fallback_description else f"Fall detected with {confidence:.1%} confidence"
+                logger.warning(f"⚠️ SKIPPING caption generation - will use default description")
+                
+                # 🔥 SPECIAL HANDLING for normal_activity: Create descriptive caption without image
+                if event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
+                    # Generate descriptive caption based on context
+                    motion_level = context.get('motion_level', 0) if context else 0
+                    
+                    if motion_level > 0.05:
+                        return "✅ BÌNH THƯỜNG: Người đang di chuyển trong phòng - Hoạt động thường ngày"
+                    elif motion_level > 0.02:
+                        return "✅ BÌNH THƯỜNG: Người đang đứng/ngồi với chuyển động nhẹ - Hoạt động bình thường"
+                    else:
+                        return "✅ BÌNH THƯỜNG: Người đang đứng/ngồi tại chỗ - Không có bất thường"
+                
+                # For fall/seizure without image, return fallback
+                return fallback_description if fallback_description else f"Phát hiện sự kiện với độ tin cậy {confidence:.1%}"
             
             if image_file_to_use and os.path.exists(image_file_to_use):
                 logger.info(f"🔍 Attempting to generate Vietnamese caption for image: {image_file_to_use}")
@@ -990,7 +1001,8 @@ class PostgreSQLHealthcareService:
                 event_data.get('confidence', 0.0),
                 event_data.get('image_path', ''),
                 event_data.get('description', ''),
-                camera_name=camera_name
+                camera_name=camera_name,
+                context=event_data.get('detection_data', {})  # Pass detection_data as context
             )
             
             print(f"🔥 DEBUG AFTER _generate_event_description:")
@@ -1001,7 +1013,8 @@ class PostgreSQLHealthcareService:
                 logger.warning(f"❌ Skipping event detection save - empty event_description for {event_data.get('event_type', 'unknown')}")
                 return None
                 
-            # Check for recent duplicate events (same type, user, camera within 5 seconds)
+            # Check for recent duplicate events (same type, user, camera within 30 seconds)
+            # CRITICAL: Prevents spam when logging NORMAL events continuously
             dup_conn = None
             try:
                 dup_conn = self.get_connection()
@@ -1010,7 +1023,7 @@ class PostgreSQLHealthcareService:
                         duplicate_check_sql = """
                         SELECT event_id FROM event_detections 
                         WHERE event_type = %s AND user_id = %s AND camera_id = %s 
-                        AND detected_at > NOW() - INTERVAL '5 seconds'
+                        AND detected_at > NOW() - INTERVAL '30 seconds'
                         ORDER BY detected_at DESC LIMIT 1
                         """
                         cursor.execute(duplicate_check_sql, (
@@ -1021,7 +1034,7 @@ class PostgreSQLHealthcareService:
                         recent_event = cursor.fetchone()
                         
                         if recent_event and recent_event[0]:  # FIX: Check if result exists AND has event_id
-                            logger.warning(f"❌ Skipping duplicate event detection - similar {event_data.get('event_type')} within 5 seconds")
+                            logger.info(f"⏭️ Skipping duplicate {event_data.get('event_type')} (within 30s)")
                             self.return_connection(dup_conn)
                             return {'event_id': recent_event[0], 'duplicate_skipped': True}
                     
@@ -1029,9 +1042,14 @@ class PostgreSQLHealthcareService:
                     self.return_connection(dup_conn)
                         
             except Exception as dup_error:
-                logger.warning(f"Duplicate check failed: {dup_error}")
+                logger.error(f"Duplicate check failed: {dup_error}")
+                import traceback
+                traceback.print_exc()
                 if dup_conn:
-                    self.return_connection(dup_conn)
+                    try:
+                        self.return_connection(dup_conn)
+                    except:
+                        pass
             
             # Validate final IDs (user_id and camera_id already processed above)
             
