@@ -308,6 +308,45 @@ class EmergencyAlarmHandlerPsycopg:
             import traceback
             logger.error(traceback.format_exc())
     
+    def resolve_active_alarms(self, reason="Auto-resolved"):
+        """
+        Resolve all ALARM_ACTIVATED events to RESOLVED
+        Called when alarm is stopped by system (2 people detected or situation normalized)
+        """
+        try:
+            if not self.postgresql_service:
+                logger.warning("⚠️ PostgreSQL service not available for resolve")
+                return 0
+            
+            conn = self.postgresql_service.get_connection()
+            cursor = conn.cursor()
+            
+            # Find and update ALARM_ACTIVATED events to RESOLVED
+            cursor.execute("""
+                UPDATE event_detections
+                SET 
+                    lifecycle_state = 'RESOLVED',
+                    last_action_at = NOW(),
+                    notes = COALESCE(notes, '') || '\n' || %s || ' at ' || NOW()::text
+                WHERE lifecycle_state = 'ALARM_ACTIVATED'
+                RETURNING event_id, event_type
+            """, (reason,))
+            
+            resolved_events = cursor.fetchall()
+            conn.commit()
+            cursor.close()
+            self.postgresql_service.return_connection(conn)
+            
+            if resolved_events:
+                for event_id, event_type in resolved_events:
+                    logger.info(f"📝 Event {event_id[:8]}... ({event_type}) → RESOLVED")
+            
+            return len(resolved_events)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to resolve active alarms: {e}")
+            return 0
+    
     def _update_event_status(self, event_id: str, **kwargs):
         """Update event status in database"""
         try:

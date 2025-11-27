@@ -357,6 +357,24 @@ if __name__ == "__main__":
                         print(f"👥 Detected {num_people} people - STOPPING ALARM (safety check)")
                         import asyncio
                         asyncio.run(audio_alert_service.stop_alarm())
+                        # Update database: ALARM_ACTIVATED → RESOLVED
+                        resolved_count = emergency_alarm_handler.resolve_active_alarms(
+                            reason=f"Help arrived: {num_people} people detected"
+                        )
+                        if resolved_count > 0:
+                            print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+                    
+                    # ✅ STOP ALARM if situation returns to NORMAL
+                    if detection_result.get('alert_level') == 'normal' and audio_alert_service.is_playing:
+                        print(f"✅ Situation normalized - STOPPING ALARM")
+                        import asyncio
+                        asyncio.run(audio_alert_service.stop_alarm())
+                        # Update database: ALARM_ACTIVATED → RESOLVED
+                        resolved_count = emergency_alarm_handler.resolve_active_alarms(
+                            reason="Situation normalized: alert_level = normal"
+                        )
+                        if resolved_count > 0:
+                            print(f"   ✅ Resolved {resolved_count} active alarm(s)")
                     
                     # Debug logging removed for cleaner output
                     
@@ -589,6 +607,24 @@ if __name__ == "__main__":
             print(f"👥 Detected {num_people} people - STOPPING ALARM (safety check)")
             import asyncio
             asyncio.run(audio_alert_service.stop_alarm())
+            # Update database: ALARM_ACTIVATED → RESOLVED
+            resolved_count = emergency_alarm_handler.resolve_active_alarms(
+                reason=f"Help arrived: {num_people} people detected"
+            )
+            if resolved_count > 0:
+                print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+        
+        # ✅ STOP ALARM if situation returns to NORMAL
+        if detection_result.get('alert_level') == 'normal' and audio_alert_service.is_playing:
+            print(f"✅ Situation normalized - STOPPING ALARM")
+            import asyncio
+            asyncio.run(audio_alert_service.stop_alarm())
+            # Update database: ALARM_ACTIVATED → RESOLVED
+            resolved_count = emergency_alarm_handler.resolve_active_alarms(
+                reason="Situation normalized: alert_level = normal"
+            )
+            if resolved_count > 0:
+                print(f"   ✅ Resolved {resolved_count} active alarm(s)")
         
         # Generate intelligent action when alert detected
         if detection_result.get('alert_level') in ['critical', 'high']:
