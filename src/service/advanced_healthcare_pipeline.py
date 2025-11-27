@@ -94,6 +94,10 @@ class AdvancedHealthcarePipeline:
         
         # 🕐 NORMAL EVENT THROTTLE: Chỉ log NORMAL mỗi 10 giây
         self._last_normal_log_time = 0
+        
+        # 🚨 DANGER COOLDOWN: Chặn NORMAL event trong 60s sau khi phát hiện DANGER
+        self._last_danger_time = 0
+        self._DANGER_BLOCK_DURATION = 60.0  # 60 giây chặn NORMAL sau DANGER
 
     def process_frame(self, frame, other_cameras=None):
         """
@@ -709,6 +713,9 @@ class AdvancedHealthcarePipeline:
                 result['alert_level'] = 'danger'  # danger: Co giật xác nhận
                 result['emergency_type'] = 'seizure'
                 self.stats['critical_alerts'] += 1
+                # 🚨 SET DANGER TIME: Chặn NORMAL event trong 60s
+                self._last_danger_time = time.time()
+                print(f"🚨 DANGER BLOCK: NORMAL detection disabled for {self._DANGER_BLOCK_DURATION:.0f}s")
                 print(f"⚖️ Both detected, seizure wins ({result['seizure_confidence']:.2f} > {result['fall_confidence']:.2f})")
             else:
                 # Fall detected - check fall_type for severity
@@ -718,12 +725,18 @@ class AdvancedHealthcarePipeline:
                 else:
                     result['alert_level'] = 'danger'  # danger: Té ngã xác nhận
                 result['emergency_type'] = 'fall'
+                # 🚨 SET DANGER TIME: Chặn NORMAL event trong 60s
+                self._last_danger_time = time.time()
+                print(f"🚨 DANGER BLOCK: NORMAL detection disabled for {self._DANGER_BLOCK_DURATION:.0f}s")
                 print(f"⚖️ Both detected, fall wins ({result['fall_confidence']:.2f} > {result['seizure_confidence']:.2f})")
                 
         elif result['seizure_detected']:
             result['alert_level'] = 'danger'  # danger: Co giật xác nhận
             result['emergency_type'] = 'seizure'
             self.stats['critical_alerts'] += 1
+            # 🚨 SET DANGER TIME: Chặn NORMAL event trong 60s
+            self._last_danger_time = time.time()
+            print(f"🚨 DANGER BLOCK: NORMAL detection disabled for {self._DANGER_BLOCK_DURATION:.0f}s")
             
         elif result['fall_detected']:
             # Fall detected - classify based on fall_type
@@ -733,6 +746,9 @@ class AdvancedHealthcarePipeline:
             else:
                 result['alert_level'] = 'danger'  # danger: Té ngã xác nhận
                 result['emergency_type'] = 'fall'
+            # 🚨 SET DANGER TIME: Chặn NORMAL event trong 60s
+            self._last_danger_time = time.time()
+            print(f"🚨 DANGER BLOCK: NORMAL detection disabled for {self._DANGER_BLOCK_DURATION:.0f}s")
                 
         # WARNING: Có dấu hiệu nhưng chưa chắc chắn
         elif result['seizure_confidence'] > 0.45 and motion_level > 0.7:
@@ -767,16 +783,18 @@ class AdvancedHealthcarePipeline:
         
         current_time = time.time()
         time_since_last_normal = current_time - self._last_normal_log_time
+        time_since_danger = current_time - self._last_danger_time if self._last_danger_time > 0 else 999
         
         should_log_normal = (
             motion_level > 0.05 and  # Chuyển động rõ ràng (5% pixel thay đổi)
-            time_since_last_normal >= 10.0  # Cách nhau ít nhất 10 giây
+            time_since_last_normal >= 10.0 and  # Cách nhau ít nhất 10 giây
+            time_since_danger > self._DANGER_BLOCK_DURATION  # 🚨 CHẶN NORMAL trong 60s sau DANGER
         )
         
         # 🔥 DEBUG: Log để track NORMAL status mỗi 30 frames
         if result['alert_level'] == 'normal' and self.stats['total_frames'] % 30 == 0:
-            print(f"📊 NORMAL Status: motion={motion_level:.3f}, time_gap={time_since_last_normal:.1f}s")
-            print(f"   Should log: {should_log_normal} (motion>0.05 AND time>=10s)")
+            print(f"📊 NORMAL Status: motion={motion_level:.3f}, time_gap={time_since_last_normal:.1f}s, danger_gap={time_since_danger:.1f}s")
+            print(f"   Should log: {should_log_normal} (motion>0.05 AND time>=10s AND danger>60s)")
         
         if result['alert_level'] != 'normal' or should_log_normal:
             self.stats['total_alerts'] += 1
