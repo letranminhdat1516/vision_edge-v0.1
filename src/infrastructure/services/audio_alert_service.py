@@ -30,6 +30,7 @@ class AudioAlertService:
         self.alert_duration = int(os.getenv('ALERT_DURATION_SECONDS', '30'))
         
         self.is_playing = False
+        self.alarm_start_time = None  # Track when alarm started (for minimum duration enforcement)
         self.current_sound = None
         self.audio_backend = None
         self.available_devices = []
@@ -263,7 +264,9 @@ class AudioAlertService:
                         winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP | winsound.SND_NODEFAULT
                     )
                     self.is_playing = True
-                    logger.info("   🔁 Playing in continuous loop mode (winsound ASYNC+LOOP)")
+                    import time
+                    self.alarm_start_time = time.time()  # Track start time for minimum duration
+                    logger.info("   🔁 Playing in continuous loop mode (winsound ASYNC+LOOP)")
                 except Exception as e:
                     logger.error(f"winsound playback error: {e}")
                     return {"success": False, "message": f"Playback failed: {e}"}
@@ -288,6 +291,8 @@ class AudioAlertService:
                 import pygame
                 sound.play(loops=-1)  # Loop indefinitely
                 self.is_playing = True
+                import time
+                self.alarm_start_time = time.time()  # Track start time for minimum duration
                 self.current_sound = sound
                 
                 # Schedule auto-stop ONLY if duration > 0
@@ -312,6 +317,8 @@ class AudioAlertService:
                         play(sound)
                 
                 self.is_playing = True
+                import time
+                self.alarm_start_time = time.time()  # Track start time for minimum duration
                 play_thread = threading.Thread(target=play_loop, daemon=True)
                 play_thread.start()
                 
@@ -369,6 +376,7 @@ class AudioAlertService:
         try:
             # Stop playback first to exit any loops
             self.is_playing = False
+            self.alarm_start_time = None  # Reset start time
             
             if self.audio_backend == 'winsound':
                 # winsound requires explicit stop call

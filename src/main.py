@@ -325,7 +325,11 @@ if __name__ == "__main__":
         
         # 🔥 Track last danger time to prevent immediate alarm stop
         last_danger_time = 0
-        ALARM_GRACE_PERIOD = 20  # seconds - alarm won't stop for 20s after danger
+        last_alarm_start_time = 0  # Track when alarm actually started playing
+        last_minimum_duration_log_time = 0  # Track last time we logged minimum duration message
+        ALARM_GRACE_PERIOD = 30  # seconds - grace period before auto-stop allowed
+        MINIMUM_ALARM_DURATION = 30  # seconds - MINIMUM time alarm must play (blocks ALL stops)
+        LOG_INTERVAL = 5  # seconds - only log minimum duration message every 5 seconds
         
         while True:
             for cam_data in cameras_data:
@@ -355,9 +359,29 @@ if __name__ == "__main__":
                     detection_result = result["detection_result"]
                     person_detections = result["person_detections"]
                     
+                    # 🎯 Track when alarm starts (for minimum duration enforcement)
+                    if audio_alert_service.is_playing and last_alarm_start_time == 0:
+                        last_alarm_start_time = time.time()
+                        print(f"⏱️ Alarm started - MINIMUM {MINIMUM_ALARM_DURATION}s duration enforced")
+                    
                     # ✅ STOP ALARM if detect >= 2 people (safety check)
                     num_people = len(person_detections) if person_detections else 0
-                    if num_people >= 2 and audio_alert_service.is_playing:
+                    current_time = time.time()
+                    time_since_alarm_start = current_time - last_alarm_start_time if last_alarm_start_time > 0 else 0
+                    
+                    # 🚫 Block all stops during minimum duration
+                    if audio_alert_service.is_playing and time_since_alarm_start < MINIMUM_ALARM_DURATION:
+                        # Only log once every 5 seconds
+                        if current_time - last_minimum_duration_log_time >= LOG_INTERVAL:
+                            remaining = MINIMUM_ALARM_DURATION - time_since_alarm_start
+                            # Show different message based on whether there's a stop condition
+                            if num_people >= 2:
+                                print(f"🔒 STOP BLOCKED: {num_people} people detected but minimum duration not met ({remaining:.0f}s / {MINIMUM_ALARM_DURATION}s)")
+                            elif detection_result.get('alert_level') == 'normal':
+                                print(f"🔒 MINIMUM DURATION: Situation normal but alarm continues ({remaining:.0f}s / {MINIMUM_ALARM_DURATION}s remaining)")
+                            last_minimum_duration_log_time = current_time
+                    
+                    elif num_people >= 2 and audio_alert_service.is_playing:
                         print(f"👥 Detected {num_people} people - STOPPING ALARM (safety check)")
                         import asyncio
                         asyncio.run(audio_alert_service.stop_alarm())
@@ -367,16 +391,20 @@ if __name__ == "__main__":
                         )
                         if resolved_count > 0:
                             print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+                        last_alarm_start_time = 0  # Reset timer after successful stop
                     
-                    # ✅ STOP ALARM if situation returns to NORMAL (with person detected + grace period)
-                    current_time = time.time()
+                    # ✅ STOP ALARM if situation returns to NORMAL (with person detected + grace period + minimum duration)
                     time_since_danger = current_time - last_danger_time if last_danger_time > 0 else 999
                     
                     if (detection_result.get('alert_level') == 'normal' and 
                         audio_alert_service.is_playing and 
                         num_people > 0 and 
-                        time_since_danger > ALARM_GRACE_PERIOD):  # CHỈ stop sau GRACE_PERIOD giây từ lần danger cuối
+                        time_since_danger > ALARM_GRACE_PERIOD and 
+                        time_since_alarm_start >= MINIMUM_ALARM_DURATION):  # Must meet minimum duration
                         print(f"✅ Situation normalized ({time_since_danger:.0f}s after danger) - STOPPING ALARM")
+                        print(f"   👥 People detected: {num_people}")
+                        print(f"   ⏱️  Time since danger: {time_since_danger:.1f}s (>{ALARM_GRACE_PERIOD}s)")
+                        print(f"   ⏳ Time since alarm start: {time_since_alarm_start:.1f}s (>={MINIMUM_ALARM_DURATION}s)")
                         import asyncio
                         asyncio.run(audio_alert_service.stop_alarm())
                         # Update database: ALARM_ACTIVATED → RESOLVED
@@ -385,10 +413,14 @@ if __name__ == "__main__":
                         )
                         if resolved_count > 0:
                             print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+                        last_alarm_start_time = 0  # Reset timer after successful stop
                     elif (detection_result.get('alert_level') == 'normal' and 
                           audio_alert_service.is_playing and 
                           time_since_danger <= ALARM_GRACE_PERIOD):
-                        print(f"⏳ Grace period: {ALARM_GRACE_PERIOD - time_since_danger:.0f}s remaining before alarm can stop")
+                        # Only log grace period message every 5 seconds
+                        if current_time - last_minimum_duration_log_time >= LOG_INTERVAL:
+                            print(f"⏳ Grace period: {ALARM_GRACE_PERIOD - time_since_danger:.0f}s remaining before alarm can stop")
+                            last_minimum_duration_log_time = current_time
                     
                     # Debug logging removed for cleaner output
                     
@@ -567,9 +599,14 @@ if __name__ == "__main__":
         print("\n" + "=" * 80)
         print("💡 Handler logs will appear above when alarm is triggered")
         print("=" * 80 + "\n")
-
-
-
+        
+        # 🔥 Track alarm timing for minimum duration enforcement
+        last_danger_time = 0
+        last_alarm_start_time = 0  # Track when alarm actually started playing
+        last_minimum_duration_log_time = 0  # Track last time we logged minimum duration message
+        ALARM_GRACE_PERIOD = 20  # seconds - grace period before auto-stop allowed
+        MINIMUM_ALARM_DURATION = 30  # seconds - MINIMUM time alarm must play (blocks ALL stops)
+        LOG_INTERVAL = 5  # seconds - only log minimum duration message every 5 seconds
         
         # Initialize intelligent action pipeline if available
         caption_pipeline = None
@@ -617,9 +654,29 @@ if __name__ == "__main__":
         detection_result = result["detection_result"]
         person_detections = result["person_detections"]
         
+        # 🎯 Track when alarm starts (for minimum duration enforcement)
+        if audio_alert_service.is_playing and last_alarm_start_time == 0:
+            last_alarm_start_time = time.time()
+            print(f"⏱️ Alarm started - MINIMUM {MINIMUM_ALARM_DURATION}s duration enforced")
+        
         # ✅ STOP ALARM if detect >= 2 people (safety check)
         num_people = len(person_detections) if person_detections else 0
-        if num_people >= 2 and audio_alert_service.is_playing:
+        current_time = time.time()
+        time_since_alarm_start = current_time - last_alarm_start_time if last_alarm_start_time > 0 else 0
+        
+        # 🚫 Block all stops during minimum duration
+        if audio_alert_service.is_playing and time_since_alarm_start < MINIMUM_ALARM_DURATION:
+            # Only log once every 5 seconds
+            if current_time - last_minimum_duration_log_time >= LOG_INTERVAL:
+                remaining = MINIMUM_ALARM_DURATION - time_since_alarm_start
+                # Show different message based on whether there's a stop condition
+                if num_people >= 2:
+                    print(f"🔒 STOP BLOCKED: {num_people} people detected but minimum duration not met ({remaining:.0f}s / {MINIMUM_ALARM_DURATION}s)")
+                elif detection_result.get('alert_level') == 'normal':
+                    print(f"🔒 MINIMUM DURATION: Situation normal but alarm continues ({remaining:.0f}s / {MINIMUM_ALARM_DURATION}s remaining)")
+                last_minimum_duration_log_time = current_time
+        
+        elif num_people >= 2 and audio_alert_service.is_playing:
             print(f"👥 Detected {num_people} people - STOPPING ALARM (safety check)")
             import asyncio
             asyncio.run(audio_alert_service.stop_alarm())
@@ -629,12 +686,18 @@ if __name__ == "__main__":
             )
             if resolved_count > 0:
                 print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+            last_alarm_start_time = 0  # Reset timer after successful stop
         
-        # ✅ STOP ALARM if situation returns to NORMAL (with person detected)
+        # ✅ STOP ALARM if situation returns to NORMAL (with person detected + grace period + minimum duration)
+        # Calculate time since danger (need this for grace period check)
+        time_since_danger = current_time - last_danger_time if last_danger_time > 0 else 999
+        
         if (detection_result.get('alert_level') == 'normal' and 
             audio_alert_service.is_playing and 
-            num_people > 0):  # CHỈ stop khi thực sự có person + normal, không stop khi "không detect được gì"
-            print(f"✅ Situation normalized - STOPPING ALARM")
+            num_people > 0 and 
+            time_since_danger > ALARM_GRACE_PERIOD and 
+            time_since_alarm_start >= MINIMUM_ALARM_DURATION):
+            print(f"✅ Situation normalized - STOPPING ALARM (p={num_people} d={time_since_danger:.0f}s a={time_since_alarm_start:.0f}s)")
             import asyncio
             asyncio.run(audio_alert_service.stop_alarm())
             # Update database: ALARM_ACTIVATED → RESOLVED
@@ -643,6 +706,31 @@ if __name__ == "__main__":
             )
             if resolved_count > 0:
                 print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+            last_alarm_start_time = 0  # Reset timer after successful stop
+        elif (detection_result.get('alert_level') == 'normal' and 
+              audio_alert_service.is_playing):
+            # Log WHY we're not stopping (for debugging)
+            if current_time - last_minimum_duration_log_time >= LOG_INTERVAL:
+                reasons = []
+                if num_people == 0:
+                    reasons.append("❌ No person detected")
+                elif num_people == 1:
+                    reasons.append(f"✅ {num_people} person detected")
+                else:
+                    reasons.append(f"✅ {num_people} people detected")
+                
+                if time_since_danger <= ALARM_GRACE_PERIOD:
+                    reasons.append(f"❌ Grace period active ({ALARM_GRACE_PERIOD - time_since_danger:.0f}s remaining)")
+                else:
+                    reasons.append(f"✅ Grace period passed ({time_since_danger:.0f}s)")
+                
+                if time_since_alarm_start < MINIMUM_ALARM_DURATION:
+                    reasons.append(f"❌ Minimum duration not met ({MINIMUM_ALARM_DURATION - time_since_alarm_start:.0f}s remaining)")
+                else:
+                    reasons.append(f"✅ Minimum duration met ({time_since_alarm_start:.0f}s)")
+                
+                print(f"🔍 NORMAL detected but alarm continues: {' | '.join(reasons)}")
+                last_minimum_duration_log_time = current_time
         
         # Generate intelligent action when alert detected
         if detection_result.get('alert_level') in ['critical', 'high']:

@@ -1089,6 +1089,48 @@ class PostgreSQLHealthcareService:
             if not vietnamese_description or vietnamese_description.strip() == '' or vietnamese_description.lower() == 'null':
                 logger.warning(f"❌ Skipping event detection save - empty event_description for {event_data.get('event_type', 'unknown')}")
                 return None
+            
+            # 🚨 FILTER: Chỉ lưu DANGER/WARNING events nếu có từ khóa "té ngã" hoặc "đột quỵ"
+            event_type = event_data.get('event_type', '')
+            status = event_data.get('status', '')
+            
+            # Determine status from event data or infer from event type
+            if not status:
+                if event_type in ['fall', 'seizure']:
+                    confidence = event_data.get('confidence', 0.0)
+                    if confidence >= 0.60:
+                        status = 'danger'
+                    elif confidence >= 0.40:
+                        status = 'warning'
+                elif event_type == 'abnormal_behavior':
+                    status = 'warning'
+                elif event_type == 'normal_activity':
+                    status = 'normal'
+            
+            # 🚨 FILTER CHẶT CHẼ: Chỉ cho phép DANGER/WARNING nếu có "ngã" hoặc "đột quỵ"
+            if status in ['danger', 'warning']:
+                desc_lower = vietnamese_description.lower()
+                
+                # Kiểm tra chỉ 2 từ khóa: "ngã" hoặc "đột quỵ"
+                has_fall_keyword = 'ngã' in desc_lower
+                has_stroke_keyword = 'đột quỵ' in desc_lower
+                
+                if not has_fall_keyword and not has_stroke_keyword:
+                    logger.info(f"🚫 FILTERED: {status.upper()} event without required keywords - NOT saving to DB")
+                    logger.info(f"   Description: {vietnamese_description[:100]}...")
+                    logger.info(f"   ❌ Missing keywords: 'ngã' or 'đột quỵ'")
+                    return {
+                        'event_id': None,
+                        'filtered': True,
+                        'reason': f'{status.upper()} event without required keywords (ngã/đột quỵ)',
+                        'description': vietnamese_description
+                    }
+                else:
+                    logger.info(f"✅ VALID: {status.upper()} event with required keywords - saving to DB")
+                    if has_fall_keyword:
+                        logger.info(f"   ✓ Found keyword: ngã")
+                    if has_stroke_keyword:
+                        logger.info(f"   ✓ Found keyword: đột quỵ")
                 
             # Check for recent duplicate events (same type, user, camera within 30 seconds)
             # CRITICAL: Prevents spam when logging NORMAL events continuously

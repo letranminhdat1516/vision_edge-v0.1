@@ -325,6 +325,7 @@ class AdvancedHealthcarePipeline:
                         
                         event_data = {
                             'event_type': 'fall',
+                            'status': 'danger',  # 🚨 For filter: fall is always DANGER
                             'description': description,
                             'detection_data': {
                                 'algorithm': 'yolo_fall_detection',
@@ -357,6 +358,13 @@ class AdvancedHealthcarePipeline:
                         
                         # Publish event to get event_id (without snapshot yet)
                         event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
+                        
+                        # 🚫 Check if event was filtered (no fall/stroke keywords)
+                        if isinstance(event_result, dict) and event_result.get('filtered'):
+                            print(f"🚫 Fall event FILTERED: {event_result.get('reason')}")
+                            print(f"   Description: {event_result.get('description', '')[:100]}...")
+                            return result  # Skip snapshot capture
+                        
                         event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                         print(f"✅ Fall event created: {event_id}")
                         
@@ -579,6 +587,7 @@ class AdvancedHealthcarePipeline:
                                 bounding_boxes = [{"bbox": person_bbox, "confidence": 1.0}] if person_bbox else []
                                 event_data = {
                                     'event_type': 'abnormal_behavior',
+                                    'status': 'danger',  # 🚨 For filter: seizure is always DANGER
                                     'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence',
                                     'detection_data': {
                                         'algorithm': 'seizure_detection',
@@ -606,6 +615,13 @@ class AdvancedHealthcarePipeline:
                                 
                                 # Publish event to get event_id
                                 event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
+                                
+                                # 🚫 Check if event was filtered (no seizure keywords - should not happen for seizure)
+                                if isinstance(event_result, dict) and event_result.get('filtered'):
+                                    print(f"🚫 Seizure event FILTERED: {event_result.get('reason')}")
+                                    print(f"   Description: {event_result.get('description', '')[:100]}...")
+                                    return result  # Skip snapshot capture
+                                
                                 event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                                 print(f"✅ Seizure event created: {event_id}")
                             except Exception as e:
@@ -865,6 +881,7 @@ class AdvancedHealthcarePipeline:
                     # Create event data for all activities
                     activity_event_data = {
                         'event_type': result.get('emergency_type', 'normal_activity'),
+                        'status': result['alert_level'],  # 🚨 For filter: danger/warning/suspect/normal
                         'description': f"{result['alert_level'].upper()}: {result.get('emergency_type', 'activity')}",
                         'detection_data': {
                             'alert_level': result['alert_level'],

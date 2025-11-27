@@ -346,6 +346,37 @@ class EmergencyAlarmHandlerPsycopg:
             logger.info(f"   Old state: {event_data.get('old_lifecycle_state')}")
             logger.info(f"   New state: {event_data.get('new_lifecycle_state')}")
             
+            # 🔒 CHECK MINIMUM ALARM DURATION (block stop requests within first 20 seconds)
+            import time
+            MINIMUM_ALARM_DURATION = 20  # seconds
+            
+            # Debug log to check alarm_start_time status
+            logger.info(f"🔍 Checking minimum duration...")
+            logger.info(f"   hasattr: {hasattr(audio_alert_service, 'alarm_start_time')}")
+            if hasattr(audio_alert_service, 'alarm_start_time'):
+                logger.info(f"   alarm_start_time: {audio_alert_service.alarm_start_time}")
+                logger.info(f"   is_playing: {audio_alert_service.is_playing}")
+            
+            # Get alarm start time from audio service
+            if hasattr(audio_alert_service, 'alarm_start_time') and audio_alert_service.alarm_start_time:
+                time_since_alarm_start = time.time() - audio_alert_service.alarm_start_time
+                
+                if time_since_alarm_start < MINIMUM_ALARM_DURATION:
+                    remaining = MINIMUM_ALARM_DURATION - time_since_alarm_start
+                    logger.warning(f"🚫 STOP REQUEST BLOCKED: Minimum duration not met!")
+                    logger.warning(f"   ⏱️  Time since alarm start: {time_since_alarm_start:.1f}s")
+                    logger.warning(f"   🔒 Minimum required: {MINIMUM_ALARM_DURATION}s")
+                    logger.warning(f"   ⏳ Remaining: {remaining:.1f}s")
+                    logger.warning(f"   📱 Stop request from: {reason}")
+                    logger.info("=" * 80)
+                    return  # BLOCK the stop request
+                else:
+                    logger.info(f"✅ Minimum duration met ({time_since_alarm_start:.1f}s >= {MINIMUM_ALARM_DURATION}s)")
+            else:
+                # No alarm_start_time - alarm might have been stopped already or never started
+                logger.warning("⚠️ No alarm_start_time found - bypassing minimum duration check")
+                logger.warning("   This usually means alarm was already stopped or never started properly")
+            
             # Stop alarm
             import asyncio
             stop_result = asyncio.run(audio_alert_service.stop_alarm())
