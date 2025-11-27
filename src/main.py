@@ -323,6 +323,10 @@ if __name__ == "__main__":
         print("💡 Handler logs will appear above when alarm is triggered")
         print("=" * 80 + "\n")
         
+        # 🔥 Track last danger time to prevent immediate alarm stop
+        last_danger_time = 0
+        ALARM_GRACE_PERIOD = 20  # seconds - alarm won't stop for 20s after danger
+        
         while True:
             for cam_data in cameras_data:
                 try:
@@ -364,9 +368,15 @@ if __name__ == "__main__":
                         if resolved_count > 0:
                             print(f"   ✅ Resolved {resolved_count} active alarm(s)")
                     
-                    # ✅ STOP ALARM if situation returns to NORMAL
-                    if detection_result.get('alert_level') == 'normal' and audio_alert_service.is_playing:
-                        print(f"✅ Situation normalized - STOPPING ALARM")
+                    # ✅ STOP ALARM if situation returns to NORMAL (with person detected + grace period)
+                    current_time = time.time()
+                    time_since_danger = current_time - last_danger_time if last_danger_time > 0 else 999
+                    
+                    if (detection_result.get('alert_level') == 'normal' and 
+                        audio_alert_service.is_playing and 
+                        num_people > 0 and 
+                        time_since_danger > ALARM_GRACE_PERIOD):  # CHỈ stop sau GRACE_PERIOD giây từ lần danger cuối
+                        print(f"✅ Situation normalized ({time_since_danger:.0f}s after danger) - STOPPING ALARM")
                         import asyncio
                         asyncio.run(audio_alert_service.stop_alarm())
                         # Update database: ALARM_ACTIVATED → RESOLVED
@@ -375,12 +385,18 @@ if __name__ == "__main__":
                         )
                         if resolved_count > 0:
                             print(f"   ✅ Resolved {resolved_count} active alarm(s)")
+                    elif (detection_result.get('alert_level') == 'normal' and 
+                          audio_alert_service.is_playing and 
+                          time_since_danger <= ALARM_GRACE_PERIOD):
+                        print(f"⏳ Grace period: {ALARM_GRACE_PERIOD - time_since_danger:.0f}s remaining before alarm can stop")
                     
                     # Debug logging removed for cleaner output
                     
                     # Generate intelligent action when alert detected
                     # 🎯 FIX: Match alert_level values with pipeline ('danger', 'warning', 'suspect', 'normal')
                     if detection_result.get('alert_level') == 'danger':
+                        # Track danger time for grace period
+                        last_danger_time = current_time
                         emergency_type = detection_result.get('emergency_type', 'unknown')
                         confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
                         print(f"🚨 DANGER ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
@@ -614,8 +630,10 @@ if __name__ == "__main__":
             if resolved_count > 0:
                 print(f"   ✅ Resolved {resolved_count} active alarm(s)")
         
-        # ✅ STOP ALARM if situation returns to NORMAL
-        if detection_result.get('alert_level') == 'normal' and audio_alert_service.is_playing:
+        # ✅ STOP ALARM if situation returns to NORMAL (with person detected)
+        if (detection_result.get('alert_level') == 'normal' and 
+            audio_alert_service.is_playing and 
+            num_people > 0):  # CHỈ stop khi thực sự có person + normal, không stop khi "không detect được gì"
             print(f"✅ Situation normalized - STOPPING ALARM")
             import asyncio
             asyncio.run(audio_alert_service.stop_alarm())
