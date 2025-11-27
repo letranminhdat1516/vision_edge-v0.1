@@ -98,6 +98,9 @@ class EmergencyAlarmHandlerPsycopg:
                     logger.info(f"   - {self.stop_channel_name} (alarm stop)")
                     logger.info("⚡ Ready to receive instant notifications!")
                     
+                    # Check for pending alarms (missed while offline)
+                    self._check_pending_alarms()
+                    
                     # Poll for notifications
                     while self.is_running:
                         # Wait for notification with timeout (1 second)
@@ -132,6 +135,59 @@ class EmergencyAlarmHandlerPsycopg:
                         self.listen_conn.close()
                     except:
                         pass
+    
+    def _check_pending_alarms(self):
+        """
+        Check for alarms that were activated while handler was offline
+        Play any alarms in ALARM_ACTIVATED state
+        """
+        try:
+            logger.info("🔍 Checking for pending alarms...")
+            
+            conn = self.pg_service.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT 
+                    event_id,
+                    event_type,
+                    user_id,
+                    camera_id,
+                    created_at
+                FROM event_detections
+                WHERE lifecycle_state = 'ALARM_ACTIVATED'
+                ORDER BY created_at ASC
+            """)
+            
+            pending = cursor.fetchall()
+            
+            if pending:
+                logger.warning(f"⚠️ Found {len(pending)} pending alarm(s) to activate!")
+                
+                for event_id, event_type, user_id, camera_id, created_at in pending:
+                    logger.info(f"   🔔 Activating missed alarm: {event_id} ({event_type})")
+                    
+                    # Create notification data
+                    data = {
+                        'event_id': event_id,
+                        'event_type': event_type,
+                        'user_id': user_id,
+                        'camera_id': camera_id,
+                        'state': 'ALARM_ACTIVATED',
+                        'created_at': created_at.isoformat() if created_at else None
+                    }
+                    
+                    # Process as if we received notification
+                    self._process_alarm_activated_sync(data)
+            else:
+                logger.info("   ✅ No pending alarms")
+                
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking pending alarms: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _handle_notification(self, notify):
         """

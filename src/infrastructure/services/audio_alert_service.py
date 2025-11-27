@@ -40,11 +40,28 @@ class AudioAlertService:
     def _initialize_audio(self):
         """Khởi tạo audio backend và detect devices"""
         try:
-            # Try pygame first (cross-platform, dễ dùng)
-            import pygame
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
-            self.audio_backend = 'pygame'
-            logger.info("✅ Audio backend: pygame initialized")
+            # Windows: Try winsound first (best Bluetooth support)
+            if os.name == 'nt':
+                wav_available = self._ensure_wav_file()
+                
+                if wav_available:
+                    import winsound
+                    self.audio_backend = 'winsound'
+                    logger.info("✅ Audio backend: winsound initialized (Windows)")
+                    logger.info("   📻 Will use default Windows audio device (supports Bluetooth)")
+                else:
+                    # Fallback to pygame if WAV conversion failed
+                    logger.warning("   ⚠️ WAV conversion failed, falling back to pygame")
+                    import pygame
+                    pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+                    self.audio_backend = 'pygame'
+                    logger.info("✅ Audio backend: pygame initialized (fallback)")
+            else:
+                # Linux/Mac: Use pygame
+                import pygame
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+                self.audio_backend = 'pygame'
+                logger.info("✅ Audio backend: pygame initialized")
             
             # Detect available devices
             self._detect_audio_devices()
@@ -52,20 +69,54 @@ class AudioAlertService:
             # Create sounds directory if not exists
             self.sounds_dir.mkdir(parents=True, exist_ok=True)
             
-        except ImportError:
-            logger.warning("pygame not available, trying pydub + simpleaudio")
+        except ImportError as e:
+            logger.warning(f"Primary audio backend not available: {e}, trying alternatives")
             try:
-                from pydub import AudioSegment
-                from pydub.playback import play
-                import simpleaudio
-                self.audio_backend = 'pydub'
-                logger.info("✅ Audio backend: pydub initialized")
+                # Fallback: pygame
+                import pygame
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+                self.audio_backend = 'pygame'
+                logger.info("✅ Audio backend: pygame initialized (fallback)")
             except ImportError:
                 logger.error("No audio backend available! Install: pip install pygame")
                 self.enabled = False
         except Exception as e:
             logger.error(f"Failed to initialize audio: {e}")
             self.enabled = False
+    
+    def _ensure_wav_file(self) -> bool:
+        """
+        Convert MP3 to WAV if needed (for winsound)
+        Returns True if WAV is available, False otherwise
+        """
+        try:
+            mp3_path = self.sounds_dir / 'emergency_siren.mp3'
+            wav_path = self.sounds_dir / 'emergency_siren.wav'
+            
+            if wav_path.exists():
+                logger.info(f"   ✅ WAV file exists: {wav_path.name}")
+                return True
+            
+            if not mp3_path.exists():
+                logger.warning(f"   ⚠️ MP3 file not found: {mp3_path}")
+                return False
+            
+            logger.info(f"   🔄 Converting MP3 → WAV for Bluetooth support...")
+            
+            from pydub import AudioSegment
+            audio = AudioSegment.from_mp3(str(mp3_path))
+            audio.export(str(wav_path), format='wav')
+            
+            logger.info(f"   ✅ WAV file created: {wav_path.name}")
+            return True
+            
+        except ImportError:
+            logger.warning("   ⚠️ pydub not installed, cannot convert MP3 to WAV")
+            logger.warning("   Install: pip install pydub")
+            return False
+        except Exception as e:
+            logger.error(f"   ❌ WAV conversion failed: {e}")
+            return False
     
     def _detect_audio_devices(self):
         """Phát hiện các thiết bị audio khả dụng"""
@@ -183,16 +234,6 @@ class AudioAlertService:
             self.alert_duration = duration
         
         try:
-            # Load emergency sound
-            sound = self._load_sound("emergency_siren.mp3")
-            
-            if not sound:
-                # Try fallback sound
-                sound = self._load_sound("emergency_alert.wav")
-            
-            if not sound:
-                return {"success": False, "message": "No sound file available"}
-            
             logger.info(f"🚨 EMERGENCY ALARM ACTIVATED")
             logger.info(f"   User ID: {user_id}")
             logger.info(f"   Triggered by: {triggered_by}")
@@ -200,7 +241,50 @@ class AudioAlertService:
             logger.info(f"   Duration: {self.alert_duration}s")
             
             # Play based on backend
-            if self.audio_backend == 'pygame':
+            if self.audio_backend == 'winsound':
+                # winsound plays WAV files through default Windows audio device (Bluetooth support!)
+                import winsound
+                import threading
+                
+                wav_path = self.sounds_dir / 'emergency_siren.wav'
+                
+                if not wav_path.exists():
+                    logger.error(f"WAV file not found: {wav_path}")
+                    return {"success": False, "message": "WAV file not found for Bluetooth playback"}
+                
+                # Play with ASYNC + LOOP flags for continuous playback
+                try:
+                    # SND_FILENAME: Play from file
+                    # SND_ASYNC: Play asynchronously (non-blocking)
+                    # SND_LOOP: Loop continuously until stopped
+                    # SND_NODEFAULT: Don't play default sound if file fails
+                    winsound.PlaySound(
+                        str(wav_path), 
+                        winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP | winsound.SND_NODEFAULT
+                    )
+                    self.is_playing = True
+                    logger.info("   🔁 Playing in continuous loop mode (winsound ASYNC+LOOP)")
+                except Exception as e:
+                    logger.error(f"winsound playback error: {e}")
+                    return {"success": False, "message": f"Playback failed: {e}"}
+                
+                # Schedule auto-stop ONLY if duration > 0
+                if self.alert_duration > 0:
+                    import asyncio
+                    asyncio.create_task(self._auto_stop_after_duration())
+                else:
+                    logger.info("   ⚡ Playing indefinitely via Bluetooth (no auto-stop)")
+            
+            elif self.audio_backend == 'pygame':
+                # Load sound for pygame
+                sound = self._load_sound("emergency_siren.mp3")
+                
+                if not sound:
+                    sound = self._load_sound("emergency_alert.wav")
+                
+                if not sound:
+                    return {"success": False, "message": "No sound file available"}
+                
                 import pygame
                 sound.play(loops=-1)  # Loop indefinitely
                 self.is_playing = True
@@ -214,6 +298,12 @@ class AudioAlertService:
                     logger.info("   ⚡ Playing indefinitely (no auto-stop)")
             
             elif self.audio_backend == 'pydub':
+                # Load sound for pydub
+                sound = self._load_sound("emergency_siren.mp3")
+                
+                if not sound:
+                    return {"success": False, "message": "No sound file available"}
+                
                 from pydub.playback import play
                 import threading
                 
@@ -277,11 +367,20 @@ class AudioAlertService:
             return {"success": False, "message": "No alarm is playing"}
         
         try:
-            if self.audio_backend == 'pygame':
+            # Stop playback first to exit any loops
+            self.is_playing = False
+            
+            if self.audio_backend == 'winsound':
+                # winsound requires explicit stop call
+                import winsound
+                winsound.PlaySound(None, winsound.SND_PURGE)
+                logger.info("🔇 Stopped winsound playback (Bluetooth)")
+            
+            elif self.audio_backend == 'pygame':
                 import pygame
                 pygame.mixer.stop()
+                logger.info("🔇 Stopped pygame playback")
             
-            self.is_playing = False
             self.current_sound = None
             
             logger.info("✅ Emergency alarm stopped")
@@ -294,6 +393,7 @@ class AudioAlertService:
             
         except Exception as e:
             logger.error(f"Failed to stop alarm: {e}")
+            self.is_playing = False  # Force flag to false even on error
             return {"success": False, "message": str(e)}
     
     def get_status(self) -> Dict[str, Any]:
