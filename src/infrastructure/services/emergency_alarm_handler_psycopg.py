@@ -246,11 +246,22 @@ class EmergencyAlarmHandlerPsycopg:
         Xử lý alarm stop request từ API
         1. Tắt còi báo động
         2. Update event → RESOLVED (nếu có event_id)
+        
+        ⚠️ IMPORTANT: If old_lifecycle_state exists in payload, this is from
+        database trigger on lifecycle change. Ignore these for AUTOCALLED events!
         """
         try:
             event_id = str(event_data.get('event_id', '')) if event_data.get('event_id') else 'N/A'
             reason = event_data.get('reason', 'Unknown reason')
             stopped_by = event_data.get('stopped_by', 'api')
+            old_lifecycle = event_data.get('old_lifecycle_state', '')
+            
+            # ⚠️ CHẶN database trigger auto-stop cho AUTOCALLED events
+            if old_lifecycle == 'ALARM_ACTIVATED' and event_data.get('new_lifecycle_state') == 'AUTOCALLED':
+                logger.warning(f"⚠️ Ignoring STOP request from database trigger for AUTOCALLED event {event_id[:8] if event_id != 'N/A' else 'N/A'}")
+                logger.warning(f"   AUTOCALLED events must keep alarm running until manual stop")
+                logger.warning(f"   Old state: {old_lifecycle} → New state: AUTOCALLED")
+                return
             
             logger.info(f"🔇 Processing ALARM STOP: {event_id[:8] if event_id != 'N/A' else 'N/A'}...")
             logger.info(f"   Reason: {reason}")
@@ -315,7 +326,14 @@ class EmergencyAlarmHandlerPsycopg:
             status = result['status']
             
             # Only update if currently in alarm state
+            # ✅ Allow API to stop both ALARM_ACTIVATED and AUTOCALLED
+            # AUTOCALLED can be stopped manually via API when situation resolved
             if current_state in ['ALARM_ACTIVATED', 'AUTOCALLED']:
+                if current_state == 'AUTOCALLED':
+                    logger.warning(f"⚠️ AUTOCALLED event {event_id[:8]}... being stopped via API")
+                    logger.warning(f"   🚨 EMERGENCY SERVICES may have been contacted!")
+                    logger.warning(f"   Make sure to notify them if situation is resolved")
+                
                 update_query = """
                     UPDATE event_detections
                     SET 

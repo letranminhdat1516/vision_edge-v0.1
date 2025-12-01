@@ -319,14 +319,15 @@ class AdvancedHealthcarePipeline:
                         
                         # 🔥 Determine severity based on fall type
                         severity = 'critical' if fall_type == 'slow_collapse' else 'high'
-                        description = f'{fall_type.replace("_", " ").title()} detected with {base_fall_confidence:.1%} confidence'
-                        if fall_type == 'slow_collapse':
-                            description += ' - POSSIBLE STROKE OR WEAKNESS'
+                        # ❌ REMOVED: Static English description to allow BLIP Vietnamese caption
+                        # description = f'{fall_type.replace("_", " ").title()} detected with {base_fall_confidence:.1%} confidence'
+                        # if fall_type == 'slow_collapse':
+                        #     description += ' - POSSIBLE STROKE OR WEAKNESS'
                         
                         event_data = {
                             'event_type': 'fall',
                             'status': 'danger',  # 🚨 For filter: fall is always DANGER
-                            'description': description,
+                            # 🎬 NO description - let BLIP generate Vietnamese caption with "ngã" keyword
                             'detection_data': {
                                 'algorithm': 'yolo_fall_detection',
                                 'model_version': 'v1.0',
@@ -588,7 +589,7 @@ class AdvancedHealthcarePipeline:
                                 event_data = {
                                     'event_type': 'abnormal_behavior',
                                     'status': 'danger',  # 🚨 For filter: seizure is always DANGER
-                                    'description': f'Seizure activity detected with {final_seizure_confidence:.1%} confidence',
+                                    # 🎬 NO description - let BLIP generate Vietnamese caption with "đột quỵ" keyword
                                     'detection_data': {
                                         'algorithm': 'seizure_detection',
                                         'behavior_type': 'seizure',
@@ -879,10 +880,15 @@ class AdvancedHealthcarePipeline:
                 # Only log if we have valid IDs
                 if self.camera_id and self.user_id:
                     # Create event data for all activities
+                    # 🔍 DEBUG: Check if frame exists before creating event
+                    has_frame = self._current_frame is not None
+                    if result['alert_level'] == 'normal':
+                        print(f"🔍 NORMAL EVENT DEBUG: _current_frame exists={has_frame}, type={type(self._current_frame)}, shape={self._current_frame.shape if has_frame else 'N/A'}")
+                    
                     activity_event_data = {
                         'event_type': result.get('emergency_type', 'normal_activity'),
                         'status': result['alert_level'],  # 🚨 For filter: danger/warning/suspect/normal
-                        'description': f"{result['alert_level'].upper()}: {result.get('emergency_type', 'activity')}",
+                        'description': '',  # 🔥 Empty description to trigger BLIP caption generation
                         'detection_data': {
                             'alert_level': result['alert_level'],
                             'fall_confidence': result['fall_confidence'],

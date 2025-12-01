@@ -32,7 +32,7 @@ class EventLifecycleWorker:
         self.check_interval = 10  # seconds - chạy mỗi 10s
         self.alarm_delay_seconds = 30  # seconds - delay trước khi auto-alarm
         self.resolve_delay_seconds = 30  # seconds - delay trước khi auto-resolve
-        self.auto_call_delay_seconds = 180  # seconds - delay trước khi auto-call (3 phút)
+        self.auto_call_delay_seconds = 60 # seconds - delay trước khi auto-call (3 phút)
         
         # Escalatable statuses
         self.escalatable_statuses = ['danger', 'warning']
@@ -514,6 +514,8 @@ class EventLifecycleWorker:
             cursor = conn.cursor()
             
             # Find ALARM_ACTIVATED events có normal event sau 30s
+            # ⚠️ IMPORTANT: Only resolve ALARM_ACTIVATED, NOT AUTOCALLED!
+            # Once escalated to AUTOCALLED, manual intervention is required.
             query = """
                 WITH alarm_events AS (
                     SELECT 
@@ -526,6 +528,8 @@ class EventLifecycleWorker:
                     FROM event_detections e1
                     WHERE e1.lifecycle_state = 'ALARM_ACTIVATED'
                       AND e1.is_canceled = FALSE
+                      -- ✅ FIX: Exclude AUTOCALLED events from auto-resolve
+                      -- AUTOCALLED requires manual intervention
                 ),
                 normal_events AS (
                     SELECT 

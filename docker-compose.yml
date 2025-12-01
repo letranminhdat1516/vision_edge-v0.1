@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  vision_edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vision_edge_healthcare
+    restart: unless-stopped
+    
+    # Network mode for Raspberry Pi (access to local network)
+    network_mode: host
+    
+    # Environment variables (override from .env file)
+    env_file:
+      - .env
+    
+    # Volumes for persistent data
+    volumes:
+      - ./data:/app/data
+      - ./examples/data:/app/examples/data
+      - ./logs:/app/logs
+    
+    # Device access for camera and audio
+    devices:
+      - /dev/video0:/dev/video0  # Camera access (if using USB camera)
+    
+    # Privileges for audio playback
+    privileged: true
+    
+    # Memory limits for Raspberry Pi
+    mem_limit: 2g
+    memswap_limit: 2g
+    
+    # CPU limits (4 cores max for Pi 4)
+    cpus: '3.5'
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Optional: PostgreSQL database (if not using external Supabase)
+# Uncomment if you want local database on Pi
+#  postgres:
+#    image: postgres:15-alpine
+#    container_name: vision_edge_db
+#    restart: unless-stopped
+#    environment:
+#      POSTGRES_USER: ${DB_USER}
+#      POSTGRES_PASSWORD: ${DB_PASSWORD}
+#      POSTGRES_DB: ${DB_NAME}
+#    volumes:
+#      - postgres_data:/var/lib/postgresql/data
+#    ports:
+#      - "5432:5432"
+#
+#volumes:
+#  postgres_data:

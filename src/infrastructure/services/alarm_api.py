@@ -360,6 +360,8 @@ class AlarmAPI:
             cursor = conn.cursor()
             
             # Update lifecycle_state = RESOLVED + notes
+            # ✅ Allow API to stop ALARM_ACTIVATED, NOTIFIED, and AUTOCALLED
+            # Log warning when stopping AUTOCALLED (emergency services may be involved)
             update_query = """
                 UPDATE event_detections
                 SET 
@@ -369,6 +371,7 @@ class AlarmAPI:
                             '[' || NOW()::text || '] Alarm RESOLVED via API by ' || %s ||
                             CASE WHEN %s IS NOT NULL THEN ' - Reason: ' || %s ELSE '' END
                 WHERE event_id = %s
+                  AND lifecycle_state IN ('ALARM_ACTIVATED', 'NOTIFIED', 'AUTOCALLED')
             """
             
             cursor.execute(update_query, (stopped_by, reason, reason, event_id))

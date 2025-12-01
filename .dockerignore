@@ -1,0 +1,59 @@
+# Docker ignore file - exclude unnecessary files from image
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.log
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+README.md
+
+# Test files
+test_*.py
+check_*.py
+examples/test_*.py
+examples/check_*.py
+examples/debug_*.py
+examples/demo_*.py
+
+# Temporary files
+*.tmp
+*.bak
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Data (will be mounted as volume)
+data/saved_frames/*
+examples/data/saved_frames/*
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Raspberry Pi specific
+*.swp
