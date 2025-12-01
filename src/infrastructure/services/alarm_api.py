@@ -363,7 +363,6 @@ class AlarmAPI:
                 UPDATE event_detections
                 SET 
                     lifecycle_state = 'RESOLVED',
-                    resolved_at = NOW(),
                     last_action_at = NOW(),
                     notes = COALESCE(notes, '') || E'\\n' || 
                             '[' || NOW()::text || '] Alarm RESOLVED via API by ' || %s ||

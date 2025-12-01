@@ -408,7 +408,6 @@ class EventLifecycleWorker:
                         UPDATE event_detections
                         SET 
                             lifecycle_state = 'RESOLVED',
-                            resolved_at = NOW(),
                             last_action_at = NOW(),
                             notes = COALESCE(notes, '') || E'\\n' || 
                                     '[' || NOW()::text || '] Auto-resolved: normal status detected after 30s'

@@ -661,30 +661,14 @@ class PostgreSQLHealthcareService:
             print(f"   confidence: {confidence}")
             print(f"   fallback_description: '{fallback_description}'")
             
-            # For test events, use the test description directly to create intelligent action
-            if fallback_description and ('Một người' in fallback_description or 'Hai người' in fallback_description or 'Một em bé' in fallback_description or 'Một phụ nữ' in fallback_description):
-                print(f"🧪 DETECTED TEST DESCRIPTION - Using for intelligent action: {fallback_description}")
-                
-                # Create intelligent action using test description
-                if event_type in ['abnormal_behavior', 'seizure']:
-                    if confidence >= 0.50:
-                        result = f"🆘 KHẨN CẤP - CO GIẬT: {fallback_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
-                    elif confidence >= 0.30:
-                        result = f"⚠️ CẢNH BÁO CO GIẬT: {fallback_description} - Cần theo dõi chặt chẽ"
-                    else:
-                        result = f"📊 QUAN SÁT: {fallback_description} - Tiếp tục theo dõi"
-                elif event_type == 'fall':
-                    if confidence >= 0.60:
-                        result = f"🚨 KHẨN CẤP - TÉ NGÃ: {fallback_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
-                    elif confidence >= 0.40:
-                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {fallback_description} - Cần theo dõi"
-                    else:
-                        result = f"📊 THEO DÕI: {fallback_description} - Quan sát"
-                
-                print(f"🎯 RETURNING TEST-BASED ACTION: {result}")
-                return result
+            # 🔥 FIX: Nếu có fallback_description (từ context hoặc event_data), SỬ DỤNG TRỰC TIẾP
+            # Không cần check pattern, chỉ cần có text là dùng
+            if fallback_description and len(fallback_description.strip()) > 10:
+                print(f"✅ USING PROVIDED DESCRIPTION: {fallback_description[:80]}...")
+                # Return description AS-IS (đã có emoji, format đầy đủ)
+                return fallback_description
             
-            print(f"⚠️ FALLBACK_DESCRIPTION does not match test patterns, using BLIP captioning...")
+            print(f"⚠️ No fallback_description provided, using BLIP captioning...")
             
             # Try to generate intelligent action with Vietnamese caption
             # If image_path not provided, try to find latest alert image
@@ -1073,13 +1057,20 @@ class PostgreSQLHealthcareService:
             print(f"🔥 DEBUG BEFORE _generate_event_description:")
             print(f"   event_data description: '{event_data.get('description', '')}'")
             
+            # 🔥 FIX: Check both event_data['description'] AND context['description']
+            context_obj = event_data.get('context', {})
+            fallback_desc = event_data.get('description', '') or (context_obj.get('description', '') if isinstance(context_obj, dict) else '')
+            
+            print(f"   context description: '{context_obj.get('description', '') if isinstance(context_obj, dict) else ''}'")
+            print(f"   final fallback_desc: '{fallback_desc}'")
+            
             vietnamese_description = self._generate_event_description(
                 event_data.get('event_type', ''),
                 event_data.get('confidence', 0.0),
                 event_data.get('image_path', ''),
-                event_data.get('description', ''),
+                fallback_desc,  # 🔥 Use fallback_desc from both sources
                 camera_name=camera_name,
-                context=event_data.get('context', {})  # 🎬 Pass full context (with frame) for BLIP
+                context=context_obj  # 🎬 Pass full context (with frame) for BLIP
             )
             
             print(f"🔥 DEBUG AFTER _generate_event_description:")
@@ -1110,6 +1101,19 @@ class PostgreSQLHealthcareService:
             # 🚨 FILTER CHẶT CHẼ: Chỉ cho phép DANGER/WARNING nếu có "ngã" hoặc "đột quỵ"
             if status in ['danger', 'warning']:
                 desc_lower = vietnamese_description.lower()
+                
+                # 🚫 BỎ QUA: Nếu có từ "đứng" trong description → FALSE POSITIVE
+                has_standing_keyword = 'đứng' in desc_lower
+                if has_standing_keyword:
+                    logger.info(f"🚫 FILTERED: {status.upper()} event with STANDING keyword - NOT saving to DB")
+                    logger.info(f"   Description: {vietnamese_description[:100]}...")
+                    logger.info(f"   ❌ Reason: Person is STANDING (đứng) - false positive")
+                    return {
+                        'event_id': None,
+                        'filtered': True,
+                        'reason': f'{status.upper()} event with STANDING keyword (đứng) - false positive',
+                        'description': vietnamese_description
+                    }
                 
                 # Kiểm tra chỉ 2 từ khóa: "ngã" hoặc "đột quỵ"
                 has_fall_keyword = 'ngã' in desc_lower
