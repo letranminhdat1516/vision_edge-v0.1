@@ -166,9 +166,10 @@ class AlarmAPI:
             )
             
             if success:
-                # Optional: Log alarm stop vào database (không bắt buộc)
+                # QUAN TRỌNG: Log alarm stop và update state → RESOLVED
                 if event_id:
                     self._log_alarm_stop(event_id, stopped_by, reason)
+                    logger.info(f"📝 Event {event_id[:8]}... marked as RESOLVED")
                 
                 logger.info(f"✅ Alarm stop notification sent successfully")
                 return {

@@ -244,8 +244,8 @@ class EmergencyAlarmHandlerPsycopg:
     def _process_alarm_stop_sync(self, event_data: Dict[str, Any]):
         """
         Xử lý alarm stop request từ API
-        CHỈ TẮT CÒI - KHÔNG CẬP NHẬT DATABASE
-        Lifecycle_state được quản lý riêng bởi API/Worker
+        1. Tắt còi báo động
+        2. Update event → RESOLVED (nếu có event_id)
         """
         try:
             event_id = str(event_data.get('event_id', '')) if event_data.get('event_id') else 'N/A'
@@ -256,8 +256,7 @@ class EmergencyAlarmHandlerPsycopg:
             logger.info(f"   Reason: {reason}")
             logger.info(f"   Stopped by: {stopped_by}")
             
-            # Stop alarm - NO MINIMUM DURATION CHECK
-            # Minimum duration được quản lý bởi Worker service
+            # Step 1: Stop alarm audio
             import asyncio
             stop_result = asyncio.run(audio_alert_service.stop_alarm())
             
@@ -268,12 +267,102 @@ class EmergencyAlarmHandlerPsycopg:
             else:
                 logger.warning(f"⚠️ No alarm was playing: {stop_result['message']}")
             
+            # Step 2: Update event to RESOLVED (if valid event_id)
+            if event_id != 'N/A' and self.postgresql_service:
+                try:
+                    self._update_event_to_resolved(event_id, reason, stopped_by)
+                except Exception as update_error:
+                    logger.error(f"⚠️ Failed to update event to RESOLVED: {update_error}")
+            
             logger.info("=" * 80)
             
         except Exception as e:
             logger.error(f"❌ Error stopping alarm: {e}")
             import traceback
             logger.error(traceback.format_exc())
+    
+    def _update_event_to_resolved(self, event_id: str, reason: str, stopped_by: str):
+        """
+        Update event lifecycle_state → RESOLVED khi alarm được stop
+        
+        Args:
+            event_id: ID của event
+            reason: Lý do stop alarm
+            stopped_by: Người/hệ thống stop alarm
+        """
+        conn = None
+        cursor = None
+        
+        try:
+            conn = self.postgresql_service.get_connection()
+            cursor = conn.cursor()
+            
+            # Check current state
+            cursor.execute("""
+                SELECT lifecycle_state, status
+                FROM event_detections
+                WHERE event_id = %s
+            """, (event_id,))
+            
+            result = cursor.fetchone()
+            
+            if not result:
+                logger.warning(f"⚠️ Event {event_id[:8]}... not found in database")
+                self.postgresql_service.return_connection(conn)
+                return
+            
+            current_state = result['lifecycle_state']
+            status = result['status']
+            
+            # Only update if currently in alarm state
+            if current_state in ['ALARM_ACTIVATED', 'AUTOCALLED']:
+                update_query = """
+                    UPDATE event_detections
+                    SET 
+                        lifecycle_state = 'RESOLVED',
+                        last_action_at = NOW(),
+                        notes = COALESCE(notes, '') || E'\\n' || 
+                                '[' || NOW()::text || '] Resolved: Alarm stopped manually by ' || %s || ' (' || %s || ')'
+                    WHERE event_id = %s
+                      AND lifecycle_state IN ('ALARM_ACTIVATED', 'AUTOCALLED')
+                """
+                
+                cursor.execute(update_query, (stopped_by, reason, event_id))
+                
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"✅ Event {event_id[:8]}... updated: {current_state} → RESOLVED")
+                    logger.info(f"   Stopped by: {stopped_by}")
+                    logger.info(f"   Reason: {reason}")
+                else:
+                    logger.warning(f"⚠️ Event {event_id[:8]}... state unchanged (concurrent update?)")
+            else:
+                logger.info(f"📊 Event {event_id[:8]}... already in state: {current_state} (no update needed)")
+            
+            cursor.close()
+            self.postgresql_service.return_connection(conn)
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating event to RESOLVED: {e}")
+            
+            # Rollback on error
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            
+            # Cleanup
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                try:
+                    self.postgresql_service.return_connection(conn)
+                except:
+                    pass
     
 
     

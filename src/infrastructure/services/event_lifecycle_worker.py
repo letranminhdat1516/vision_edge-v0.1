@@ -32,6 +32,7 @@ class EventLifecycleWorker:
         self.check_interval = 10  # seconds - chạy mỗi 10s
         self.alarm_delay_seconds = 30  # seconds - delay trước khi auto-alarm
         self.resolve_delay_seconds = 30  # seconds - delay trước khi auto-resolve
+        self.auto_call_delay_seconds = 180  # seconds - delay trước khi auto-call (3 phút)
         
         # Escalatable statuses
         self.escalatable_statuses = ['danger', 'warning']
@@ -48,6 +49,7 @@ class EventLifecycleWorker:
         logger.info("🔄 EventLifecycleWorker initialized")
         logger.info(f"   ⏱️  Check interval: {self.check_interval}s")
         logger.info(f"   ⏰ Alarm delay: {self.alarm_delay_seconds}s")
+        logger.info(f"   📞 Auto-call delay: {self.auto_call_delay_seconds}s (3 minutes)")
         logger.info(f"   ✅ Resolve delay: {self.resolve_delay_seconds}s")
     
     def set_postgresql_service(self, service):
@@ -68,8 +70,9 @@ class EventLifecycleWorker:
         logger.info("=" * 80)
         logger.info("🚀 EVENT LIFECYCLE WORKER STARTED")
         logger.info("=" * 80)
-        logger.info(f"📡 Monitoring events for auto-alarm and auto-resolve")
+        logger.info(f"📡 Monitoring events for auto-alarm, auto-call and auto-resolve")
         logger.info(f"⏱️  Running every {self.check_interval} seconds")
+        logger.info(f"📞 Auto-call: ALARM_ACTIVATED → AUTOCALLED after 3 minutes")
         logger.info("=" * 80)
     
     def _worker_loop(self):
@@ -78,10 +81,11 @@ class EventLifecycleWorker:
             try:
                 # Chạy checks
                 alarm_count = self._check_and_promote_to_alarm()
+                call_count = self._check_and_promote_to_auto_called()
                 resolve_count = self._check_and_auto_resolve()
                 
-                if alarm_count > 0 or resolve_count > 0:
-                    logger.info(f"[EventLifecycleWorker] Tick completed (alarm={alarm_count}, resolve={resolve_count})")
+                if alarm_count > 0 or call_count > 0 or resolve_count > 0:
+                    logger.info(f"[EventLifecycleWorker] Tick completed (alarm={alarm_count}, call={call_count}, resolve={resolve_count})")
                 
             except Exception as e:
                 logger.error(f"[EventLifecycleWorker] Error in worker loop: {e}")
@@ -117,7 +121,8 @@ class EventLifecycleWorker:
             cursor = conn.cursor()
             
             # Calculate cutoff time (30 seconds ago)
-            cutoff_time = datetime.now() - timedelta(seconds=self.alarm_delay_seconds)
+            from datetime import timezone
+            cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.alarm_delay_seconds)
             
             # Find candidate events
             query = """
@@ -298,6 +303,173 @@ class EventLifecycleWorker:
         
         finally:
             # ✅ CRITICAL: Always return connection to pool
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                try:
+                    self.postgresql_service.return_connection(conn)
+                except:
+                    pass
+    
+    def _check_and_promote_to_auto_called(self) -> int:
+        """
+        Kiểm tra events ALARM_ACTIVATED chưa xử lý sau 3 phút → Chuyển thành AUTOCALLED
+        
+        Logic:
+        1. Tìm events với:
+           - lifecycle_state = 'ALARM_ACTIVATED'
+           - acknowledged_at = NULL (chưa ai xử lý)
+           - is_canceled = FALSE
+           - escalated_at <= NOW() - 180s (3 phút)
+        
+        2. Update lifecycle_state → 'AUTOCALLED'
+           - Đánh dấu event đã được tự động gọi cứu hộ
+           - Ghi log vào notes
+        
+        Returns:
+            Number of events promoted to AUTOCALLED
+        """
+        if not self.postgresql_service:
+            return 0
+        
+        conn = None
+        cursor = None
+        
+        try:
+            conn = self.postgresql_service.get_connection()
+            
+            # Validate connection before use
+            if conn.closed:
+                logger.warning("⚠️ Connection closed, getting new one")
+                self.postgresql_service.return_connection(conn)
+                conn = self.postgresql_service.get_connection()
+            
+            cursor = conn.cursor()
+            
+            # Calculate cutoff time (3 minutes ago from escalated_at)
+            from datetime import timezone
+            cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.auto_call_delay_seconds)
+            
+            # Find candidate events
+            query = """
+                SELECT 
+                    event_id,
+                    user_id,
+                    camera_id,
+                    event_type,
+                    status,
+                    confidence_score,
+                    escalated_at,
+                    created_at
+                FROM event_detections
+                WHERE lifecycle_state = 'ALARM_ACTIVATED'
+                  AND acknowledged_at IS NULL
+                  AND is_canceled = FALSE
+                  AND escalated_at IS NOT NULL
+                  AND escalated_at <= %s
+                ORDER BY escalated_at ASC
+                LIMIT %s
+            """
+            
+            cursor.execute(query, (cutoff_time, self.batch_size))
+            candidates = cursor.fetchall()
+            
+            if not candidates:
+                cursor.close()
+                self.postgresql_service.return_connection(conn)
+                return 0
+            
+            logger.info(f"🔍 Found {len(candidates)} events pending auto-call (>{self.auto_call_delay_seconds}s old)")
+            
+            promoted = 0
+            for row in candidates:
+                event_id = row['event_id']
+                user_id = row['user_id']
+                camera_id = row['camera_id']
+                event_type = row['event_type']
+                status = row['status']
+                confidence = row['confidence_score']
+                escalated_at = row['escalated_at']
+                created_at = row['created_at']
+                
+                try:
+                    # Calculate time elapsed since alarm activation (handle timezone)
+                    from datetime import timezone
+                    now_aware = datetime.now(timezone.utc)
+                    time_since_alarm = (now_aware - escalated_at).total_seconds()
+                    
+                    # Update lifecycle_state → AUTOCALLED (match database enum)
+                    update_query = """
+                        UPDATE event_detections
+                        SET 
+                            lifecycle_state = 'AUTOCALLED',
+                            last_action_at = NOW(),
+                            notes = COALESCE(notes, '') || E'\\n' || 
+                                    '[' || NOW()::text || '] Auto-called: No response after 3 minutes of alarm'
+                        WHERE event_id = %s
+                          AND lifecycle_state = 'ALARM_ACTIVATED'
+                          AND acknowledged_at IS NULL
+                    """
+                    
+                    cursor.execute(update_query, (event_id,))
+                    
+                    if cursor.rowcount > 0:
+                        conn.commit()
+                        promoted += 1
+                        
+                        logger.info(f"📞 Event {event_id[:8]}... → AUTOCALLED (no response after {time_since_alarm:.0f}s)")
+                        logger.info(f"   Type: {event_type}, Status: {status}, Confidence: {confidence:.2f}")
+                        logger.info(f"   Created: {created_at}, Alarm: {escalated_at}")
+                        
+                        # TODO: Trigger external emergency call system here
+                        # Example: Call ambulance, fire department, police
+                        logger.warning(f"⚠️ AUTOCALLED triggered for event {event_id[:8]}...")
+                        logger.warning(f"   🚨 EMERGENCY SERVICES SHOULD BE CONTACTED!")
+                        logger.warning(f"   📞 Integrate with emergency call API here")
+                    
+                except Exception as e:
+                    # Rollback transaction on error
+                    try:
+                        conn.rollback()
+                    except:
+                        pass
+                    logger.error(f"❌ Error promoting event {event_id[:8]}... to AUTOCALLED: {e}")
+                    continue
+            
+            cursor.close()
+            self.postgresql_service.return_connection(conn)
+            
+            return promoted
+        
+        except Exception as e:
+            # Handle connection errors gracefully
+            if "SSL connection has been closed" in str(e) or "connection" in str(e).lower():
+                logger.warning(f"⚠️ Connection error in _check_and_promote_to_auto_called: {e}")
+                logger.info("🔄 Will retry on next cycle with fresh connection")
+                
+                # Close bad connection
+                if cursor:
+                    try:
+                        cursor.close()
+                    except:
+                        pass
+                if conn:
+                    try:
+                        conn.close()
+                    except:
+                        pass
+            else:
+                logger.error(f"❌ Error in _check_and_promote_to_autocalled: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+            
+            return 0
+        
+        finally:
+            # Always cleanup resources
             if cursor:
                 try:
                     cursor.close()
