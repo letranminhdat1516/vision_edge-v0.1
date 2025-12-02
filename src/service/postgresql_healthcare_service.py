@@ -967,7 +967,69 @@ class PostgreSQLHealthcareService:
             logger.error("PostgreSQL not connected")
             return None
         
+        # 🔒 EVENT MUTEX: Chặn tạo DANGER/WARNING event mới nếu đã có event đang active
+        # Chỉ cho phép NORMAL event để tắt alarm
+        event_type = event_data.get('event_type', '')
+        event_status = 'danger' if 'danger' in event_type else ('warning' if 'warning' in event_type else 'normal')
+        
+        if event_status in ['danger', 'warning']:
+            # Kiểm tra xem có event DANGER/WARNING nào đang active không
+            mutex_conn = None
+            try:
+                mutex_conn = self.get_connection()
+                if mutex_conn:
+                    with mutex_conn.cursor() as cursor:
+                        # Tìm event DANGER/WARNING đang active (chưa RESOLVED)
+                        mutex_check_sql = """
+                        SELECT event_id, event_type, lifecycle_state, detected_at
+                        FROM event_detections 
+                        WHERE user_id = %s
+                          AND status IN ('danger', 'warning')
+                          AND lifecycle_state != 'RESOLVED'
+                          AND is_canceled = FALSE
+                        ORDER BY detected_at DESC
+                        LIMIT 1
+                        """
+                        user_id = event_data.get('user_id') or os.getenv('DEFAULT_USER_ID')
+                        cursor.execute(mutex_check_sql, (user_id,))
+                        active_event = cursor.fetchone()
+                        
+                        if active_event:
+                            event_id = active_event[0]
+                            active_type = active_event[1]
+                            active_state = active_event[2]
+                            detected_at = active_event[3]
+                            
+                            logger.warning(f"🔒 EVENT MUTEX: BLOCKED new {event_type} event")
+                            logger.warning(f"   Active event: {event_id[:8]}... ({active_type}, {active_state})")
+                            logger.warning(f"   Detected at: {detected_at}")
+                            logger.warning(f"   ⚠️  Only 1 DANGER/WARNING event allowed at a time!")
+                            logger.warning(f"   📝 Please resolve current event before creating new one")
+                            
+                            self.return_connection(mutex_conn)
+                            return {
+                                'event_id': None,
+                                'blocked': True,
+                                'reason': 'mutex_locked',
+                                'active_event_id': event_id,
+                                'message': f'Another {active_type} event is active. Resolve it first.'
+                            }
+                    
+                    self.return_connection(mutex_conn)
+                    
+            except Exception as mutex_error:
+                logger.error(f"Event mutex check failed: {mutex_error}")
+                if mutex_conn:
+                    try:
+                        self.return_connection(mutex_conn)
+                    except:
+                        pass
+        
         # DON'T get connection here - helper functions manage their own connections
+        
+        # ✅ NORMAL event luôn được phép (bypass mutex) - dùng để tắt alarm
+        if event_status == 'normal':
+            logger.info("✅ NORMAL event: Bypassing mutex (can be used to stop alarm)")
         
         try:
             # Get user's real camera_id from database

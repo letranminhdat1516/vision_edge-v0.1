@@ -35,6 +35,9 @@ class AudioAlertService:
         self.audio_backend = None
         self.available_devices = []
         
+        # 🔒 SINGLE EVENT MODE: Only 1 alarm at a time (managed by event mutex)
+        self.current_alarm_event_id = None  # Track current alarm event
+        
         if self.enabled:
             self._initialize_audio()
     
@@ -225,9 +228,23 @@ class AudioAlertService:
             logger.warning("Audio alert service is disabled")
             return {"success": False, "message": "Audio service disabled"}
         
+        # 🔒 SINGLE EVENT: Track current alarm event
+        event_id = user_id  # Use user_id as event identifier
+        
+        # 🚫 ALARM DEBOUNCE: Nếu đang phát thì bỏ qua (event mutex sẽ chặn ở database level)
         if self.is_playing:
-            logger.info("Alert already playing, stopping current alert first")
-            await self.stop_alarm()
+            logger.warning(f"⚠️  ALARM DEBOUNCE: Already playing for event {self.current_alarm_event_id[:8] if self.current_alarm_event_id else 'N/A'}...")
+            logger.warning(f"   Ignoring new trigger for {event_id[:8]}...")
+            logger.warning(f"   🔒 Only 1 alarm allowed (event mutex active)")
+            return {
+                "success": False,
+                "message": "Alarm already playing",
+                "is_playing": True,
+                "debounced": True
+            }
+        
+        # Track this event as current alarm
+        self.current_alarm_event_id = event_id
         
         # Override duration if specified
         original_duration = self.alert_duration
@@ -363,15 +380,24 @@ class AudioAlertService:
         except Exception as e:
             logger.error(f"Error in auto-stop: {e}")
     
-    async def stop_alarm(self) -> Dict[str, Any]:
+    async def stop_alarm(self, event_id: str = None) -> Dict[str, Any]:
         """
         Dừng báo động
+        
+        Args:
+            event_id: ID của event được resolved (optional)
         
         Returns:
             Dict với status và message
         """
         if not self.is_playing:
             return {"success": False, "message": "No alarm is playing"}
+        
+        # Clear current alarm event
+        if event_id:
+            logger.info(f"🔒 Stopping alarm for event: {event_id[:8]}...")
+        
+        self.current_alarm_event_id = None
         
         try:
             # Stop playback first to exit any loops

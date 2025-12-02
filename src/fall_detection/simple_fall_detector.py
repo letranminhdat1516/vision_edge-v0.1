@@ -457,7 +457,8 @@ class SimpleFallDetector:
             if (vertical_movement > 65 and  # TĂNG 50→65px: tránh ngồi xuống
                 aspect_change > 1.25 and  # TĂNG 1.1→1.25: người PHẢI nằm ngang thật sự
                 center2_y > center1_y and  # Moving downward
-                horizontal_movement < vertical_movement * 1.2):  # Vertical phải lớn hơn horizontal
+                horizontal_movement < vertical_movement * 1.2 and  # Vertical phải lớn hơn horizontal
+                aspect_ratio1 < 1.3):  # 🚫 REJECT REVERSE: initial pose must be UPRIGHT (not lying)
                 
                 # 🚫 FILTER NGỐI XUỐNG: Nếu aspect không tăng nhiều lắm = chỉ ngồi
                 if aspect_change < 1.35:  # Ngồi xuống thường aspect ~1.2-1.3x
@@ -490,7 +491,8 @@ class SimpleFallDetector:
             if (aspect_change > 1.6 and  # TĂNG 1.5→1.6: chặt hơn để tránh false positive
                 vertical_movement > 60 and  # TĂNG 55→60px: đảm bảo rơi thật sự
                 center2_y > center1_y and  # Moving downward
-                horizontal_movement < vertical_movement * 1.5):  # Vertical phải dominant
+                horizontal_movement < vertical_movement * 1.5 and  # Vertical phải dominant
+                aspect_ratio1 < 1.3):  # 🚫 REJECT REVERSE: person must start UPRIGHT, not lying
                 
                 confidence = min(0.9, 0.60 + (aspect_change - 1.7) * 0.35 + min(vertical_movement / 140, 0.28))  # CÂN BẰNG base
                 

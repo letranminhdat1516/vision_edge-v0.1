@@ -22,7 +22,7 @@ class EmergencyAlarmHandlerPsycopg:
     def __init__(self, postgresql_service=None):
         self.postgresql_service = postgresql_service
         self.is_running = False
-        self.processed_events = set()
+        self.processed_events = set()  # Track processed notifications
         self.last_cleanup_time = datetime.now()
         
         # PostgreSQL connection for LISTEN
@@ -211,6 +211,7 @@ class EmergencyAlarmHandlerPsycopg:
             user_id = str(event_data.get('user_id', ''))
             triggered_by = event_data.get('triggered_by', 'api')
             
+            # Track this trigger
             if event_id:
                 self.processed_events.add(event_id)
             
@@ -219,9 +220,10 @@ class EmergencyAlarmHandlerPsycopg:
             logger.info(f"   Triggered by: {triggered_by}")
             
             # Trigger alarm - NO DURATION LIMIT (will play until stopped)
+            # Pass event_id instead of user_id for queue tracking
             import asyncio
             alarm_result = asyncio.run(audio_alert_service.play_emergency_alarm(
-                user_id=user_id or 'system',
+                user_id=event_id or user_id or 'system',  # Use event_id for tracking
                 triggered_by=triggered_by,
                 duration=0  # 0 = infinite, no auto-stop
             ))
@@ -267,9 +269,9 @@ class EmergencyAlarmHandlerPsycopg:
             logger.info(f"   Reason: {reason}")
             logger.info(f"   Stopped by: {stopped_by}")
             
-            # Step 1: Stop alarm audio
+            # Step 1: Stop alarm audio (pass event_id to check queue)
             import asyncio
-            stop_result = asyncio.run(audio_alert_service.stop_alarm())
+            stop_result = asyncio.run(audio_alert_service.stop_alarm(event_id=event_id if event_id != 'N/A' else None))
             
             if stop_result['success']:
                 logger.info("✅ ✅ ✅ ALARM STOPPED SUCCESSFULLY! ✅ ✅ ✅")
@@ -385,11 +387,13 @@ class EmergencyAlarmHandlerPsycopg:
 
     
     def _cleanup_processed_cache(self):
-        """Cleanup cache"""
+        """Cleanup cache để tránh memory leak"""
+        # Cleanup processed events
         if len(self.processed_events) > 1000:
             logger.info(f"🧹 Cleaning cache ({len(self.processed_events)} items)")
             self.processed_events.clear()
-            self.last_cleanup_time = datetime.now()
+        
+        self.last_cleanup_time = datetime.now()
     
     def stop(self):
         """Stop handler"""
