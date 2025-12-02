@@ -238,18 +238,22 @@ class SimpleFallDetector:
             aspect_ratio2 = w2 / h2
             
             # Calculate center positions
+            center1_x = (bbox1_arr[0] + bbox1_arr[2]) / 2
+            center2_x = (bbox2_arr[0] + bbox2_arr[2]) / 2
             center1_y = (bbox1_arr[1] + bbox1_arr[3]) / 2
             center2_y = (bbox2_arr[1] + bbox2_arr[3]) / 2
             
             # Fall detection criteria
             aspect_change = aspect_ratio2 / aspect_ratio1 if aspect_ratio1 > 0 else 1.0
             vertical_movement = abs(center2_y - center1_y)
+            horizontal_movement = abs(center2_x - center1_x)
             
             # 🔍 AGGRESSIVE DEBUG LOGGING - Log mọi frame có movement để debug
             if vertical_movement > 30 or aspect_change > 1.2:  # Log khi có thay đổi đáng kể
                 log.info(f"📊 FALL CHECK: aspect_change={aspect_change:.2f}x (need >1.25 moderate / >1.6 dynamic), vertical={vertical_movement:.1f}px (need >65 moderate / >60 dynamic)")
+                log.info(f"   🔄 Movement: horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px, ratio={vertical_movement/(horizontal_movement+1):.2f}")
                 log.info(f"   Aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f}")
-                log.info(f"   Position: center_y {center1_y:.1f} → {center2_y:.1f}")
+                log.info(f"   Position: center_x {center1_x:.1f}→{center2_x:.1f}, center_y {center1_y:.1f}→{center2_y:.1f}")
                 log.info(f"   Bbox1: w={bbox1_arr[2]-bbox1_arr[0]:.1f} h={bbox1_arr[3]-bbox1_arr[1]:.1f}")
                 log.info(f"   Bbox2: w={bbox2_arr[2]-bbox2_arr[0]:.1f} h={bbox2_arr[3]-bbox2_arr[1]:.1f}")
                 
@@ -274,9 +278,25 @@ class SimpleFallDetector:
             
             # 🔍 Log STRATEGY 0 check
             if vertical_movement > 70:  # Log khi gần threshold
-                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >80), downward={center2_y > center1_y}")
+                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >80), horizontal={horizontal_movement:.1f}px, downward={center2_y > center1_y}")
             
             if vertical_movement > 80 and center2_y > center1_y:  # GIẢM 100→80px: NHẠY HƠN để detect fall thật
+                # 🚫 HORIZONTAL MOVEMENT FILTER: Reject WALKING/MOVING ACROSS
+                # Nếu horizontal > vertical = người đi ngang, KHÔNG PHẢI TÉ NGÃ!
+                # Té ngã thật: vertical >> horizontal (rơi xuống dưới)
+                # Đi ngang: horizontal >> vertical (di chuyển ngang qua camera)
+                movement_ratio = vertical_movement / (horizontal_movement + 1)  # +1 tránh chia 0
+                
+                if horizontal_movement > vertical_movement * 0.8:  # Horizontal > 80% vertical = đi ngang
+                    log.info(f"🚶 Rejected WALKING: horizontal={horizontal_movement:.1f}px > vertical={vertical_movement:.1f}px * 0.8 (ratio={movement_ratio:.2f}) - Person walking across, not falling")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'walking-across',
+                        'method': 'horizontal_movement_filtered'
+                    }
+                
                 # 🕐 GET CURRENT TIME for cooldown check
                 current_time = time.time()
                 
@@ -436,7 +456,8 @@ class SimpleFallDetector:
             # Kiểm tra: aspect tăng nhiều (>1.25) + vertical đủ lớn (>65px)
             if (vertical_movement > 65 and  # TĂNG 50→65px: tránh ngồi xuống
                 aspect_change > 1.25 and  # TĂNG 1.1→1.25: người PHẢI nằm ngang thật sự
-                center2_y > center1_y):  # Moving downward
+                center2_y > center1_y and  # Moving downward
+                horizontal_movement < vertical_movement * 1.2):  # Vertical phải lớn hơn horizontal
                 
                 # 🚫 FILTER NGỐI XUỐNG: Nếu aspect không tăng nhiều lắm = chỉ ngồi
                 if aspect_change < 1.35:  # Ngồi xuống thường aspect ~1.2-1.3x
@@ -468,7 +489,8 @@ class SimpleFallDetector:
             # - Vertical 60px: Rơi xuống đáng kể
             if (aspect_change > 1.6 and  # TĂNG 1.5→1.6: chặt hơn để tránh false positive
                 vertical_movement > 60 and  # TĂNG 55→60px: đảm bảo rơi thật sự
-                center2_y > center1_y):  # Moving downward
+                center2_y > center1_y and  # Moving downward
+                horizontal_movement < vertical_movement * 1.5):  # Vertical phải dominant
                 
                 confidence = min(0.9, 0.60 + (aspect_change - 1.7) * 0.35 + min(vertical_movement / 140, 0.28))  # CÂN BẰNG base
                 
