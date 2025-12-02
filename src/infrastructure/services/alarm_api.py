@@ -83,8 +83,9 @@ class AlarmAPI:
             )
             
             if success:
-                # Optional: Log alarm trigger vào database (không bắt buộc)
-                self._log_alarm_trigger(event_id, user_id, triggered_by, reason)
+                # Log alarm trigger vào database
+                if event_id:
+                    self._log_alarm_trigger(event_id, user_id, triggered_by, reason)
                 
                 logger.info(f"✅ Alarm trigger notification sent successfully for event {event_id[:8]}...")
                 return {

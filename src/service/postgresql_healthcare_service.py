@@ -1098,15 +1098,28 @@ class PostgreSQLHealthcareService:
                 elif event_type == 'normal_activity':
                     status = 'normal'
             
-            # 🚨 FILTER CHẶT CHẼ: Chỉ cho phép DANGER/WARNING nếu có "ngã" hoặc "đột quỵ"
+            # 🚨 FILTER CHẶT CHẼ: Chỉ cho phép DANGER/WARNING nếu có "ngã" hoặc "đột quỵ" trong BLIP CAPTION
+            # ⚠️ QUAN TRỌNG: Chỉ check phần caption gốc từ BLIP, KHÔNG check suffix "Phát hiện ngã đổ"
             if status in ['danger', 'warning']:
+                # Tách phần caption gốc từ BLIP (trước dấu " - " hoặc ". ⚠️")
                 desc_lower = vietnamese_description.lower()
                 
-                # 🚫 BỎ QUA: Nếu có từ "đứng" trong description → FALSE POSITIVE
-                has_standing_keyword = 'đứng' in desc_lower
+                # Loại bỏ các suffix được thêm vào
+                blip_caption = vietnamese_description
+                if ' - yêu cầu' in desc_lower:
+                    blip_caption = vietnamese_description.split(' - yêu cầu')[0]
+                elif ' - cần theo dõi' in desc_lower:
+                    blip_caption = vietnamese_description.split(' - cần theo dõi')[0]
+                elif '. ⚠️ cảnh báo:' in desc_lower:
+                    blip_caption = vietnamese_description.split('. ⚠️ cảnh báo:')[0]
+                
+                blip_caption_lower = blip_caption.lower()
+                
+                # 🚫 BỎ QUA: Nếu có từ "đứng" trong caption → FALSE POSITIVE
+                has_standing_keyword = 'đứng' in blip_caption_lower
                 if has_standing_keyword:
                     logger.info(f"🚫 FILTERED: {status.upper()} event with STANDING keyword - NOT saving to DB")
-                    logger.info(f"   Description: {vietnamese_description[:100]}...")
+                    logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
                     logger.info(f"   ❌ Reason: Person is STANDING (đứng) - false positive")
                     return {
                         'event_id': None,
@@ -1115,18 +1128,18 @@ class PostgreSQLHealthcareService:
                         'description': vietnamese_description
                     }
                 
-                # Kiểm tra chỉ 2 từ khóa: "ngã" hoặc "đột quỵ"
-                has_fall_keyword = 'ngã' in desc_lower
-                has_stroke_keyword = 'đột quỵ' in desc_lower
+                # Kiểm tra chỉ 2 từ khóa trong BLIP CAPTION: "ngã" hoặc "đột quỵ"
+                has_fall_keyword = 'ngã' in blip_caption_lower
+                has_stroke_keyword = 'đột quỵ' in blip_caption_lower
                 
                 if not has_fall_keyword and not has_stroke_keyword:
                     logger.info(f"🚫 FILTERED: {status.upper()} event without required keywords - NOT saving to DB")
-                    logger.info(f"   Description: {vietnamese_description[:100]}...")
-                    logger.info(f"   ❌ Missing keywords: 'ngã' or 'đột quỵ'")
+                    logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
+                    logger.info(f"   ❌ Missing keywords: 'ngã' or 'đột quỵ' in BLIP caption")
                     return {
                         'event_id': None,
                         'filtered': True,
-                        'reason': f'{status.upper()} event without required keywords (ngã/đột quỵ)',
+                        'reason': f'{status.upper()} event without required keywords (ngã/đột quỵ) in BLIP caption',
                         'description': vietnamese_description
                     }
                 else:

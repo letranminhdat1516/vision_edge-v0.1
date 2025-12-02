@@ -222,12 +222,12 @@ class EventLifecycleWorker:
             return promoted
         
         except Exception as e:
-            # ✅ Handle SSL connection errors gracefully
+            # Handle connection errors gracefully
             if "SSL connection has been closed" in str(e) or "connection" in str(e).lower():
-                logger.warning(f"⚠️ Connection error in _check_and_promote_to_alarm: {e}")
+                logger.warning(f"⚠️ Connection error in _check_and_promote_to_alarm_activated: {e}")
                 logger.info("🔄 Will retry on next cycle with fresh connection")
                 
-                # Close bad connection
+                # Return connection to pool (don't leak!)
                 if cursor:
                     try:
                         cursor.close()
@@ -235,7 +235,7 @@ class EventLifecycleWorker:
                         pass
                 if conn:
                     try:
-                        conn.close()  # Force close bad connection
+                        self.postgresql_service.return_connection(conn)
                     except:
                         pass
             else:
@@ -450,7 +450,7 @@ class EventLifecycleWorker:
                 logger.warning(f"⚠️ Connection error in _check_and_promote_to_auto_called: {e}")
                 logger.info("🔄 Will retry on next cycle with fresh connection")
                 
-                # Close bad connection
+                # Return connection to pool (don't leak!)
                 if cursor:
                     try:
                         cursor.close()
@@ -458,7 +458,7 @@ class EventLifecycleWorker:
                         pass
                 if conn:
                     try:
-                        conn.close()
+                        self.postgresql_service.return_connection(conn)
                     except:
                         pass
             else:
@@ -614,12 +614,12 @@ class EventLifecycleWorker:
             return resolved
         
         except Exception as e:
-            # ✅ Handle SSL connection errors gracefully
+            # Handle connection errors gracefully
             if "SSL connection has been closed" in str(e) or "connection" in str(e).lower():
                 logger.warning(f"⚠️ Connection error in _check_and_auto_resolve: {e}")
                 logger.info("🔄 Will retry on next cycle with fresh connection")
                 
-                # Close bad connection
+                # Return connection to pool (don't leak!)
                 if cursor:
                     try:
                         cursor.close()
@@ -627,7 +627,7 @@ class EventLifecycleWorker:
                         pass
                 if conn:
                     try:
-                        conn.close()  # Force close bad connection
+                        self.postgresql_service.return_connection(conn)
                     except:
                         pass
             else:
