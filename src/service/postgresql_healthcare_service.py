@@ -1166,16 +1166,31 @@ class PostgreSQLHealthcareService:
                 # Tách phần caption gốc từ BLIP (trước dấu " - " hoặc ". ⚠️")
                 desc_lower = vietnamese_description.lower()
                 
-                # Loại bỏ các suffix được thêm vào
+                # Loại bỏ các suffix được thêm vào (CHECK CẢ HOA VÀ THƯỜNG)
                 blip_caption = vietnamese_description
+                
+                # Check multiple patterns for suffix removal (case-insensitive)
                 if ' - yêu cầu' in desc_lower:
                     blip_caption = vietnamese_description.split(' - yêu cầu')[0]
                 elif ' - cần theo dõi' in desc_lower:
                     blip_caption = vietnamese_description.split(' - cần theo dõi')[0]
-                elif '. ⚠️ cảnh báo:' in desc_lower:
-                    blip_caption = vietnamese_description.split('. ⚠️ cảnh báo:')[0]
+                elif '. ⚠️ cảnh báo' in desc_lower:  # FIX: Bỏ dấu ":" để match cả "Cảnh báo" và "cảnh báo"
+                    # Tìm vị trí của ". ⚠️" và cắt từ đó
+                    idx = desc_lower.find('. ⚠️')
+                    if idx > 0:
+                        blip_caption = vietnamese_description[:idx]
+                elif '. ⚠️' in vietnamese_description:  # Fallback: tìm ". ⚠️" bất kỳ
+                    idx = vietnamese_description.find('. ⚠️')
+                    if idx > 0:
+                        blip_caption = vietnamese_description[:idx]
                 
                 blip_caption_lower = blip_caption.lower()
+                
+                # 🔍 DEBUG: Log caption extraction
+                if blip_caption != vietnamese_description:
+                    logger.info(f"📝 Caption extracted:")
+                    logger.info(f"   Original: {vietnamese_description[:150]}...")
+                    logger.info(f"   BLIP only: {blip_caption[:150]}...")
                 
                 # 🚫 BỎ QUA: Nếu có từ "đứng" trong caption → FALSE POSITIVE
                 has_standing_keyword = 'đứng' in blip_caption_lower
