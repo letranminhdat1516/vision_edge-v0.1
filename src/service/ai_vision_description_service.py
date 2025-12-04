@@ -166,6 +166,27 @@ class ProfessionalVietnameseCaptionPipeline:
             logger.error(f"❌ AI translation failed: {e}")
             return self._rule_based_translation(english_text), "error_fallback"
     
+    def _remove_gender_terms(self, vietnamese_text):
+        """Remove gender-specific terms for privacy (replace with generic 'một người')"""
+        import re
+        
+        # Replace gender-specific terms with neutral "một người"
+        gender_replacements = [
+            (r'\bmột người phụ nữ\b', 'một người'),
+            (r'\bmột người đàn ông\b', 'một người'),
+            (r'\bngười phụ nữ\b', 'người'),
+            (r'\bngười đàn ông\b', 'người'),
+            (r'\bphụ nữ\b', 'người'),
+            (r'\bđàn ông\b', 'người'),
+            (r'\bcô ấy\b', 'họ'),
+            (r'\banh ấy\b', 'họ'),
+        ]
+        
+        for pattern, replacement in gender_replacements:
+            vietnamese_text = re.sub(pattern, replacement, vietnamese_text, flags=re.IGNORECASE)
+        
+        return vietnamese_text
+    
     def _replace_bending_patterns(self, vietnamese_text):
         """Replace bending/leaning patterns with stroke warning"""
         import re
@@ -423,6 +444,9 @@ class ProfessionalVietnameseCaptionPipeline:
                 vietnamese_caption, translation_method = self.translate_to_vietnamese(english_caption)
                 metadata["pipeline_steps"].append(f"Translation: {translation_method}")
                 metadata["vietnamese_base"] = vietnamese_caption
+                
+                # Step 2.5: Remove gender-specific terms (privacy protection)
+                vietnamese_caption = self._remove_gender_terms(vietnamese_caption)
                 
                 # Step 3: Enhance with medical context (pass event_type + camera_name + confidence)
                 final_caption = self.enhance_medical_context(vietnamese_caption, image_path, event_type, camera_name, confidence)

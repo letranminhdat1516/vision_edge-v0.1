@@ -469,7 +469,7 @@ class PostgreSQLHealthcareService:
         
         if event_type == 'fall':
             # DANGER: Té ngã xác nhận với confidence cao
-            if confidence >= 0.60:
+            if confidence >= 0.5:
                 # Extra danger: Slow collapse (đột quỵ)
                 if fall_type == 'slow_collapse':
                     return 'danger'  # ĐỘT QUỴ - nằm bất động
@@ -786,6 +786,12 @@ class PostgreSQLHealthcareService:
                         logger.info(f"📝 Generated Vietnamese caption: {vietnamese_caption}")
                         
                         if vietnamese_caption and len(vietnamese_caption.strip()) > 0:
+                            # 🔥 HARD REPLACE: Thay "nằm" → "ngã" cho fall events (danger/warning)
+                            if event_type == 'fall' and confidence >= 0.40:  # danger/warning thresholds
+                                vietnamese_caption = vietnamese_caption.replace('nằm', 'ngã')
+                                vietnamese_caption = vietnamese_caption.replace('Nằm', 'Ngã')
+                                logger.info(f"🔄 Replaced 'nằm' → 'ngã' in caption: {vietnamese_caption}")
+                            
                             # 🔥 ENHANCED: Detect posture keywords in caption for medical context
                             caption_lower = vietnamese_caption.lower()
                             
@@ -827,10 +833,18 @@ class PostgreSQLHealthcareService:
                                         logger.info(f"🚨 Generated fall emergency action: {result}")
                                     return result
                                 elif confidence >= 0.40:
-                                    # WARNING: Add context for risky postures
-                                    if is_bending or is_unstable:
-                                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - 🔴 TƯ THẾ NGUY HIỂM - Có nguy cơ té cao! Cần theo dõi sát"
-                                        logger.info(f"⚠️ Generated fall warning with posture risk: {result}")
+                                    # WARNING: Check for stroke indicators
+                                    if fall_type == 'slow_collapse' or fall_duration >= 1.0:
+                                        result = f"⚠️ CẢNH BÁO - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - Té chậm {fall_duration:.1f}s - Có dấu hiệu đột quỵ! Cần theo dõi chặt chẽ"
+                                        logger.info(f"⚠️🏥 Generated STROKE WARNING (slow collapse): {result}")
+                                    # Check for bending posture (also stroke indicator)
+                                    elif is_bending:
+                                        result = f"⚠️ CẢNH BÁO - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - Phát hiện tư thế cúi người bất thường - Có dấu hiệu đột quỵ! Cần theo dõi chặt chẽ"
+                                        logger.info(f"⚠️🏥 Generated STROKE WARNING (bending posture): {result}")
+                                    # Other risky postures
+                                    elif is_unstable:
+                                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - 🔴 TƯ THẾ MẤT CÂN BẰNG - Có nguy cơ té cao! Cần theo dõi sát"
+                                        logger.info(f"⚠️ Generated fall warning with unstable posture: {result}")
                                     elif is_crouching:
                                         result = f"⚠️ CẢNH BÁO: {vietnamese_caption} - Tư thế ngồi xổm - Kiểm tra xem có cần hỗ trợ"
                                         logger.info(f"⚠️ Generated crouching warning: {result}")
@@ -1169,20 +1183,41 @@ class PostgreSQLHealthcareService:
                 # Loại bỏ các suffix được thêm vào (CHECK CẢ HOA VÀ THƯỜNG)
                 blip_caption = vietnamese_description
                 
-                # Check multiple patterns for suffix removal (case-insensitive)
-                if ' - yêu cầu' in desc_lower:
-                    blip_caption = vietnamese_description.split(' - yêu cầu')[0]
-                elif ' - cần theo dõi' in desc_lower:
-                    blip_caption = vietnamese_description.split(' - cần theo dõi')[0]
-                elif '. ⚠️ cảnh báo' in desc_lower:  # FIX: Bỏ dấu ":" để match cả "Cảnh báo" và "cảnh báo"
-                    # Tìm vị trí của ". ⚠️" và cắt từ đó
-                    idx = desc_lower.find('. ⚠️')
-                    if idx > 0:
-                        blip_caption = vietnamese_description[:idx]
-                elif '. ⚠️' in vietnamese_description:  # Fallback: tìm ". ⚠️" bất kỳ
+                # 🔥 PRIORITY 1: Check pattern ". ⚠️" TRƯỚC (extract BEFORE marker)
+                if '. ⚠️' in vietnamese_description:
                     idx = vietnamese_description.find('. ⚠️')
                     if idx > 0:
                         blip_caption = vietnamese_description[:idx]
+                        logger.info(f"🎯 Step 1 - Extracted BEFORE '. ⚠️': {blip_caption[:80]}...")
+                        
+                        # 🔥 CRITICAL: Remove prefix "⚠️ CẢNH BÁO TÉ NGÃ:" if exists
+                        if '⚠️ cảnh báo té ngã:' in blip_caption.lower():
+                            prefix_idx = blip_caption.lower().find('⚠️ cảnh báo té ngã:')
+                            if prefix_idx >= 0:
+                                prefix_len = len('⚠️ cảnh báo té ngã: ')
+                                blip_caption = blip_caption[prefix_idx + prefix_len:].strip()
+                                logger.info(f"🎯 Step 2 - Removed prefix: {blip_caption[:80]}...")
+                
+                # 🔥 PRIORITY 2: Check prefix "⚠️ CẢNH BÁO TÉ NGÃ:" (extract AFTER prefix)
+                elif '⚠️ cảnh báo té ngã:' in desc_lower:
+                    # Find actual position in original string (preserve case)
+                    idx = desc_lower.find('⚠️ cảnh báo té ngã:')
+                    if idx >= 0:
+                        prefix_len = len('⚠️ cảnh báo té ngã: ')
+                        blip_caption = vietnamese_description[idx + prefix_len:]
+                        # Remove suffix " - ..." if exists
+                        if ' - ' in blip_caption:
+                            blip_caption = blip_caption.split(' - ')[0]
+                        logger.info(f"🎯 Extracted BLIP caption AFTER prefix: {blip_caption[:80]}...")
+                
+                # 🔥 PRIORITY 3: Fallback patterns
+                elif ' - yêu cầu' in desc_lower:
+                    blip_caption = vietnamese_description.split(' - yêu cầu')[0].split(' - Yêu cầu')[0]
+                elif ' - cần theo dõi' in desc_lower:
+                    blip_caption = vietnamese_description.split(' - cần theo dõi')[0].split(' - Cần theo dõi')[0]
+                
+                # 🔥 FINAL CLEANUP: Strip leading/trailing whitespace
+                blip_caption = blip_caption.strip()
                 
                 blip_caption_lower = blip_caption.lower()
                 
