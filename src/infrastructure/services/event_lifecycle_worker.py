@@ -118,6 +118,20 @@ class EventLifecycleWorker:
         
         try:
             conn = self.postgresql_service.get_connection()
+            
+            # 🔍 Test connection with simple query
+            try:
+                test_cursor = conn.cursor()
+                test_cursor.execute("SELECT 1")
+                test_cursor.close()
+            except Exception as test_error:
+                logger.warning(f"⚠️ Connection test failed: {test_error}, getting new connection")
+                try:
+                    self.postgresql_service.return_connection(conn)
+                except:
+                    pass
+                conn = self.postgresql_service.get_connection()
+            
             cursor = conn.cursor()
             
             # Calculate cutoff time (30 seconds ago)
@@ -347,6 +361,19 @@ class EventLifecycleWorker:
                 self.postgresql_service.return_connection(conn)
                 conn = self.postgresql_service.get_connection()
             
+            # 🔍 Test connection with simple query
+            try:
+                test_cursor = conn.cursor()
+                test_cursor.execute("SELECT 1")
+                test_cursor.close()
+            except Exception as test_error:
+                logger.warning(f"⚠️ Connection test failed: {test_error}, getting new connection")
+                try:
+                    self.postgresql_service.return_connection(conn)
+                except:
+                    pass
+                conn = self.postgresql_service.get_connection()
+            
             cursor = conn.cursor()
             
             # Calculate cutoff time (3 minutes ago from escalated_at)
@@ -509,6 +536,19 @@ class EventLifecycleWorker:
             if conn.closed:
                 logger.warning("⚠️ Connection closed, getting new one")
                 self.postgresql_service.return_connection(conn)
+                conn = self.postgresql_service.get_connection()
+            
+            # 🔍 Test connection with simple query
+            try:
+                test_cursor = conn.cursor()
+                test_cursor.execute("SELECT 1")
+                test_cursor.close()
+            except Exception as test_error:
+                logger.warning(f"⚠️ Connection test failed: {test_error}, getting new connection")
+                try:
+                    self.postgresql_service.return_connection(conn)
+                except:
+                    pass
                 conn = self.postgresql_service.get_connection()
             
             cursor = conn.cursor()
