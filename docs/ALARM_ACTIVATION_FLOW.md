@@ -3,7 +3,7 @@
 ## 🎯 **TÓM TẮT NGẮN GỌN**
 
 **Còi báo động CHƯA TỰ ĐỘNG kích hoạt khi phát hiện sự kiện!**
-
+TESSSSSSSSTTTTT
 Hiện tại còi chỉ kích hoạt khi:
 
 1. ✅ **User bấm nút "Activate Alarm" trên mobile app**
