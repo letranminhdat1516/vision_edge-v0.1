@@ -1190,13 +1190,26 @@ class PostgreSQLHealthcareService:
                         blip_caption = vietnamese_description[:idx]
                         logger.info(f"🎯 Step 1 - Extracted BEFORE '. ⚠️': {blip_caption[:80]}...")
                         
-                        # 🔥 CRITICAL: Remove prefix "⚠️ CẢNH BÁO TÉ NGÃ:" if exists
-                        if '⚠️ cảnh báo té ngã:' in blip_caption.lower():
-                            prefix_idx = blip_caption.lower().find('⚠️ cảnh báo té ngã:')
-                            if prefix_idx >= 0:
-                                prefix_len = len('⚠️ cảnh báo té ngã: ')
-                                blip_caption = blip_caption[prefix_idx + prefix_len:].strip()
-                                logger.info(f"🎯 Step 2 - Removed prefix: {blip_caption[:80]}...")
+                        # 🔥 CRITICAL: Remove ALL emergency prefixes that contain fall/stroke keywords
+                        prefixes_to_remove = [
+                            '🚨 khẩn cấp - té ngã:',
+                            '🚨 khẩn cấp - ngã:',
+                            '⚠️ cảnh báo té ngã:',
+                            '⚠️ cảnh báo - té ngã:',
+                            '⚠️ warning - té ngã:',
+                            '🚨 cấp cứu - té ngã:',
+                            '🏥 y tế khẩn cấp:',
+                        ]
+                        
+                        for prefix in prefixes_to_remove:
+                            if prefix in blip_caption.lower():
+                                prefix_idx = blip_caption.lower().find(prefix)
+                                if prefix_idx >= 0:
+                                    # Calculate actual prefix length in original case
+                                    prefix_len = len(prefix)
+                                    blip_caption = blip_caption[prefix_idx + prefix_len:].strip()
+                                    logger.info(f"🎯 Step 2 - Removed prefix '{prefix}': {blip_caption[:80]}...")
+                                    break
                 
                 # 🔥 PRIORITY 2: Check prefix "⚠️ CẢNH BÁO TÉ NGÃ:" (extract AFTER prefix)
                 elif '⚠️ cảnh báo té ngã:' in desc_lower:
@@ -1240,25 +1253,74 @@ class PostgreSQLHealthcareService:
                         'description': vietnamese_description
                     }
                 
-                # Kiểm tra chỉ 2 từ khóa trong BLIP CAPTION: "ngã" hoặc "đột quỵ"
-                has_fall_keyword = 'ngã' in blip_caption_lower
-                has_stroke_keyword = 'đột quỵ' in blip_caption_lower
-                
-                if not has_fall_keyword and not has_stroke_keyword:
-                    logger.info(f"🚫 FILTERED: {status.upper()} event without required keywords - NOT saving to DB")
+                # 🚫 BỎ QUA: Nếu có từ "quỳ"/"ngã gối"/"xổm" trong caption → KNEELING/SQUATTING (not falling)
+                has_kneeling_keyword = 'quỳ' in blip_caption_lower or 'ngã gối' in blip_caption_lower or 'xổm' in blip_caption_lower or 'ngồi xổm' in blip_caption_lower
+                if has_kneeling_keyword:
+                    logger.info(f"🚫 FILTERED: {status.upper()} event with KNEELING/SQUATTING keyword - NOT saving to DB")
                     logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
-                    logger.info(f"   ❌ Missing keywords: 'ngã' or 'đột quỵ' in BLIP caption")
+                    logger.info(f"   ❌ Reason: Person is KNEELING/SQUATTING (quỳ/ngã gối/xổm) - false positive")
                     return {
                         'event_id': None,
                         'filtered': True,
-                        'reason': f'{status.upper()} event without required keywords (ngã/đột quỵ) in BLIP caption',
+                        'reason': f'{status.upper()} event with KNEELING/SQUATTING keyword (quỳ/ngã gối/xổm) - false positive',
                         'description': vietnamese_description
                     }
+                
+                # 🚫 BỎ QUA: Nếu có từ khóa NORMAL ACTIVITIES → FALSE POSITIVE
+                normal_activities = ['nhảy', 'nhảy múa', 'đi bộ', 'chạy', 'đi lại', 'vẫy tay', 'múa', 'tập thể dục']
+                has_normal_activity = any(activity in blip_caption_lower for activity in normal_activities)
+                if has_normal_activity:
+                    matched_activity = next((activity for activity in normal_activities if activity in blip_caption_lower), 'unknown')
+                    logger.info(f"🚫 FILTERED: {status.upper()} event with NORMAL ACTIVITY keyword - NOT saving to DB")
+                    logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
+                    logger.info(f"   ❌ Reason: Person is doing normal activity ({matched_activity}) - false positive")
+                    return {
+                        'event_id': None,
+                        'filtered': True,
+                        'reason': f'{status.upper()} event with normal activity ({matched_activity}) - false positive',
+                        'description': vietnamese_description
+                    }
+                
+                # Kiểm tra từ khóa trong BLIP CAPTION: "ngã", "nằm" (cho fall), hoặc "đột quỵ"
+                # 🔥 NOTE: "ngã gối" đã bị filter ở trên, nên "ngã" ở đây chỉ là fall thật
+                has_fall_keyword = 'ngã' in blip_caption_lower
+                has_lying_keyword = 'nằm' in blip_caption_lower  # 🔥 NEW: Accept "nằm" for fall events
+                has_stroke_keyword = 'đột quỵ' in blip_caption_lower
+                
+                # 🔥 FIX: For fall events, accept both "ngã" or "nằm" keywords
+                if event_type == 'fall':
+                    if not has_fall_keyword and not has_lying_keyword and not has_stroke_keyword:
+                        logger.info(f"🚫 FILTERED: {status.upper()} FALL event without required keywords - NOT saving to DB")
+                        logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
+                        logger.info(f"   ❌ Missing keywords: 'ngã' or 'nằm' or 'đột quỵ' in BLIP caption")
+                        return {
+                            'event_id': None,
+                            'filtered': True,
+                            'reason': f'{status.upper()} FALL event without required keywords (ngã/nằm/đột quỵ) in BLIP caption',
+                            'description': vietnamese_description
+                        }
+                    else:
+                        logger.info(f"✅ VALID: {status.upper()} FALL event with required keywords - saving to DB")
+                        if has_fall_keyword:
+                            logger.info(f"   ✓ Found keyword: ngã")
+                        if has_lying_keyword:
+                            logger.info(f"   ✓ Found keyword: nằm (will be replaced with 'ngã')")
+                        if has_stroke_keyword:
+                            logger.info(f"   ✓ Found keyword: đột quỵ")
                 else:
-                    logger.info(f"✅ VALID: {status.upper()} event with required keywords - saving to DB")
-                    if has_fall_keyword:
-                        logger.info(f"   ✓ Found keyword: ngã")
-                    if has_stroke_keyword:
+                    # For other events (seizure, etc), keep strict check for "đột quỵ"
+                    if not has_stroke_keyword:
+                        logger.info(f"🚫 FILTERED: {status.upper()} event without required keywords - NOT saving to DB")
+                        logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
+                        logger.info(f"   ❌ Missing keywords: 'đột quỵ' in BLIP caption")
+                        return {
+                            'event_id': None,
+                            'filtered': True,
+                            'reason': f'{status.upper()} event without required keywords (đột quỵ) in BLIP caption',
+                            'description': vietnamese_description
+                        }
+                    else:
+                        logger.info(f"✅ VALID: {status.upper()} event with required keywords - saving to DB")
                         logger.info(f"   ✓ Found keyword: đột quỵ")
                 
             # Check for recent duplicate events (same type, user, camera within 30 seconds)
@@ -1346,10 +1408,18 @@ class PostgreSQLHealthcareService:
                 'reliability_score': str(reliability_score)  # FIX: Convert to string for DB
             }
             
-            # Get NEW connection for INSERT (previous conn may be closed by helper functions)
-            insert_conn = self.get_connection()
-            if not insert_conn:
-                logger.error("Could not get database connection for INSERT")
+            # Get NEW connection for INSERT with retry logic
+            insert_conn = None
+            for retry in range(3):  # Try 3 times
+                insert_conn = self.get_connection()
+                if insert_conn and not insert_conn.closed:
+                    break
+                logger.warning(f"Connection attempt {retry+1}/3 failed, retrying...")
+                import time
+                time.sleep(0.5)  # Wait 500ms before retry
+            
+            if not insert_conn or insert_conn.closed:
+                logger.error("Could not get valid database connection for INSERT after 3 retries")
                 return None
             
             try:
@@ -1402,8 +1472,12 @@ class PostgreSQLHealthcareService:
                 logger.error(f"Error during INSERT: {insert_error}")
                 import traceback
                 traceback.print_exc()
-                insert_conn.rollback()
-                self.return_connection(insert_conn)
+                try:
+                    if insert_conn and not insert_conn.closed:
+                        insert_conn.rollback()
+                        self.return_connection(insert_conn)
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
                 # DON'T return conn - it was already returned by helper functions
                 return None
                     

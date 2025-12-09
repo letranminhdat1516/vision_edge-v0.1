@@ -95,9 +95,10 @@ class AdvancedHealthcarePipeline:
         # 🕐 NORMAL EVENT THROTTLE: Chỉ log NORMAL mỗi 10 giây
         self._last_normal_log_time = 0
         
-        # 🚨 DANGER COOLDOWN: Chặn NORMAL event trong 60s sau khi phát hiện DANGER
+        # 🚨 DANGER COOLDOWN: Chặn NORMAL event trong 180s sau khi phát hiện DANGER
+        # TĂNG từ 60s → 180s vì BLIP caption sai (detect "đang đứng" khi người vẫn nằm)
         self._last_danger_time = 0
-        self._DANGER_BLOCK_DURATION = 60.0  # 60 giây chặn NORMAL sau DANGER
+        self._DANGER_BLOCK_DURATION = 180.0  # 180 giây (3 phút) chặn NORMAL sau DANGER
 
     def process_frame(self, frame, other_cameras=None):
         """
@@ -805,13 +806,13 @@ class AdvancedHealthcarePipeline:
         should_log_normal = (
             motion_level > 0.05 and  # Chuyển động rõ ràng (5% pixel thay đổi)
             time_since_last_normal >= 10.0 and  # Cách nhau ít nhất 10 giây
-            time_since_danger > self._DANGER_BLOCK_DURATION  # 🚨 CHẶN NORMAL trong 60s sau DANGER
+            time_since_danger > self._DANGER_BLOCK_DURATION  # 🚨 CHẶN NORMAL trong 180s (3 phút) sau DANGER
         )
         
         # 🔥 DEBUG: Log để track NORMAL status mỗi 30 frames
         if result['alert_level'] == 'normal' and self.stats['total_frames'] % 30 == 0:
             print(f"📊 NORMAL Status: motion={motion_level:.3f}, time_gap={time_since_last_normal:.1f}s, danger_gap={time_since_danger:.1f}s")
-            print(f"   Should log: {should_log_normal} (motion>0.05 AND time>=10s AND danger>60s)")
+            print(f"   Should log: {should_log_normal} (motion>0.05 AND time>=10s AND danger>180s)")
         
         if result['alert_level'] != 'normal' or should_log_normal:
             self.stats['total_alerts'] += 1

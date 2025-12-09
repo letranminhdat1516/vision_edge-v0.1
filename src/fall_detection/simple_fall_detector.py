@@ -38,6 +38,11 @@ class SimpleFallDetector:
         self.last_danger_fall_time = 0  # Thời điểm fall event DANGER cuối cùng
         self.danger_cooldown = 30  # 30 giây cooldown cho DANGER events (conf >= 0.60)
         
+        # 🪑 REPEATED SITTING PATTERN: Phát hiện ngồi-đứng liên tục (squat exercise)
+        self.sitting_events = []  # [(timestamp, position_y), ...]
+        self.sitting_pattern_window = 10  # 10 giây window
+        self.sitting_pattern_threshold = 3  # 3 lần ngồi-đứng trong 10s = exercise
+        
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
     def detect_fall(self, current_frame, timestamp=None, person_bbox=None, motion_level=None):
@@ -189,7 +194,8 @@ class SimpleFallDetector:
             if (first_frame['bbox'] is not None and 
                 last_frame['bbox'] is not None):
                 
-                return self._analyze_bbox_changes(first_frame['bbox'], last_frame['bbox'], motion_level)
+                frame_h = first_frame.get('frame', {}).shape[0] if first_frame.get('frame') is not None else 480
+                return self._analyze_bbox_changes(first_frame['bbox'], last_frame['bbox'], motion_level, frame_h)
             
             # Fallback to frame difference analysis
             return self._analyze_frame_difference(first_frame['frame'], last_frame['frame'])
@@ -198,7 +204,7 @@ class SimpleFallDetector:
             log.error(f"Movement analysis error: {e}")
             return None
     
-    def _analyze_bbox_changes(self, bbox1, bbox2, motion_level=None):
+    def _analyze_bbox_changes(self, bbox1, bbox2, motion_level=None, frame_height=480):
         """
         Analyze bounding box changes to detect falls.
         
@@ -206,6 +212,7 @@ class SimpleFallDetector:
             bbox1: First bounding box [x1, y1, x2, y2]
             bbox2: Second bounding box [x1, y1, x2, y2]
             motion_level: Global motion level (0.0-1.0) to filter bbox jitter
+            frame_height: Frame height in pixels (default 480)
             
         Returns:
             dict or None: Fall result
@@ -250,7 +257,7 @@ class SimpleFallDetector:
             
             # 🔍 AGGRESSIVE DEBUG LOGGING - Log mọi frame có movement để debug
             if vertical_movement > 30 or aspect_change > 1.2:  # Log khi có thay đổi đáng kể
-                log.info(f"📊 FALL CHECK: aspect_change={aspect_change:.2f}x (need >1.25 moderate / >1.6 dynamic), vertical={vertical_movement:.1f}px (need >65 moderate / >60 dynamic)")
+                log.info(f"📊 FALL CHECK: aspect_change={aspect_change:.2f}x (need >1.15 moderate / >1.6 dynamic), vertical={vertical_movement:.1f}px (need >50 moderate / >45 dynamic)")
                 log.info(f"   🔄 Movement: horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px, ratio={vertical_movement/(horizontal_movement+1):.2f}")
                 log.info(f"   Aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f}")
                 log.info(f"   Position: center_x {center1_x:.1f}→{center2_x:.1f}, center_y {center1_y:.1f}→{center2_y:.1f}")
@@ -258,36 +265,40 @@ class SimpleFallDetector:
                 log.info(f"   Bbox2: w={bbox2_arr[2]-bbox2_arr[0]:.1f} h={bbox2_arr[3]-bbox2_arr[1]:.1f}")
                 
                 # Log kết quả check
-                if aspect_change > 1.25 and vertical_movement > 65 and center2_y > center1_y:
+                if aspect_change > 1.15 and vertical_movement > 50 and center2_y > center1_y:
                     log.info(f"   ✅ PASS moderate thresholds - calculating confidence...")
-                elif aspect_change > 1.6 and vertical_movement > 60 and center2_y > center1_y:
+                elif aspect_change > 1.6 and vertical_movement > 45 and center2_y > center1_y:
                     log.info(f"   ✅ PASS dynamic thresholds - calculating confidence...")
                 else:
                     reasons = []
-                    if aspect_change <= 1.25:
-                        reasons.append(f"aspect_change {aspect_change:.2f} <= 1.25 (need >1.25 moderate / >1.6 dynamic)")
-                    if vertical_movement <= 60:
-                        reasons.append(f"vertical {vertical_movement:.1f} <= 60-65px")
+                    if aspect_change <= 1.15:
+                        reasons.append(f"aspect_change {aspect_change:.2f} <= 1.15 (need >1.15 moderate / >1.6 dynamic)")
+                    if vertical_movement <= 45:
+                        reasons.append(f"vertical {vertical_movement:.1f} <= 45-50px")
                     if center2_y <= center1_y:
                         reasons.append(f"not moving down")
                     log.info(f"   ❌ FAIL: {', '.join(reasons)}")
             
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
-            # 🎯 CÂN BẰNG: 100px để phân biệt di chuyển thường vs TÉ NGÃ
+            # 🎯 GIẢM 80→50px: Log cho thấy té thật có vertical=53px bị bỏ lỡ!
             
             # 🔍 Log STRATEGY 0 check
-            if vertical_movement > 70:  # Log khi gần threshold
-                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >80), horizontal={horizontal_movement:.1f}px, downward={center2_y > center1_y}")
+            if vertical_movement > 40:  # Log khi gần threshold
+                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >50), horizontal={horizontal_movement:.1f}px, downward={center2_y > center1_y}")
             
-            if vertical_movement > 80 and center2_y > center1_y:  # GIẢM 100→80px: NHẠY HƠN để detect fall thật
+            if vertical_movement > 50 and center2_y > center1_y:  # GIẢM 80→50px: NHẠY HƠN để detect fall thật
                 # 🚫 HORIZONTAL MOVEMENT FILTER: Reject WALKING/MOVING ACROSS
                 # Nếu horizontal > vertical = người đi ngang, KHÔNG PHẢI TÉ NGÃ!
                 # Té ngã thật: vertical >> horizontal (rơi xuống dưới)
                 # Đi ngang: horizontal >> vertical (di chuyển ngang qua camera)
                 movement_ratio = vertical_movement / (horizontal_movement + 1)  # +1 tránh chia 0
                 
-                if horizontal_movement > vertical_movement * 0.8:  # Horizontal > 80% vertical = đi ngang
+                # 🚨 BYPASS WALKING filter nếu có vertical lớn (>150px)
+                # Vertical > 150px = té ngã thật, cho dù có horizontal movement lớn
+                has_significant_vertical = vertical_movement > 150 and center2_y > center1_y
+                
+                if horizontal_movement > vertical_movement * 0.8 and not has_significant_vertical:  # Horizontal > 80% vertical = đi ngang
                     log.info(f"🚶 Rejected WALKING: horizontal={horizontal_movement:.1f}px > vertical={vertical_movement:.1f}px * 0.8 (ratio={movement_ratio:.2f}) - Person walking across, not falling")
                     return {
                         'fall_detected': False,
@@ -297,16 +308,52 @@ class SimpleFallDetector:
                         'method': 'horizontal_movement_filtered'
                     }
                 
+                # 🔍 NEW FILTER: DEPTH MOVEMENT (di chuyển ra xa/gần camera)
+                # Khi người di chuyển theo chiều sâu:
+                # - Lùi xa camera: bbox nhỏ đi, center_y TĂNG (xuống dưới màn hình)
+                # - Tiến lại gần: bbox lớn ra, center_y GIẢM (lên trên màn hình)
+                # → vertical_movement lớn NHƯNG là di chuyển depth, KHÔNG PHẢI TÉ NGÃ!
+                
+                # Tính thay đổi size của bbox
+                bbox_size1 = w1 * h1
+                bbox_size2 = w2 * h2
+                size_change_ratio = abs(bbox_size2 - bbox_size1) / (bbox_size1 + 1)  # % thay đổi size
+                
+                # Nếu bbox size thay đổi >40% VÀ vertical > 150px = di chuyển depth
+                # VÍ DỤ: bbox từ 1214x849 → 1478x1011 = size tăng 39% (tiến gần camera)
+                #        hoặc ngược lại = size giảm (lùi xa camera)
+                # TĂNG threshold 15%→40% vì log cho thấy té thật có 29-48% size change
+                # BYPASS: vertical > 400px = té từ rất cao, KHÔNG thể là depth movement
+                is_depth_movement = size_change_ratio > 0.40 and vertical_movement > 150 and vertical_movement < 400
+                
+                if is_depth_movement:
+                    log.info(f"🚶 Rejected DEPTH MOVEMENT: bbox_size change={size_change_ratio:.2%}, vertical={vertical_movement:.1f}px")
+                    log.info(f"   Bbox1: {w1:.0f}x{h1:.0f} ({bbox_size1:.0f}px²) → Bbox2: {w2:.0f}x{h2:.0f} ({bbox_size2:.0f}px²)")
+                    log.info(f"   Person moving toward/away from camera, not falling")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'depth-movement',
+                        'method': 'depth_movement_filtered'
+                    }
+                
                 # 🕐 GET CURRENT TIME for cooldown check
                 current_time = time.time()
                 
-                # 🚫 POSTURE FILTER: Reject if person is ALREADY LYING DOWN (not falling)
-                # Initial aspect > 1.3 = person lying horizontally (width > height)
-                # Only detect fall from STANDING/SITTING → LYING, not LYING → LYING movement
-                is_initially_lying = aspect_ratio1 > 1.3
+                # 🚨 CHECK FOR VERY LARGE VERTICAL MOVEMENT (>250px)
+                # Vertical > 250px = người từ ĐỨng CAO té xuống, không thể là nằm sẵn!
+                has_very_large_vertical = vertical_movement > 250 and center2_y > center1_y
                 
-                if is_initially_lying:
-                    log.info(f"⚠️ Rejected ALREADY LYING: initial_aspect={aspect_ratio1:.2f} > 1.3 (person already on ground, not falling)")
+                # 🚫 POSTURE FILTER: Reject if person is ALREADY LYING DOWN (not falling)
+                # Initial aspect > 1.5 = person lying horizontally (was 1.3, quá thấp reject sai người vừa té)
+                # Only detect fall from STANDING/SITTING → LYING, not LYING → LYING movement
+                is_initially_lying = aspect_ratio1 > 1.5
+                
+                # 🚨 BYPASS: Nếu có vertical movement cực lớn (>250px) → KHÔNG reject
+                # Vertical=656px nghĩa là người ĐỨng CAO rồi TÉ XUỐNG, không phải nằm sẵn
+                if is_initially_lying and not has_very_large_vertical:
+                    log.info(f"⚠️ Rejected ALREADY LYING: initial_aspect={aspect_ratio1:.2f} > 1.5 (person already on ground, not falling)")
                     return {
                         'fall_detected': False,
                         'confidence': 0.0,
@@ -330,13 +377,44 @@ class SimpleFallDetector:
                 
                 # 🪑 SITTING FILTER: Reject NGỒI NHANH (sitting down quickly)
                 # Nếu vị trí cuối (center2_y) ở giữa frame = NGỒI, không phải TÉ NGÃ
-                # Frame height = 480px → NGỒI thường ở y=200-350px (40-70% chiều cao)
-                # TÉ NGÃ thật → người nằm sàn → y > 350px (>70% chiều cao)
-                frame_height = 480  # Assumed frame height
+                # Frame height = dynamic → NGỒI thường ở 40-70% chiều cao
+                # NGỒI XỔM gần sàn → 70-95% chiều cao (chưa nằm hoàn toàn)
+                # TÉ NGÃ thật → người nằm sàn → y >= 90% + aspect >= 1.2 (nằm ngang)
                 final_position_ratio = center2_y / frame_height
                 
-                if final_position_ratio < 0.70:  # Vị trí cuối < 70% = NGỒI hoặc ĐỨNG
-                    log.info(f"🪑 Rejected SITTING: final_y={center2_y:.1f}px ({final_position_ratio:.1%} < 70% frame) - Person sitting, not falling")
+                # 🔥 ENHANCED: Check aspect ratio for squatting detection
+                # Squatting: aspect < 1.2 (still vertical, height > width)
+                # Falling: aspect >= 1.2 (horizontal, width >= height)
+                final_aspect_ratio = aspect_ratio2
+                
+                # Position < 95% OR (Position < 98% AND Aspect < 1.2) = SITTING/SQUATTING
+                is_sitting_or_squatting = (final_position_ratio < 0.95) or \
+                                         (final_position_ratio < 0.98 and final_aspect_ratio < 1.2)
+                
+                if is_sitting_or_squatting:  # Vị trí < 95% HOẶC (< 98% VÀ aspect < 1.2) = NGỒI/XỔM
+                    # 🔄 CHECK REPEATED SITTING PATTERN (ngồi-đứng-ngồi-đứng)
+                    # Nếu phát hiện ngồi xuống nhiều lần trong 10s = đang tập squat
+                    current_time_check = time.time()
+                    
+                    # Thêm event ngồi mới
+                    self.sitting_events.append((current_time_check, center2_y))
+                    
+                    # Xóa events cũ ngoài window 10s
+                    self.sitting_events = [(t, y) for t, y in self.sitting_events 
+                                          if current_time_check - t <= self.sitting_pattern_window]
+                    
+                    # Nếu có ≥3 lần ngồi trong 10s = REPEATED PATTERN
+                    if len(self.sitting_events) >= self.sitting_pattern_threshold:
+                        log.info(f"🏋️ Rejected REPEATED SITTING: {len(self.sitting_events)} times in {self.sitting_pattern_window}s (likely squat exercise)")
+                        return {
+                            'fall_detected': False,
+                            'confidence': 0.0,
+                            'angle': 0.0,
+                            'category': 'exercise-squat',
+                            'method': 'repeated_sitting_filtered'
+                        }
+                    
+                    log.info(f"🪑 Rejected SITTING: final_y={center2_y:.1f}px ({final_position_ratio:.1%} < 85% of {frame_height}px) - Person sitting/squatting, not falling")
                     return {
                         'fall_detected': False,
                         'confidence': 0.0,
@@ -420,6 +498,28 @@ class SimpleFallDetector:
                 downward_confidence = min(0.95, downward_confidence)  # Cap ở 0.95
                 
                 if downward_confidence >= 0.50:  # GIẢM threshold 0.60→0.50 để dễ detect
+                    # 🪑 FINAL CHECK: Nếu là FAST FALL nhưng vẫn đang NGỒI/XỔM
+                    # Check both position and aspect ratio
+                    # Squatting: Position < 95% OR (Position < 98% AND Aspect < 1.2)
+                    final_position_ratio_check = center2_y / frame_height
+                    final_aspect_check = aspect_ratio2
+                    
+                    is_fast_sitting = (final_position_ratio_check < 0.95) or \
+                                     (final_position_ratio_check < 0.98 and final_aspect_check < 1.2)
+                    
+                    if fall_type == "fast_fall" and is_fast_sitting:
+                        log.info(f"🪑 Rejected FAST SITTING: fast_fall but position={final_position_ratio_check:.1%}, aspect={final_aspect_check:.2f} - Person sitting/squatting quickly, not falling")
+                        # Reset tracking
+                        self.fall_start_time = None
+                        self.fall_start_position = None
+                        return {
+                            'fall_detected': False,
+                            'confidence': 0.0,
+                            'angle': 0.0,
+                            'category': 'fast-sitting',
+                            'method': 'fast_sitting_filtered'
+                        }
+                    
                     log.warning(f"🚨 RAPID FALL DETECTED: type={fall_type}, vertical={vertical_movement:.1f}px, duration={fall_duration:.2f}s, motion={motion_str}, conf={downward_confidence:.3f}")
                     
                     # 🚨 UPDATE LAST DANGER TIME: Bắt đầu cooldown 30s

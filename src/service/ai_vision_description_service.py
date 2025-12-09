@@ -138,6 +138,13 @@ class ProfessionalVietnameseCaptionPipeline:
     def translate_to_vietnamese(self, english_text):
         """Translate English to Vietnamese using AI model"""
         try:
+            # 🔥 ALWAYS apply rule-based translation for critical keywords FIRST
+            # This ensures squatting/kneeling are correctly translated before AI model
+            english_lower = english_text.lower()
+            if any(keyword in english_lower for keyword in ['squatting', 'kneeling', 'bending', 'stooping']):
+                logger.info(f"🎯 Using rule-based translation for critical keyword: {english_text}")
+                return self._rule_based_translation(english_text), "rule_based_priority"
+            
             if not self.translator_loaded:
                 return self._rule_based_translation(english_text), "rule_based"
             
@@ -228,7 +235,7 @@ class ProfessionalVietnameseCaptionPipeline:
             
             "child": "đứa trẻ",
             
-            # Actions - Fixed order
+            # Actions - Fixed order (more specific first)
             "is bending": "có dấu hiệu đột quỵ",
             "is leaning forward": "có dấu hiệu đột quỵ",
             "is stooping": "có dấu hiệu đột quỵ",
@@ -237,6 +244,15 @@ class ProfessionalVietnameseCaptionPipeline:
             "leaning forward": "có dấu hiệu đột quỵ",
             "bending": "có dấu hiệu đột quỵ",
             "stooping": "có dấu hiệu đột quỵ",
+            
+            # 🔥 Squatting/Kneeling actions (MUST be before sitting/standing)
+            "is squatting": "đang ngồi xổm",
+            "is kneeling": "đang quỳ",
+            "squatting on": "ngồi xổm trên",
+            "kneeling on": "quỳ trên",
+            "squatting": "xổm",
+            "kneeling": "quỳ",
+            
             "is walking": "đang đi",
             "is standing": "đang đứng",
             "is sitting": "đang ngồi",
@@ -439,6 +455,17 @@ class ProfessionalVietnameseCaptionPipeline:
             
             if english_caption:
                 metadata["english_caption"] = english_caption
+                
+                # 🔥 STEP 1.5: Check for FALSE POSITIVE keywords in English caption
+                english_lower = english_caption.lower()
+                
+                # Check for kneeling/squatting (before mistranslation to "ngã")
+                if 'kneeling' in english_lower or 'kneel' in english_lower:
+                    logger.info(f"🚫 KNEELING detected in English: {english_caption}")
+                    # Replace with correct Vietnamese term
+                    english_caption = english_caption.replace('kneeling', 'squatting')
+                    english_caption = english_caption.replace('kneel', 'squat')
+                    logger.info(f"✅ Corrected to: {english_caption}")
                 
                 # Step 2: Translate to Vietnamese
                 vietnamese_caption, translation_method = self.translate_to_vietnamese(english_caption)

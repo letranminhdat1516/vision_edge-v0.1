@@ -562,7 +562,7 @@ class EventLifecycleWorker:
                         e1.event_id,
                         e1.user_id,
                         e1.camera_id,
-                        e1.created_at as alarm_time,
+                        COALESCE(e1.escalated_at, e1.created_at) as alarm_time,  -- ✅ FIX: Use escalated_at (when alarm activated), fallback to created_at
                         e1.event_type,
                         e1.escalated_at  -- ✅ Added: needed for ORDER BY
                     FROM event_detections e1
