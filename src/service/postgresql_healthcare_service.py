@@ -716,7 +716,20 @@ class PostgreSQLHealthcareService:
                                 logger.info(f"✅ BLIP caption generated: {vietnamese_caption}")
                                 
                                 # 🔥 BUILD RESPONSE based on event_type and confidence
-                                if event_type == 'fall':
+                                if event_type == 'seizure':
+                                    # ⭐ SEIZURE: Đảm bảo có từ "co giật" trong description
+                                    if 'co giật' not in vietnamese_caption.lower() and 'cogiật' not in vietnamese_caption.lower():
+                                        vietnamese_caption = f"một người co giật {vietnamese_caption}"
+                                    
+                                    if confidence >= 0.70:
+                                        action = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption}. 🚨 Cảnh báo: Phát hiện co giật - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                    else:
+                                        action = f"⚠️ CẢNH BÁO - CO GIẬT: {vietnamese_caption}. Cần kiểm tra ngay!"
+                                    
+                                    logger.info(f"🚨 Generated seizure action: {action}")
+                                    return action
+                                
+                                elif event_type == 'fall':
                                     fall_type = context.get('fall_type') if context else None
                                     fall_duration = context.get('fall_duration', 0) if context else 0
                                     
@@ -1081,6 +1094,9 @@ class PostgreSQLHealthcareService:
                     if isinstance(frame, np.ndarray) and frame.size > 0:
                         logger.info(f"📸 Uploading {event_data.get('event_type')} image to MinIO...")
                         
+                        # ⭐ Generate event_id FIRST for linking
+                        event_id_for_snapshot = str(uuid.uuid4())
+                        
                         snapshot_id, image_id = self.snapshot_service.create_detection_snapshot(
                             camera_id=camera_id,
                             user_id=user_id,
@@ -1090,7 +1106,8 @@ class PostgreSQLHealthcareService:
                             metadata={
                                 'detection_data': event_data.get('detection_data', {}),
                                 'bounding_boxes': event_data.get('bounding_boxes', [])
-                            }
+                            },
+                            event_id=event_id_for_snapshot  # ⭐ CRITICAL: Link snapshot to event
                         )
                         
                         logger.info(f"✅ MinIO upload successful! snapshot_id: {snapshot_id}, image_id: {image_id}")
@@ -1194,6 +1211,8 @@ class PostgreSQLHealthcareService:
                         prefixes_to_remove = [
                             '🚨 khẩn cấp - té ngã:',
                             '🚨 khẩn cấp - ngã:',
+                            '🆘 khẩn cấp - co giật:',  # ⭐ NEW: Seizure prefix
+                            '⚠️ cảnh báo - co giật:',  # ⭐ NEW: Seizure warning
                             '⚠️ cảnh báo té ngã:',
                             '⚠️ cảnh báo - té ngã:',
                             '⚠️ warning - té ngã:',
@@ -1281,34 +1300,63 @@ class PostgreSQLHealthcareService:
                         'description': vietnamese_description
                     }
                 
-                # Kiểm tra từ khóa trong BLIP CAPTION: "ngã", "nằm" (cho fall), hoặc "đột quỵ"
+                # ⭐ Kiểm tra từ khóa theo TỪNG LOẠI EVENT
                 # 🔥 NOTE: "ngã gối" đã bị filter ở trên, nên "ngã" ở đây chỉ là fall thật
                 has_fall_keyword = 'ngã' in blip_caption_lower
-                has_lying_keyword = 'nằm' in blip_caption_lower  # 🔥 NEW: Accept "nằm" for fall events
+                has_lying_keyword = 'nằm' in blip_caption_lower  # 🔥 Accept "nằm" for fall events
                 has_stroke_keyword = 'đột quỵ' in blip_caption_lower
+                has_seizure_keyword = 'co giật' in blip_caption_lower or 'cogiật' in blip_caption_lower  # ⭐ NEW: Check "co giật"
+                
+                # ⭐ CHECK TRONG DESCRIPTION TRƯỚC (ưu tiên cao hơn)
+                desc_has_seizure = 'co giật' in desc_lower or 'cogiật' in desc_lower
+                desc_has_fall = 'ngã' in desc_lower or 'té' in desc_lower
+                desc_has_lying = 'nằm' in desc_lower
                 
                 # 🔥 FIX: For fall events, accept both "ngã" or "nằm" keywords
                 if event_type == 'fall':
-                    if not has_fall_keyword and not has_lying_keyword and not has_stroke_keyword:
+                    if not has_fall_keyword and not has_lying_keyword and not has_stroke_keyword and not desc_has_fall and not desc_has_lying:
                         logger.info(f"🚫 FILTERED: {status.upper()} FALL event without required keywords - NOT saving to DB")
                         logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
-                        logger.info(f"   ❌ Missing keywords: 'ngã' or 'nằm' or 'đột quỵ' in BLIP caption")
+                        logger.info(f"   Description: {vietnamese_description[:100]}...")
+                        logger.info(f"   ❌ Missing keywords: 'ngã' or 'nằm' or 'đột quỵ' in caption/description")
                         return {
                             'event_id': None,
                             'filtered': True,
-                            'reason': f'{status.upper()} FALL event without required keywords (ngã/nằm/đột quỵ) in BLIP caption',
+                            'reason': f'{status.upper()} FALL event without required keywords (ngã/nằm/đột quỵ)',
                             'description': vietnamese_description
                         }
                     else:
                         logger.info(f"✅ VALID: {status.upper()} FALL event with required keywords - saving to DB")
-                        if has_fall_keyword:
+                        if has_fall_keyword or desc_has_fall:
                             logger.info(f"   ✓ Found keyword: ngã")
-                        if has_lying_keyword:
-                            logger.info(f"   ✓ Found keyword: nằm (will be replaced with 'ngã')")
+                        if has_lying_keyword or desc_has_lying:
+                            logger.info(f"   ✓ Found keyword: nằm")
                         if has_stroke_keyword:
                             logger.info(f"   ✓ Found keyword: đột quỵ")
+                
+                # ⭐ For SEIZURE events, check for "co giật" OR "đột quỵ" (in description FIRST, then caption)
+                # 🔥 NOTE: event_type can be 'seizure' or 'abnormal_behavior' (for seizure detection)
+                elif event_type in ['seizure', 'abnormal_behavior']:
+                    if not desc_has_seizure and not has_seizure_keyword and not has_stroke_keyword:
+                        logger.info(f"🚫 FILTERED: {status.upper()} SEIZURE event without required keywords - NOT saving to DB")
+                        logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
+                        logger.info(f"   Description: {vietnamese_description[:100]}...")
+                        logger.info(f"   ❌ Missing keywords: 'co giật' or 'đột quỵ' in caption/description")
+                        return {
+                            'event_id': None,
+                            'filtered': True,
+                            'reason': f'{status.upper()} SEIZURE event without required keywords (co giật/đột quỵ)',
+                            'description': vietnamese_description
+                        }
+                    else:
+                        logger.info(f"✅ VALID: {status.upper()} SEIZURE event with required keywords - saving to DB")
+                        if desc_has_seizure or has_seizure_keyword:
+                            logger.info(f"   ✓ Found keyword: co giật")
+                        if has_stroke_keyword:
+                            logger.info(f"   ✓ Found keyword: đột quỵ")
+                
+                # ⭐ For OTHER danger/warning events, require "đột quỵ"
                 else:
-                    # For other events (seizure, etc), keep strict check for "đột quỵ"
                     if not has_stroke_keyword:
                         logger.info(f"🚫 FILTERED: {status.upper()} event without required keywords - NOT saving to DB")
                         logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
@@ -1316,7 +1364,7 @@ class PostgreSQLHealthcareService:
                         return {
                             'event_id': None,
                             'filtered': True,
-                            'reason': f'{status.upper()} event without required keywords (đột quỵ) in BLIP caption',
+                            'reason': f'{status.upper()} event without required keywords (đột quỵ)',
                             'description': vietnamese_description
                         }
                     else:
@@ -1379,8 +1427,11 @@ class PostgreSQLHealthcareService:
                 del context_data['original_frame']
             
             # Prepare record with validated values
+            # ⭐ Use event_id_for_snapshot if already generated (when frame uploaded)
+            final_event_id = event_id_for_snapshot if 'event_id_for_snapshot' in locals() else str(uuid.uuid4())
+            
             record = {
-                'event_id': str(uuid.uuid4()),
+                'event_id': final_event_id,
                 'user_id': user_id,
                 'camera_id': camera_id,
                 'snapshot_id': snapshot_id,

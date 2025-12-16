@@ -120,26 +120,3 @@ warning_threshold = 0.40     # 40% for warning
 # dual_camera_surveillance_system.py
 max_seizure_confidence > 0.50  # 50% for dual camera
 ```
-
----
-
-## 📂 **FILES NEED TO MODIFY:**
-
-1. ✅ `src/seizure_detection/vsvig_detector.py` - Line 42
-2. ✅ `src/service/advanced_healthcare_pipeline.py` - Line 346
-3. ✅ `src/service/dual_camera_surveillance_system.py` - Line 213
-4. ⚠️ (Optional) `src/service/database_config_service.py` - Lines 103-105
-5. ⚠️ (Optional) `.env` file - SEIZURE*THRESHOLD*\* variables
-
----
-
-## 🎯 **CURRENT PROBLEM:**
-
-**TOO SENSITIVE!** Với threshold 0.01-0.02, hệ thống sẽ:
-
-- ✅ Phát hiện mọi động thái nhỏ
-- ❌ Rất nhiều FALSE POSITIVE
-- ❌ Gây phiền hà cho user
-- ❌ Giảm độ tin cậy của hệ thống
-
-**SOLUTION:** Tăng threshold lên ít nhất 0.30-0.50 để cân bằng!

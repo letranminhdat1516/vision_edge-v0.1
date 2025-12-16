@@ -36,12 +36,17 @@ class SimpleFallDetector:
         
         # 🚨 DANGER EVENT COOLDOWN: Tránh spam fall events liên tiếp
         self.last_danger_fall_time = 0  # Thời điểm fall event DANGER cuối cùng
-        self.danger_cooldown = 30  # 30 giây cooldown cho DANGER events (conf >= 0.60)
+        self.danger_cooldown = 40  # 30 giây cooldown cho DANGER events (conf >= 0.60)
         
         # 🪑 REPEATED SITTING PATTERN: Phát hiện ngồi-đứng liên tục (squat exercise)
         self.sitting_events = []  # [(timestamp, position_y), ...]
         self.sitting_pattern_window = 10  # 10 giây window
         self.sitting_pattern_threshold = 3  # 3 lần ngồi-đứng trong 10s = exercise
+        
+        # 🎯 STATE MACHINE: Track person posture state
+        self.person_state = "UNKNOWN"  # STANDING, SITTING, LYING, UNKNOWN
+        self.lying_start_time = None  # Thời điểm bắt đầu nằm
+        self.state_change_time = None  # Thời điểm thay đổi state cuối cùng
         
         log.info(f"🩺 Simplified fall detector initialized (confidence: {confidence_threshold})")
     
@@ -278,6 +283,93 @@ class SimpleFallDetector:
                     if center2_y <= center1_y:
                         reasons.append(f"not moving down")
                     log.info(f"   ❌ FAIL: {', '.join(reasons)}")
+            
+            # 🚶 PRIORITY CHECK 1: STANDING UP DETECTION (người đứng dậy từ sàn)
+            # Phải check TRƯỚC rapid fall để tránh nhầm "đứng dậy" thành "rơi xuống"
+            # Standing up: vertical lớn (>300px) NHƯNG đi LÊN (center2_y < center1_y)
+            is_moving_upward = center2_y < center1_y
+            has_large_upward_movement = vertical_movement > 300 and is_moving_upward
+            
+            if has_large_upward_movement:
+                log.info(f"🧍 Rejected STANDING UP: vertical={vertical_movement:.1f}px upward (center_y: {center1_y:.1f}→{center2_y:.1f})")
+                log.info(f"   Person standing up from floor/chair, not falling")
+                
+                # Reset fall tracking khi đứng dậy
+                self.fall_start_time = None
+                self.fall_start_position = None
+                
+                return {
+                    'fall_detected': False,
+                    'confidence': 0.0,
+                    'angle': 0.0,
+                    'category': 'standing-up',
+                    'method': 'standing_up_filtered'
+                }
+            
+            # 🧘 PRIORITY CHECK 2: SMALL POSTURE ADJUSTMENT (điều chỉnh tư thế nhỏ)
+            # Movement nhỏ (<100px) thường là cúi người, xê dịch tư thế, KHÔNG phải té ngã thật
+            # Té ngã thật: vertical >= 150px (rơi từ đứng xuống sàn)
+            # Cúi người/ngồi xuống: vertical < 100px (chỉ hơi thấp xuống một chút)
+            is_moving_downward = center2_y > center1_y
+            has_small_downward_movement = vertical_movement < 100 and is_moving_downward
+            
+            if has_small_downward_movement:
+                log.info(f"🧘 Rejected POSTURE ADJUSTMENT: vertical={vertical_movement:.1f}px downward (<100px threshold)")
+                log.info(f"   Small movement: likely bending/adjusting posture, not falling")
+                
+                return {
+                    'fall_detected': False,
+                    'confidence': 0.0,
+                    'angle': 0.0,
+                    'category': 'posture-adjustment',
+                    'method': 'small_movement_filtered'
+                }
+            
+            # 🛌 PRIORITY CHECK 3: SLOW LYING DOWN (nằm từ từ xuống)
+            # Detect controlled descent (ngồi xuống/nằm xuống có kiểm soát) vs rapid fall (té ngã)
+            # 
+            # KEY DIFFERENCE:
+            # - TÉ THẬT: aspect GIẢM hoặc tăng nhẹ (0.8-1.1 = aspect_change 0.8-1.1)
+            # - NẰM TỪ TỪ: aspect gần như KHÔNG ĐỔI (aspect_change ~1.0, range 0.95-1.05)
+            # 
+            # LOGIC: Chỉ reject nếu TẤT CẢ điều kiện sau:
+            # 1. Final position gần sàn (>98% - rất sát sàn)
+            # 2. Final aspect nằm ngang (>1.3 - nằm hoàn toàn)
+            # 3. Aspect change GẦN 1.0 (0.95-1.05 = không đổi tư thế)  ← TIGHTENED!
+            # 4. Vertical < 400px (di chuyển chậm)  ← GIẢM từ 600→400px
+            has_large_downward_movement = vertical_movement >= 100 and is_moving_downward
+            
+            if has_large_downward_movement:
+                # Tính vị trí cuối cùng so với frame height
+                final_position_ratio = center2_y / frame_height
+                final_aspect_ratio = aspect_ratio2
+                
+                # 🔥 TÍNH VELOCITY: Tốc độ rơi để phân biệt "té" vs "nằm từ từ"
+                time_diff = 0.3  # Giả sử ~3 frames với 10 FPS = 0.3s
+                vertical_velocity = abs(vertical_movement) / time_diff if time_diff > 0 else 0  # px/s
+                
+                # 🔥 LOGIC MỚI: Nới lỏng ngưỡng + thêm velocity check
+                # Aspect change có thể dao động nhiều hơn khi người từ từ nằm xuống
+                is_aspect_stable = 0.85 <= aspect_change <= 1.15  # Nới lỏng: 0.95-1.05 → 0.85-1.15
+                
+                # Check nếu người đang nằm xuống sàn CHẬM với tư thế ít thay đổi
+                is_lying_down_pattern = (final_position_ratio > 0.90 and  # Giảm 0.98→0.90: Bắt sớm hơn
+                                        final_aspect_ratio > 1.2 and      # Giảm 1.3→1.2: Cho phép chưa nằm hoàn toàn
+                                        is_aspect_stable and              # Aspect thay đổi ít (0.85-1.15)
+                                        vertical_movement < 600 and       # Tăng 400→600px: Cho phép di chuyển chậm hơn
+                                        vertical_velocity < 1500)         # ⭐ THÊM: Tốc độ < 1500px/s = chậm, không phải té
+                
+                if is_lying_down_pattern:
+                    log.info(f"🛌 Rejected LYING DOWN: vertical={vertical_movement:.1f}px, velocity={vertical_velocity:.0f}px/s, final_y={center2_y:.1f} ({final_position_ratio:.1%}), aspect={final_aspect_ratio:.2f}, aspect_change={aspect_change:.2f}x")
+                    log.info(f"   Controlled descent to floor (lying down), not falling")
+                    
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'lying-down',
+                        'method': 'controlled_descent_filtered'
+                    }
             
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
@@ -656,6 +748,34 @@ class SimpleFallDetector:
                     
         except Exception as e:
             log.error(f"Bbox analysis error: {e}")
+        
+        # 🎯 UPDATE STATE MACHINE: Track person posture based on aspect ratio
+        try:
+            current_time = time.time()
+            aspect_ratio = aspect_ratio2
+            
+            # Determine state based on aspect ratio
+            new_state = self.person_state
+            if aspect_ratio > 1.3:
+                new_state = "LYING"
+            elif aspect_ratio > 1.0:
+                new_state = "SITTING"
+            else:
+                new_state = "STANDING"
+            
+            # Update state and track lying time
+            if new_state != self.person_state:
+                self.person_state = new_state
+                self.state_change_time = current_time
+                
+                if new_state == "LYING":
+                    self.lying_start_time = current_time
+                    log.debug(f"🛏️ State changed to LYING (aspect={aspect_ratio:.2f})")
+                else:
+                    self.lying_start_time = None
+                    log.debug(f"🚶 State changed to {new_state} (aspect={aspect_ratio:.2f})")
+        except:
+            pass
             
         return None
     
@@ -726,4 +846,16 @@ class SimpleFallDetector:
             'min_time_interval': self.min_time_interval,
             'buffer_size': len(self.frame_buffer),
             'max_buffer_size': self.max_buffer_size
+        }
+    
+    def get_person_state(self):
+        """Get current person state and lying duration."""
+        lying_duration = 0
+        if self.person_state == "LYING" and self.lying_start_time:
+            lying_duration = time.time() - self.lying_start_time
+        
+        return {
+            'state': self.person_state,
+            'lying_duration': lying_duration,
+            'state_change_time': self.state_change_time
         }

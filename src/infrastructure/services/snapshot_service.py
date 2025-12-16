@@ -73,7 +73,8 @@ class SnapshotService:
         event_type: str,
         confidence: float,
         frame: np.ndarray,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        event_id: Optional[str] = None  # ⭐ NEW: Link to event_detections
     ) -> Tuple[str, str]:
         """
         Create snapshot and upload image when detection occurs
@@ -85,6 +86,7 @@ class SnapshotService:
             confidence: Detection confidence
             frame: OpenCV frame to save
             metadata: Additional metadata
+            event_id: Optional event_id to link snapshot with event_detections
         
         Returns:
             Tuple of (snapshot_id, image_id)
@@ -126,8 +128,17 @@ class SnapshotService:
                 **(metadata or {})
             }
             
+            # ⭐ CRITICAL: Add event_id to metadata for linking
+            logger.info(f"🔍 DEBUG create_detection_snapshot: event_id={event_id}, type={type(event_id)}")
+            if event_id:
+                metadata_dict['event_id'] = event_id
+                logger.info(f"🔗 Linking snapshot to event: {event_id}")
+            else:
+                logger.warning(f"⚠️ No event_id provided - snapshot will NOT be linked to event!")
+            
             # Clean metadata to be JSON serializable
             cleaned_metadata = clean_metadata_for_json(metadata_dict)
+            logger.info(f"📝 Snapshot metadata: event_id={cleaned_metadata.get('event_id')}")
             
             # Map event types to valid capture types
             capture_type_mapping = {
@@ -196,7 +207,8 @@ class SnapshotService:
         event_type: str,
         confidence: float,
         is_primary: bool = False,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        event_id: Optional[str] = None  # ⭐ NEW: For consistency
     ) -> str:
         """
         Add additional image to existing snapshot (for multi-image snapshots)

@@ -98,7 +98,7 @@ class AdvancedHealthcarePipeline:
         # 🚨 DANGER COOLDOWN: Chặn NORMAL event trong 180s sau khi phát hiện DANGER
         # TĂNG từ 60s → 180s vì BLIP caption sai (detect "đang đứng" khi người vẫn nằm)
         self._last_danger_time = 0
-        self._DANGER_BLOCK_DURATION = 180.0  # 180 giây (3 phút) chặn NORMAL sau DANGER
+        self._DANGER_BLOCK_DURATION = 120.0  # 180 giây (3 phút) chặn NORMAL sau DANGER
 
     def process_frame(self, frame, other_cameras=None):
         """
@@ -626,11 +626,18 @@ class AdvancedHealthcarePipeline:
                                 
                                 event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                                 print(f"✅ Seizure event created: {event_id}")
+                                print(f"🔍 DEBUG seizure block: event_result type={type(event_result)}, event_id={event_id}")
+                                # ⭐ Store event_id in result for fallback capture
+                                result['event_id'] = event_id
                             except Exception as e:
                                 print(f"❌ Failed to create seizure event: {e}")
                                 event_id = str(uuid.uuid4())
+                                print(f"🔍 DEBUG seizure error: generated fallback event_id={event_id}")
+                                # ⭐ Store event_id in result for fallback capture
+                                result['event_id'] = event_id
                             
                             # 🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN CO GIẬT!
+                            print(f"🔍 DEBUG calling capture_5_snapshots_immediate with event_id={event_id}")
                             snapshot_ids = self.capture_5_snapshots_immediate(
                                 current_frame=frame,  # Frame ĐANG phát hiện seizure
                                 event_type='seizure',
@@ -644,7 +651,7 @@ class AdvancedHealthcarePipeline:
                                     'person_bbox': person_bbox,
                                     'keypoints': seizure_result.get('keypoints')
                                 },
-                                other_cameras=other_cameras  # 🎥 Pass multi-camera info
+                                other_cameras=other_cameras if 'other_cameras' in locals() else None  # 🎥 Pass multi-camera info (check if defined)
                             )
                             
                             # Update event with snapshot_id
@@ -838,10 +845,14 @@ class AdvancedHealthcarePipeline:
                     if result['alert_level'] in ['danger', 'warning']:
                         # Capture 5 images with multi-angle (if available)
                         print(f"📸 Capturing 5 images for {result['alert_level'].upper()} status...")
+                        # ⭐ CRITICAL: Get event_id from result if already created
+                        capture_event_id = result.get('event_id') if 'event_id' in result else None
+                        print(f"🔍 DEBUG fallback capture: event_id={capture_event_id}")
                         snapshot_ids = self.capture_5_snapshots_immediate(
                             current_frame=frame,
                             event_type=result.get('emergency_type', 'activity'),
                             confidence=log_confidence,
+                            event_id=capture_event_id,  # ⭐ Pass event_id if available
                             metadata={
                                 'alert_level': result['alert_level'],
                                 'fall_confidence': result['fall_confidence'],
@@ -1389,6 +1400,9 @@ class AdvancedHealthcarePipeline:
                 
                 if event_id:
                     snapshot_metadata['event_id'] = event_id
+                    print(f"🔍 DEBUG capture_5_snapshots: event_id={event_id} added to metadata")
+                else:
+                    print(f"⚠️ WARNING capture_5_snapshots: event_id is None!")
                 
                 # 🎬 LẤY 2 FRAMES TRƯỚC ĐÓ TỪ BUFFER để thấy hành động dẫn tới sự kiện
                 frames_to_capture = []
@@ -1417,6 +1431,7 @@ class AdvancedHealthcarePipeline:
                 
                 # 🔥 IMAGE 1 (PRIMARY): Frame-2 (hoặc frame sớm nhất có)
                 primary_label, primary_frame, time_offset = frames_to_capture[0]
+                print(f"🔍 DEBUG before create_detection_snapshot: event_id={event_id}, type={type(event_id) if event_id else None}")
                 main_snapshot_id, first_image_id = self.snapshot_service.create_detection_snapshot(
                     camera_id=self.camera_id,
                     user_id=self.user_id,
@@ -1430,7 +1445,8 @@ class AdvancedHealthcarePipeline:
                         'time_offset_ms': time_offset,
                         'frame_label': primary_label,
                         'is_detection_frame': (primary_label == 'current')
-                    }
+                    },
+                    event_id=event_id  # ⭐ CRITICAL: Link snapshot to event
                 )
                 snapshot_ids.append(main_snapshot_id)
                 print(f"✅ Image 1/5 ({primary_label}): {main_snapshot_id[:8]}...")
@@ -1455,7 +1471,8 @@ class AdvancedHealthcarePipeline:
                             'time_offset_ms': time_offset,
                             'frame_label': label,
                             'is_detection_frame': (label == 'current')
-                        }
+                        },
+                        event_id=event_id  # ⭐ Pass event_id for consistency
                     )
                     print(f"✅ Image {image_sequence}/5 ({label})")
                     image_sequence += 1
@@ -1524,7 +1541,8 @@ class AdvancedHealthcarePipeline:
                             'camera_angle': 'secondary',
                             'time_offset_ms': 0,
                             'capture_method': 'multi_angle'
-                        }
+                        },
+                        event_id=snapshot_metadata.get('event_id')  # ⭐ Link to event
                     )
                     print(f"✅ Image {seq_num}/5 (Cam2 T+0.0s)")
                     seq_num += 1
@@ -1549,7 +1567,8 @@ class AdvancedHealthcarePipeline:
                             'camera_angle': 'primary',
                             'time_offset_ms': 500,
                             'capture_method': 'multi_angle'
-                        }
+                        },
+                        event_id=snapshot_metadata.get('event_id')  # ⭐ Link to event
                     )
                     print(f"✅ Image {seq_num}/5 (Cam1 T+0.5s)")
                     seq_num += 1
@@ -1565,6 +1584,7 @@ class AdvancedHealthcarePipeline:
                         user_id=self.user_id,
                         event_type=event_type,
                         confidence=confidence,
+                        event_id=snapshot_metadata.get('event_id'),  # ⭐ Link to event
                         is_primary=False,
                         metadata={
                             'sequence_number': seq_num,
@@ -1634,7 +1654,8 @@ class AdvancedHealthcarePipeline:
                             'camera_angle': 'primary',
                             'time_offset_ms': i * 300,
                             'capture_method': 'temporal'
-                        }
+                        },
+                        event_id=snapshot_metadata.get('event_id')  # ⭐ Link to event
                     )
                     print(f"✅ Image {seq_num}/5 (T+{i*0.3:.1f}s)")
                 except Exception as e:

@@ -223,9 +223,13 @@ class VSViGSeizureDetector:
                 self.stats['total_frames_processed'] += 1
                 return result
             
-            # Add to temporal buffer
+            # Add to temporal buffer (store cropped person frame for VSViG)
+            x1, y1, x2, y2 = person_bbox
+            person_frame = frame[y1:y2, x1:x2].copy()
+            
             self.frame_buffer.append({
                 'keypoints': keypoints,
+                'frame': person_frame,  # Store frame for VSViG patch extraction
                 'timestamp': len(self.frame_buffer)
             })
             
@@ -239,11 +243,24 @@ class VSViGSeizureDetector:
             
             # Check if we have enough frames for temporal analysis
             if len(self.frame_buffer) >= self.temporal_window:
+                # Kiểm tra xem người đã nằm ổn định chưa (tất cả 10 frames đều aspect > 1.3)
+                all_lying = all(
+                    (fd['keypoints'] is not None and 
+                     self._calculate_aspect_ratio_from_keypoints(fd['keypoints']) > 1.3)
+                    for fd in self.frame_buffer if 'keypoints' in fd
+                )
+                
+                if not all_lying:
+                    self.logger.info(f"⚠️ Temporal window ready but person not consistently lying - skipping seizure detection")
+                    result['temporal_ready'] = False
+                    result['skipped_reason'] = 'not_consistently_lying'
+                    return result
+                
                 result['temporal_ready'] = True
                 
                 # Debug logging for temporal readiness
                 if len(self.frame_buffer) == self.temporal_window:
-                    self.logger.info(f"🧠 Temporal Window READY: {len(self.frame_buffer)}/{self.temporal_window} frames collected")
+                    self.logger.info(f"🧠 Temporal Window READY: {len(self.frame_buffer)}/{self.temporal_window} frames collected (all lying)")
                 
                 # Run VSViG seizure detection
                 seizure_confidence = self._run_vsvig_inference()
@@ -307,28 +324,143 @@ class VSViGSeizureDetector:
         if self.vsvig_model is None:
             return 0.0  # Fallback mode
         
-        # Now that we have improved pose estimation, enable VSViG inference
         try:
-            # Prepare temporal keypoint sequence
-            keypoint_sequence = np.array([frame['keypoints'] for frame in self.frame_buffer])
+            # Extract image patches for VSViG model
+            # VSViG expects: (Batches, Frames, Points, Channels, Height, Width)
+            patches_sequence = []
+            keypoints_sequence = []
             
-            # Simple motion analysis for seizure detection
-            # Analyze velocity and acceleration patterns typical of seizures
-            seizure_score = self._analyze_motion_patterns(keypoint_sequence)
+            for frame_data in self.frame_buffer:
+                if 'frame' not in frame_data or 'keypoints' not in frame_data:
+                    continue
+                
+                frame = frame_data['frame']
+                keypoints = frame_data['keypoints']  # (17, 3) [x, y, conf] from YOLO
+                
+                # Convert 17 keypoints to 15 keypoints (remove eyes: index 1, 2)
+                # YOLO indices: 0=nose, 1=left_eye, 2=right_eye, 3=left_ear, 4=right_ear, ...
+                # Keep: [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+                if keypoints.shape[0] == 17:
+                    indices_to_keep = [0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+                    keypoints = keypoints[indices_to_keep]  # Now (15, 3)
+                
+                # Extract 32x32 patches around each keypoint
+                patches = self._extract_keypoint_patches(frame, keypoints, patch_size=32)
+                if patches is not None:
+                    patches_sequence.append(patches)
+                    keypoints_sequence.append(keypoints)
             
-            # For now, return motion-based analysis instead of full VSViG model
-            # VSViG model requires proper image patches which need more complex implementation
+            if len(patches_sequence) < 10:
+                # Not enough frames for VSViG inference
+                return 0.0
+            
+            # Prepare input tensor: (1, T, P, C, H, W)
+            patches_tensor = np.stack(patches_sequence, axis=0)  # (T, P, H, W, C)
+            patches_tensor = patches_tensor.transpose(0, 1, 4, 2, 3)  # (T, P, C, H, W)
+            patches_tensor = np.expand_dims(patches_tensor, axis=0)  # (1, T, P, C, H, W)
+            
+            # Convert to torch tensor
+            patches_tensor = torch.from_numpy(patches_tensor).float().to(self.device)
+            
+            # Prepare keypoints tensor for positional embedding
+            kpts_tensor = np.stack(keypoints_sequence, axis=0)  # (T, P, 3)
+            kpts_tensor = np.expand_dims(kpts_tensor, axis=0)  # (1, T, P, 3)
+            # Keep all 3 channels: x, y, confidence
+            kpts_tensor = torch.from_numpy(kpts_tensor).float().to(self.device)  # (1, T, P, 3)
+            
+            # Debug: print shapes
+            self.logger.info(f"DEBUG: patches_tensor shape: {patches_tensor.shape}, kpts_tensor shape: {kpts_tensor.shape}")
+            
+            # Run VSViG model
+            with torch.no_grad():
+                confidence = self.vsvig_model(patches_tensor, kpts_tensor)
+                confidence = confidence.item()
+            
             if not self.inference_error_logged:
-                self.logger.info("Using motion-based seizure analysis (VSViG model available but using simplified approach)")
+                self.logger.info(f"✅ VSViG model inference SUCCESS - Confidence: {confidence:.3f}")
                 self.inference_error_logged = True
             
-            return seizure_score
+            return confidence
                 
         except Exception as e:
             if not self.inference_error_logged:
                 self.logger.warning(f"VSViG inference error: {e} - using motion analysis fallback")
                 self.inference_error_logged = True
-            return 0.0
+            
+            # Fallback to motion-based analysis
+            try:
+                keypoint_sequence = np.array([frame['keypoints'] for frame in self.frame_buffer])
+                return self._analyze_motion_patterns(keypoint_sequence)
+            except:
+                return 0.0
+    
+    def _extract_keypoint_patches(self, frame: np.ndarray, keypoints: np.ndarray, patch_size: int = 32) -> Optional[np.ndarray]:
+        """
+        Extract image patches around each keypoint for VSViG model
+        
+        Args:
+            frame: Input image (H, W, C)
+            keypoints: Keypoints array (15, 3) with [x, y, confidence]
+            patch_size: Size of patch to extract (default: 32x32)
+            
+        Returns:
+            patches: Array of patches (15, H, W, C) or None if extraction fails
+        """
+        try:
+            h, w = frame.shape[:2]
+            half_patch = patch_size // 2
+            patches = []
+            
+            for kp in keypoints:
+                x, y, conf = kp
+                
+                # Skip low confidence keypoints
+                if conf < 0.3:
+                    # Use black patch for missing keypoints
+                    patches.append(np.zeros((patch_size, patch_size, 3), dtype=np.uint8))
+                    continue
+                
+                # Calculate patch boundaries
+                x1 = max(0, int(x) - half_patch)
+                y1 = max(0, int(y) - half_patch)
+                x2 = min(w, int(x) + half_patch)
+                y2 = min(h, int(y) + half_patch)
+                
+                # Check if patch has valid size
+                if x2 <= x1 or y2 <= y1:
+                    # Invalid patch, use black patch
+                    patches.append(np.zeros((patch_size, patch_size, 3), dtype=np.uint8))
+                    continue
+                
+                # Extract patch
+                patch = frame[y1:y2, x1:x2].copy()
+                
+                # Check extracted patch is not empty
+                if patch.size == 0 or patch.shape[0] == 0 or patch.shape[1] == 0:
+                    patches.append(np.zeros((patch_size, patch_size, 3), dtype=np.uint8))
+                    continue
+                
+                # Ensure patch has 3 channels (BGR/RGB)
+                if len(patch.shape) == 2:  # Grayscale
+                    patch = cv2.cvtColor(patch, cv2.COLOR_GRAY2BGR)
+                elif patch.shape[2] == 4:  # BGRA
+                    patch = cv2.cvtColor(patch, cv2.COLOR_BGRA2BGR)
+                elif patch.shape[2] != 3:
+                    # Unknown format, use black patch
+                    patches.append(np.zeros((patch_size, patch_size, 3), dtype=np.uint8))
+                    continue
+                
+                # Resize to exact patch_size if needed
+                if patch.shape[0] != patch_size or patch.shape[1] != patch_size:
+                    patch = cv2.resize(patch, (patch_size, patch_size))
+                
+                patches.append(patch)
+            
+            return np.array(patches)  # (15, H, W, C)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract keypoint patches: {e}")
+            return None
     
     def _analyze_motion_patterns(self, keypoint_sequence: np.ndarray) -> float:
         """
@@ -549,6 +681,68 @@ class VSViGSeizureDetector:
             'temporal_ready': False,
             'alert_level': 'normal'
         }
+    
+    def _calculate_aspect_ratio_from_keypoints(self, keypoints: np.ndarray) -> float:
+        """Calculate aspect ratio from keypoints to determine if person is lying
+        
+        Args:
+            keypoints: Array of shape (15, 3) or (17, 3) with [x, y, confidence]
+            
+        Returns:
+            float: Aspect ratio (width/height) of bounding box around keypoints
+        """
+        try:
+            # Lọc keypoints có confidence > 0.3
+            valid_kpts = keypoints[keypoints[:, 2] > 0.3]
+            if len(valid_kpts) < 5:
+                return 0.0
+            
+            # Tính bounding box
+            x_coords = valid_kpts[:, 0]
+            y_coords = valid_kpts[:, 1]
+            
+            min_x, max_x = np.min(x_coords), np.max(x_coords)
+            min_y, max_y = np.min(y_coords), np.max(y_coords)
+            
+            width = max_x - min_x
+            height = max_y - min_y
+            
+            if height > 0:
+                return width / height
+            return 0.0
+        except:
+            return 0.0
+    
+    def _calculate_aspect_ratio_from_keypoints(self, keypoints: np.ndarray) -> float:
+        """Calculate aspect ratio from keypoints to determine if person is lying
+        
+        Args:
+            keypoints: Array of shape (15, 3) or (17, 3) with [x, y, confidence]
+            
+        Returns:
+            float: Aspect ratio (width/height) of bounding box around keypoints
+        """
+        try:
+            # Lọc keypoints có confidence > 0.3
+            valid_kpts = keypoints[keypoints[:, 2] > 0.3]
+            if len(valid_kpts) < 5:
+                return 0.0
+            
+            # Tính bounding box
+            x_coords = valid_kpts[:, 0]
+            y_coords = valid_kpts[:, 1]
+            
+            min_x, max_x = np.min(x_coords), np.max(x_coords)
+            min_y, max_y = np.min(y_coords), np.max(y_coords)
+            
+            width = max_x - min_x
+            height = max_y - min_y
+            
+            if height > 0:
+                return width / height
+            return 0.0
+        except:
+            return 0.0
     
     def _check_if_standing(self, keypoints: np.ndarray) -> bool:
         """Check if person is standing based on keypoints
