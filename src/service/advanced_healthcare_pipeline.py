@@ -98,7 +98,57 @@ class AdvancedHealthcarePipeline:
         # 🚨 DANGER COOLDOWN: Chặn NORMAL event trong 180s sau khi phát hiện DANGER
         # TĂNG từ 60s → 180s vì BLIP caption sai (detect "đang đứng" khi người vẫn nằm)
         self._last_danger_time = 0
-        self._DANGER_BLOCK_DURATION = 120.0  # 180 giây (3 phút) chặn NORMAL sau DANGER
+        self._DANGER_BLOCK_DURATION = 60.0  # 60 giây chặn NORMAL sau DANGER
+        
+        # 🔥 NEW: GLOBAL EVENT COOLDOWN - Chặn TẤT CẢ event mới khi đã có event đang xử lý
+        # Tránh spam 3 events liên tiếp (fall + seizure + seizure) trong vài giây
+        self._last_any_event_time = 0  # Timestamp của event cuối cùng (bất kỳ loại nào)
+        self._GLOBAL_EVENT_COOLDOWN = 45.0  # 45 giây giữa các event (bất kỳ loại nào)
+        self._active_event_id = None  # Event ID đang active (chưa resolved)
+        self._active_event_type = None  # Loại event đang active
+
+    def _check_and_clear_global_cooldown(self):
+        """
+        🔥 Check if global cooldown has expired and clear active event.
+        This allows new events after cooldown period even if old event is still processing.
+        
+        Returns:
+            bool: True if cooldown is active (should block new events), False if can create new event
+        """
+        if self._active_event_id is None:
+            return False  # No active event, can create new one
+            
+        current_time = time.time()
+        time_since_last_event = current_time - self._last_any_event_time
+        
+        if time_since_last_event >= self._GLOBAL_EVENT_COOLDOWN:
+            # Cooldown expired, clear active event tracking
+            print(f"🔓 GLOBAL COOLDOWN expired: {time_since_last_event:.1f}s >= {self._GLOBAL_EVENT_COOLDOWN}s")
+            print(f"   Clearing active event: {self._active_event_id[:8]}... ({self._active_event_type})")
+            self._active_event_id = None
+            self._active_event_type = None
+            return False  # Can create new event
+        else:
+            # Still in cooldown
+            remaining = self._GLOBAL_EVENT_COOLDOWN - time_since_last_event
+            if self.stats['total_frames'] % 60 == 0:  # Log every 2 seconds
+                print(f"🔒 GLOBAL COOLDOWN active: {remaining:.1f}s remaining (event: {self._active_event_id[:8]}...)")
+            return True  # Should block new events
+
+    def clear_active_event(self, event_id: str = None):  # type: ignore
+        """
+        🔥 Manually clear active event tracking (e.g., when event is resolved/canceled).
+        
+        Args:
+            event_id: Optional - only clear if matching current active event
+        """
+        if event_id is None or event_id == self._active_event_id:
+            if self._active_event_id:
+                print(f"🔓 Active event cleared: {self._active_event_id[:8]}...")
+            else:
+                print(f"🔓 Active event cleared: None")
+            self._active_event_id = None
+            self._active_event_type = None
 
     def process_frame(self, frame, other_cameras=None):
         """
@@ -108,6 +158,9 @@ class AdvancedHealthcarePipeline:
             frame: Current frame to process
             other_cameras: List of other camera dicts in same room (for multi-angle capture)
         """
+        # 🔥 Check and clear expired global cooldown at start of each frame
+        self._check_and_clear_global_cooldown()
+        
         # Cập nhật total frames
         self.stats['total_frames'] += 1
         
@@ -263,6 +316,16 @@ class AdvancedHealthcarePipeline:
                 print(f"   has_real_motion={has_real_motion} (need >0.015), is_rapid_fall={is_rapid_fall}")
                 print(f"   WILL CREATE EVENT: {has_real_motion or is_rapid_fall}")
             
+            # 🔥 GLOBAL EVENT COOLDOWN CHECK - Chặn fall event nếu đã có event khác đang active
+            time_since_last_event = current_time - self._last_any_event_time
+            if time_since_last_event < self._GLOBAL_EVENT_COOLDOWN and self._active_event_id:
+                if base_fall_confidence >= 0.28:
+                    print(f"🚫 GLOBAL COOLDOWN: Fall blocked! Last event was {time_since_last_event:.1f}s ago (need >{self._GLOBAL_EVENT_COOLDOWN}s)")
+                    print(f"   Active event: {self._active_event_id[:8]}... ({self._active_event_type})")
+                # Skip fall detection during global cooldown
+                result['fall_confidence'] = 0.0
+                return result
+            
             if base_fall_confidence >= 0.28 and (has_real_motion or is_rapid_fall):  # BYPASS motion cho rapid fall
                 result['fall_detected'] = True
                 result['fall_confidence'] = base_fall_confidence
@@ -369,6 +432,12 @@ class AdvancedHealthcarePipeline:
                         
                         event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                         print(f"✅ Fall event created: {event_id}")
+                        
+                        # 🔥 UPDATE GLOBAL COOLDOWN: Mark this event as active
+                        self._last_any_event_time = current_time
+                        self._active_event_id = event_id
+                        self._active_event_type = 'fall'
+                        print(f"🔒 GLOBAL COOLDOWN started: {self._GLOBAL_EVENT_COOLDOWN}s (active_event={event_id[:8]}...)")
                         
                         # 🔥 CAPTURE NGAY TẠI THỜI ĐIỂM PHÁT HIỆN!
                         # Image 1: Frame hiện tại (đang phát hiện event)
@@ -562,7 +631,14 @@ class AdvancedHealthcarePipeline:
                         # COOLDOWN CHECK: 10 GIÂY giữa các seizure detection
                         current_time = time.time()
                         SEIZURE_COOLDOWN = 30.0  # 30 giây cooldown - TĂNG từ 10s để tránh spam alarm!
-                        if (self.stats['last_seizure_time'] is None or 
+                        
+                        # 🔥 GLOBAL EVENT COOLDOWN CHECK - Chặn seizure nếu đã có event khác đang active
+                        time_since_last_event = current_time - self._last_any_event_time
+                        if time_since_last_event < self._GLOBAL_EVENT_COOLDOWN and self._active_event_id:
+                            print(f"🚫 GLOBAL COOLDOWN: Seizure blocked! Last event was {time_since_last_event:.1f}s ago (need >{self._GLOBAL_EVENT_COOLDOWN}s)")
+                            print(f"   Active event: {self._active_event_id[:8]}... ({self._active_event_type})")
+                            # Skip seizure detection during global cooldown - don't create event
+                        elif (self.stats['last_seizure_time'] is None or 
                             current_time - self.stats['last_seizure_time'] > SEIZURE_COOLDOWN):
                             if self.stats['total_frames'] % 30 == 0 and self.stats['last_seizure_time']:
                                 time_left = SEIZURE_COOLDOWN - (current_time - self.stats['last_seizure_time'])
@@ -646,6 +722,12 @@ class AdvancedHealthcarePipeline:
                                 print(f"🔍 DEBUG seizure block: event_result type={type(event_result)}, event_id={event_id}")
                                 # ⭐ Store event_id in result for fallback capture
                                 result['event_id'] = event_id
+                                
+                                # 🔥 UPDATE GLOBAL COOLDOWN: Mark this event as active
+                                self._last_any_event_time = current_time
+                                self._active_event_id = event_id
+                                self._active_event_type = 'seizure'
+                                print(f"🔒 GLOBAL COOLDOWN started: {self._GLOBAL_EVENT_COOLDOWN}s (active_event={event_id[:8]}...)")
                             except Exception as e:
                                 print(f"❌ Failed to create seizure event: {e}")
                                 event_id = str(uuid.uuid4())
