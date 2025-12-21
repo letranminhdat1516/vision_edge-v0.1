@@ -532,16 +532,33 @@ class AdvancedHealthcarePipeline:
                         if self.stats['total_frames'] % 30 == 0:
                             print(f"🎯 Seizure Above Threshold: {final_seizure_confidence:.3f} > {seizure_threshold}, Frames: {self.detection_history['seizure_confirmation_frames']}")
                     elif final_seizure_confidence > warning_threshold:
-                        # Keep frames for warning level
+                        # Keep frames for warning level - không reset
                         if self.stats['total_frames'] % 30 == 0:
                             print(f"⚠️ Seizure Warning Level: {final_seizure_confidence:.3f} > {warning_threshold}, Frames: {self.detection_history['seizure_confirmation_frames']}")
                     else:
-                        # Reset to 0 when below warning threshold
-                        self.detection_history['seizure_confirmation_frames'] = 0
+                        # 🔧 DECAY thay vì reset cứng - cho phép gián đoạn ngắn
+                        if self.detection_history['seizure_confirmation_frames'] > 0:
+                            self.detection_history['seizure_confirmation_frames'] -= 1
                     
-                    # BALANCED: Cần nhiều frames hơn để confirm
-                    min_seizure_confirmation = 3  # Tăng từ 1 lên 3 frames - chắc chắn hơn
-                    if self.detection_history['seizure_confirmation_frames'] >= min_seizure_confirmation:
+                    # 🔧 ADJUSTED: Giảm xuống 2 frames vì detection bị gián đoạn bởi person detection
+                    min_seizure_confirmation = 2  # Giảm từ 3 xuống 2 frames
+                    
+                    # 🔥 FIX: MINIMUM MOTION REQUIREMENT - Co giật THẬT luôn có motion!
+                    # Người nằm yên KHÔNG THỂ là co giật - phải có rung/giật thực sự
+                    # 🔧 ADJUSTED: Giảm xuống 0.008 để phát hiện rung nhẹ khi nằm
+                    MIN_SEIZURE_MOTION = 0.008  # Tối thiểu 0.8% motion để confirm seizure
+                    has_sufficient_motion = motion_level >= MIN_SEIZURE_MOTION
+                    
+                    if not has_sufficient_motion:
+                        # Log rejection với lý do
+                        if self.stats['total_frames'] % 30 == 0 and final_seizure_confidence > seizure_threshold:
+                            print(f"🚫 SEIZURE REJECTED: Motion={motion_level:.3f} < {MIN_SEIZURE_MOTION} (no real movement)")
+                            print(f"   VSViG confidence={final_seizure_confidence:.3f} nhưng người đang nằm/ngồi YÊN")
+                        # 🔧 DECAY thay vì reset - cho phép motion dao động nhẹ
+                        if self.detection_history['seizure_confirmation_frames'] > 0:
+                            self.detection_history['seizure_confirmation_frames'] -= 1
+                    
+                    if self.detection_history['seizure_confirmation_frames'] >= min_seizure_confirmation and has_sufficient_motion:
                         # COOLDOWN CHECK: 10 GIÂY giữa các seizure detection
                         current_time = time.time()
                         SEIZURE_COOLDOWN = 30.0  # 30 giây cooldown - TĂNG từ 10s để tránh spam alarm!
@@ -787,7 +804,7 @@ class AdvancedHealthcarePipeline:
         # SUSPECT: Chuyển động đáng ngờ
         elif result['seizure_confidence'] >= 0.15 and result['seizure_confidence'] < 0.45:
             result['alert_level'] = 'suspect'  # suspect: Chuyển động bất thường
-            result['emergency_type'] = 'abnormal_movement'
+            result['emergency_type'] = 'abnormal_behavior'  # 🔥 FIX: Use valid enum (not abnormal_movement)
             
         elif result['fall_confidence'] >= 0.20 and result['fall_confidence'] < 0.40:
             result['alert_level'] = 'suspect'  # suspect: Có thể sắp té

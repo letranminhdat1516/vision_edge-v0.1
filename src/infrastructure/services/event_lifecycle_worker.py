@@ -34,6 +34,15 @@ class EventLifecycleWorker:
         self.resolve_delay_seconds = 30  # seconds - delay trước khi auto-resolve
         self.auto_call_delay_seconds = 60 # seconds - delay trước khi auto-call (3 phút)
         
+        # ============================================================================
+        # STARTUP TIME FILTER
+        # ============================================================================
+        # Chỉ trigger alarm cho events được tạo SAU khi worker khởi động
+        # Tránh alarm spam từ các events cũ trong database khi restart system
+        # ============================================================================
+        from datetime import timezone
+        self.startup_time = datetime.now(timezone.utc)
+        
         # Escalatable statuses
         self.escalatable_statuses = ['danger', 'warning']
         
@@ -51,6 +60,7 @@ class EventLifecycleWorker:
         logger.info(f"   ⏰ Alarm delay: {self.alarm_delay_seconds}s")
         logger.info(f"   📞 Auto-call delay: {self.auto_call_delay_seconds}s (3 minutes)")
         logger.info(f"   ✅ Resolve delay: {self.resolve_delay_seconds}s")
+        logger.info(f"   🕐 Startup time filter: Only events created after {self.startup_time.isoformat()}")
     
     def set_postgresql_service(self, service):
         """Set PostgreSQL service"""
@@ -139,6 +149,10 @@ class EventLifecycleWorker:
             cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.alarm_delay_seconds)
             
             # Find candidate events
+            # ============================================================================
+            # STARTUP TIME FILTER: Chỉ xử lý events được tạo SAU khi worker khởi động
+            # Tránh trigger alarm cho events cũ trong database khi restart system
+            # ============================================================================
             query = """
                 SELECT 
                     event_id,
@@ -154,11 +168,12 @@ class EventLifecycleWorker:
                   AND acknowledged_at IS NULL
                   AND is_canceled = FALSE
                   AND created_at <= %s
+                  AND created_at >= %s
                 ORDER BY created_at ASC
                 LIMIT %s
             """
             
-            cursor.execute(query, (cutoff_time, self.batch_size))
+            cursor.execute(query, (cutoff_time, self.startup_time, self.batch_size))
             candidates = cursor.fetchall()
             
             if not candidates:
@@ -166,7 +181,7 @@ class EventLifecycleWorker:
                 self.postgresql_service.return_connection(conn)
                 return 0
             
-            logger.info(f"🔍 Found {len(candidates)} events pending alarm (>{self.alarm_delay_seconds}s old)")
+            logger.info(f"🔍 Found {len(candidates)} events pending alarm (>{self.alarm_delay_seconds}s old, created after startup)")
             
             promoted = 0
             for row in candidates:
@@ -381,6 +396,10 @@ class EventLifecycleWorker:
             cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=self.auto_call_delay_seconds)
             
             # Find candidate events
+            # ============================================================================
+            # STARTUP TIME FILTER: Chỉ xử lý events được tạo SAU khi worker khởi động
+            # Tránh trigger auto-call cho events cũ trong database khi restart system
+            # ============================================================================
             query = """
                 SELECT 
                     event_id,
@@ -397,11 +416,12 @@ class EventLifecycleWorker:
                   AND is_canceled = FALSE
                   AND escalated_at IS NOT NULL
                   AND escalated_at <= %s
+                  AND created_at >= %s
                 ORDER BY escalated_at ASC
                 LIMIT %s
             """
             
-            cursor.execute(query, (cutoff_time, self.batch_size))
+            cursor.execute(query, (cutoff_time, self.startup_time, self.batch_size))
             candidates = cursor.fetchall()
             
             if not candidates:
@@ -409,7 +429,7 @@ class EventLifecycleWorker:
                 self.postgresql_service.return_connection(conn)
                 return 0
             
-            logger.info(f"🔍 Found {len(candidates)} events pending auto-call (>{self.auto_call_delay_seconds}s old)")
+            logger.info(f"🔍 Found {len(candidates)} events pending auto-call (>{self.auto_call_delay_seconds}s old, created after startup)")
             
             promoted = 0
             for row in candidates:
@@ -556,6 +576,10 @@ class EventLifecycleWorker:
             # Find ALARM_ACTIVATED events có normal event sau 30s
             # ⚠️ IMPORTANT: Only resolve ALARM_ACTIVATED, NOT AUTOCALLED!
             # Once escalated to AUTOCALLED, manual intervention is required.
+            # ============================================================================
+            # STARTUP TIME FILTER: Chỉ resolve events được tạo SAU khi worker khởi động
+            # Tránh resolve events cũ trong database khi restart system
+            # ============================================================================
             query = """
                 WITH alarm_events AS (
                     SELECT 
@@ -564,10 +588,12 @@ class EventLifecycleWorker:
                         e1.camera_id,
                         COALESCE(e1.escalated_at, e1.created_at) as alarm_time,  -- ✅ FIX: Use escalated_at (when alarm activated), fallback to created_at
                         e1.event_type,
-                        e1.escalated_at  -- ✅ Added: needed for ORDER BY
+                        e1.escalated_at,  -- ✅ Added: needed for ORDER BY
+                        e1.created_at  -- ✅ Added: needed for startup_time filter
                     FROM event_detections e1
                     WHERE e1.lifecycle_state = 'ALARM_ACTIVATED'
                       AND e1.is_canceled = FALSE
+                      AND e1.created_at >= %s
                       -- ✅ FIX: Exclude AUTOCALLED events from auto-resolve
                       -- AUTOCALLED requires manual intervention
                 ),
@@ -595,7 +621,7 @@ class EventLifecycleWorker:
                 LIMIT %s
             """
             
-            cursor.execute(query, (self.resolve_delay_seconds, self.batch_size))
+            cursor.execute(query, (self.startup_time, self.resolve_delay_seconds, self.batch_size))
             candidates = cursor.fetchall()
             
             if not candidates:
@@ -603,7 +629,7 @@ class EventLifecycleWorker:
                 self.postgresql_service.return_connection(conn)
                 return 0
             
-            logger.info(f"🔍 Found {len(candidates)} alarms to auto-resolve (normal status after {self.resolve_delay_seconds}s)")
+            logger.info(f"🔍 Found {len(candidates)} alarms to auto-resolve (normal status after {self.resolve_delay_seconds}s, created after startup)")
             
             resolved = 0
             for row in candidates:

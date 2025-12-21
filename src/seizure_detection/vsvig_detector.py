@@ -213,17 +213,8 @@ class VSViGSeizureDetector:
             
             result['keypoints'] = keypoints
             
-            # Check if person is standing - don't detect seizure if standing
-            is_standing = self._check_if_standing(keypoints)
-            if is_standing:
-                # Person is standing, skip seizure detection
-                result['status'] = 'standing'
-                result['seizure_detected'] = False
-                result['alert_level'] = 'normal'
-                self.stats['total_frames_processed'] += 1
-                return result
-            
-            # Add to temporal buffer (store cropped person frame for VSViG)
+            # 🔥 IMPORTANT: Always add to buffer FIRST (even if standing/push-up)
+            # This ensures we have fresh temporal data when person lies down
             x1, y1, x2, y2 = person_bbox
             person_frame = frame[y1:y2, x1:x2].copy()
             
@@ -237,26 +228,44 @@ class VSViGSeizureDetector:
             if len(self.frame_buffer) > self.temporal_window:
                 self.frame_buffer.pop(0)
             
+            # Check if person is standing - don't detect seizure if standing
+            is_standing = self._check_if_standing(keypoints)
+            if is_standing:
+                # Person is standing/push-up, skip seizure detection but keep buffer updated
+                result['status'] = 'standing'
+                result['seizure_detected'] = False
+                result['alert_level'] = 'normal'
+                self.stats['total_frames_processed'] += 1
+                return result
+            
             # Debug: Show buffer filling progress every 5 frames
             if len(self.frame_buffer) % 5 == 0 and len(self.frame_buffer) < self.temporal_window:
                 self.logger.info(f"🧠 Filling temporal buffer: {len(self.frame_buffer)}/{self.temporal_window} frames")
             
             # Check if we have enough frames for temporal analysis
             if len(self.frame_buffer) >= self.temporal_window:
-                # Kiểm tra xem người đã nằm ổn định chưa (tất cả 10 frames đều aspect > 1.3)
-                all_lying = all(
-                    (fd['keypoints'] is not None and 
-                     self._calculate_aspect_ratio_from_keypoints(fd['keypoints']) > 1.3)
-                    for fd in self.frame_buffer if 'keypoints' in fd
-                )
+                # Kiểm tra xem người đã nằm ổn định chưa - dùng _is_person_lying cải thiện
+                lying_checks = []
+                for fd in self.frame_buffer:
+                    if 'keypoints' in fd and fd['keypoints'] is not None:
+                        is_lying, reason, conf = self._is_person_lying(fd['keypoints'])
+                        lying_checks.append(is_lying)
                 
-                if not all_lying:
-                    self.logger.info(f"⚠️ Temporal window ready but person not consistently lying - skipping seizure detection")
+                # 🔥 FIX: Chỉ cần MAJORITY (>70%) frames là lying, không cần ALL
+                # Điều này cho phép seizure detection ngay sau khi kết thúc hít đất
+                lying_ratio = sum(lying_checks) / len(lying_checks) if lying_checks else 0
+                mostly_lying = lying_ratio >= 0.7  # 70% frames phải là lying
+                
+                if not mostly_lying:
+                    if self.stats['total_frames_processed'] % 30 == 0:  # Log mỗi 1 giây
+                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 70% - skipping seizure")
                     result['temporal_ready'] = False
-                    result['skipped_reason'] = 'not_consistently_lying'
+                    result['skipped_reason'] = 'not_mostly_lying'
+                    result['lying_ratio'] = lying_ratio
                     return result
                 
                 result['temporal_ready'] = True
+                result['lying_ratio'] = lying_ratio
                 
                 # Debug logging for temporal readiness
                 if len(self.frame_buffer) == self.temporal_window:
@@ -479,16 +488,16 @@ class VSViGSeizureDetector:
             # Calculate velocity magnitudes
             vel_magnitudes = np.sqrt(np.sum(velocities**2, axis=2))  # (T-1, 15)
             
-            # GIẢM ĐỘ NHẠY - tăng threshold để khó phát hiện hơn
+            # 🔧 ADJUSTED: Hạ threshold cho seizure khi nằm - rung nhẹ nhưng bất thường
             # 1. High velocity variance (irregular movement)
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 55.0) if velocity_variance > 65 else 0.0  # Tăng: 45→65 (bớt nhạy)
+            velocity_score = np.tanh(velocity_variance / 40.0) if velocity_variance > 20 else 0.0  # Hạ: 65→20 cho lying seizure
             
             # 2. Acceleration peaks  
             accelerations = np.diff(velocities, axis=0)  # (T-2, 15, 2)
             acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))  # (T-2, 15)
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 90.0) if acceleration_peaks > 110 else 0.0  # Tăng: 85→110 (bớt nhạy)
+            acceleration_score = np.tanh(acceleration_peaks / 60.0) if acceleration_peaks > 35 else 0.0  # Hạ: 110→35 cho lying seizure
             
             # 3. Frequency analysis - count rapid direction changes
             direction_changes = 0
@@ -497,20 +506,20 @@ class VSViGSeizureDetector:
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 50.0) if direction_changes > 35 else 0.0  # Tăng: 25→35 (bớt nhạy)
+                frequency_score = np.tanh(direction_changes / 35.0) if direction_changes > 12 else 0.0  # Hạ: 35→12 cho lying seizure
             else:
                 frequency_score = 0.0
             
             # 4. Overall movement intensity
             total_movement = np.mean(vel_magnitudes)
-            intensity_score = np.tanh(total_movement / 22.0) if total_movement > 30 else 0.0  # Tăng: 22→30 (bớt nhạy)
+            intensity_score = np.tanh(total_movement / 18.0) if total_movement > 8 else 0.0  # Hạ: 30→8 cho lying seizure
             
             # 5. Sudden movement spikes (seizure characteristic)
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 40.0) if movement_spikes > 50 else 0.0  # Tăng: 35→50 (bớt nhạy)
+            spike_score = np.tanh(movement_spikes / 30.0) if movement_spikes > 15 else 0.0  # Hạ: 50→15 cho lying seizure
             
-            # GIẢM ĐỘ NHẠY: Tăng threshold để khó trigger hơn
-            sensitive_threshold = 0.50  # Tăng: 0.35→0.50 (bớt nhạy)
+            # 🔧 ADJUSTED: Hạ threshold cho lying seizure detection
+            sensitive_threshold = 0.30  # Hạ: 0.50→0.30 để phát hiện rung nhẹ
             indicators = [
                 velocity_score > sensitive_threshold,
                 acceleration_score > sensitive_threshold, 
@@ -520,8 +529,8 @@ class VSViGSeizureDetector:
             ]
             
             active_indicators = sum(indicators)
-            if active_indicators < 3:
-                return 0.0  # Cần 3 indicators thay vì 2 để tránh false positive
+            if active_indicators < 2:
+                return 0.0  # Cần 2 indicators - đủ để phát hiện seizure khi nằm
             
             # Weighted combination
             seizure_confidence = (
@@ -538,8 +547,8 @@ class VSViGSeizureDetector:
             if frame_count % 30 == 0:  # Log every 30 frames
                 self.logger.info(f"Seizure Scores - Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Int:{intensity_score:.3f}, Spike:{spike_score:.3f}, Final:{seizure_confidence:.3f}, Active:{active_indicators}")
             
-            # GIẢM ĐỘ NHẠY: Threshold cao hơn để khó trigger
-            if seizure_confidence < 0.85:  # Tăng: 0.7→0.85 - bớt nhạy hơn
+            # 🔧 ADJUSTED: Hạ threshold cho lying seizure
+            if seizure_confidence < 0.45:  # Hạ: 0.85→0.45 để phát hiện rung nhẹ khi nằm
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)
@@ -713,79 +722,250 @@ class VSViGSeizureDetector:
         except:
             return 0.0
     
-    def _calculate_aspect_ratio_from_keypoints(self, keypoints: np.ndarray) -> float:
-        """Calculate aspect ratio from keypoints to determine if person is lying
+    def _is_person_lying(self, keypoints: np.ndarray) -> tuple:
+        """
+        Kiểm tra xem người có đang NẰM hay không (cải thiện phân biệt NẰM vs CÚI vs HÍT ĐẤT)
+        
+        PHÂN BIỆT:
+        - NẰM: body horizontal, head và hip gần cùng level Y, aspect_ratio > 1.4, KHÔNG CÓ vertical motion lặp lại
+        - CÚI: head THẤP hơn hip (Y lớn hơn), đang cúi xuống giúp người khác
+        - ĐỨNG/NGỒI: head CAO hơn hip nhiều
+        - HÍT ĐẤT: body horizontal NHƯNG có vertical motion lặp lại (lên xuống)
         
         Args:
             keypoints: Array of shape (15, 3) or (17, 3) with [x, y, confidence]
             
         Returns:
-            float: Aspect ratio (width/height) of bounding box around keypoints
+            tuple: (is_lying: bool, reason: str, confidence: float)
         """
+        is_lying = False
+        is_bending = False
+        reasons = []
+        confidence = 0.0
+        
+        if keypoints is None or len(keypoints) < 13:
+            return False, "insufficient_keypoints", 0.0
+        
         try:
-            # Lọc keypoints có confidence > 0.3
-            valid_kpts = keypoints[keypoints[:, 2] > 0.3]
-            if len(valid_kpts) < 5:
-                return 0.0
+            # 1. Tính aspect ratio từ keypoints bbox
+            aspect_ratio = self._calculate_aspect_ratio_from_keypoints(keypoints)
             
-            # Tính bounding box
-            x_coords = valid_kpts[:, 0]
-            y_coords = valid_kpts[:, 1]
+            if aspect_ratio > 1.5:  # Rõ ràng nằm ngang
+                is_lying = True
+                confidence += 0.5
+                reasons.append(f"aspect={aspect_ratio:.2f}>1.5")
+            elif aspect_ratio > 1.2:
+                confidence += 0.3
+                reasons.append(f"aspect={aspect_ratio:.2f}>1.2")
+            elif aspect_ratio < 0.6:  # Rõ ràng đứng
+                confidence -= 0.4
+                reasons.append(f"aspect={aspect_ratio:.2f}<0.6_standing")
             
-            min_x, max_x = np.min(x_coords), np.max(x_coords)
-            min_y, max_y = np.min(y_coords), np.max(y_coords)
+            # 2. Check head-hip position (phân biệt NẰM vs CÚI)
+            # COCO: 0=nose, 5=L_shoulder, 6=R_shoulder, 11=L_hip, 12=R_hip
+            nose = keypoints[0]
+            l_shoulder = keypoints[5]
+            r_shoulder = keypoints[6]
+            l_hip = keypoints[11]
+            r_hip = keypoints[12]
             
-            width = max_x - min_x
-            height = max_y - min_y
+            upper_y_list = []
+            lower_y_list = []
             
-            if height > 0:
-                return width / height
-            return 0.0
-        except:
-            return 0.0
+            if nose[2] > 0.3:
+                upper_y_list.append(nose[1])
+            if l_shoulder[2] > 0.3:
+                upper_y_list.append(l_shoulder[1])
+            if r_shoulder[2] > 0.3:
+                upper_y_list.append(r_shoulder[1])
+            if l_hip[2] > 0.3:
+                lower_y_list.append(l_hip[1])
+            if r_hip[2] > 0.3:
+                lower_y_list.append(r_hip[1])
+            
+            if upper_y_list and lower_y_list:
+                upper_y = np.mean(upper_y_list)
+                lower_y = np.mean(lower_y_list)
+                
+                # Trong hệ tọa độ image: Y tăng từ TRÊN xuống DƯỚI
+                # signed_diff > 0: head CAO hơn hip (đứng/ngồi)
+                # signed_diff < 0: head THẤP hơn hip (CÚI)
+                # signed_diff ≈ 0: head và hip cùng level (NẰM)
+                signed_diff = lower_y - upper_y
+                
+                # Lấy bbox height để normalize
+                valid_kpts = keypoints[keypoints[:, 2] > 0.3]
+                if len(valid_kpts) >= 5:
+                    bbox_height = np.max(valid_kpts[:, 1]) - np.min(valid_kpts[:, 1])
+                    normalized_diff = signed_diff / max(bbox_height, 1)
+                    
+                    # CASE 1: Head CAO hơn hip nhiều → ĐỨNG
+                    if normalized_diff > 0.5:
+                        is_lying = False
+                        confidence -= 0.4
+                        reasons.append(f"standing_diff={normalized_diff:.2f}>0.5")
+                    
+                    # CASE 2: Head và hip GẦN CÙNG LEVEL → NẰM
+                    elif abs(normalized_diff) < 0.3:
+                        is_lying = True
+                        confidence += 0.5
+                        reasons.append(f"lying_diff={normalized_diff:.2f}~0")
+                    
+                    # CASE 3: Head THẤP hơn hip → CÚI XUỐNG (bending)
+                    elif normalized_diff < -0.15:
+                        is_lying = False
+                        is_bending = True
+                        confidence -= 0.5
+                        reasons.append(f"BENDING_diff={normalized_diff:.2f}<-0.15")
+                    
+                    # CASE 4: Vùng giữa
+                    else:
+                        confidence += 0.1
+                        reasons.append(f"uncertain_diff={normalized_diff:.2f}")
+            
+        except Exception as e:
+            self.logger.debug(f"Lying check error: {e}")
+            return False, f"error: {e}", 0.0
+        
+        # 🔥 NEW: Check if doing push-ups (hít đất) - repetitive vertical motion
+        is_pushup = self._detect_pushup_pattern()
+        if is_pushup:
+            is_lying = False
+            is_bending = False
+            confidence = -0.5  # Force NOT lying
+            reasons.append("PUSHUP_DETECTED")
+        
+        # Final decision
+        if is_bending:
+            is_lying = False
+            confidence = min(confidence, 0)
+        elif is_pushup:
+            is_lying = False
+            confidence = min(confidence, 0)
+        elif confidence >= 0.5:
+            is_lying = True
+        elif confidence <= 0:
+            is_lying = False
+        
+        reason_str = " | ".join(reasons) if reasons else "no_data"
+        return is_lying, reason_str, max(0, min(confidence, 1.0))
+    
+    def _detect_pushup_pattern(self) -> bool:
+        """
+        Detect push-up (hít đất) pattern from temporal buffer.
+        Push-ups have REPETITIVE VERTICAL MOTION while body is horizontal.
+        
+        PHÂN BIỆT HÍT ĐẤT vs CO GIẬT:
+        - Hít đất: amplitude LỚN (>150px), direction changes ÍT (3-6), rhythm ĐỀU
+        - Co giật: amplitude NHỎ-VỪA (<150px), direction changes NHIỀU (>6), rhythm KHÔNG ĐỀU
+        
+        Returns:
+            bool: True if push-up pattern detected (NOT seizure)
+        """
+        if len(self.frame_buffer) < 8:
+            return False
+        
+        try:
+            # Get shoulder Y positions from recent frames
+            shoulder_y_history = []
+            for fd in self.frame_buffer[-10:]:
+                if 'keypoints' in fd and fd['keypoints'] is not None:
+                    kpts = fd['keypoints']
+                    # Get shoulder Y (COCO: 5=L_shoulder, 6=R_shoulder)
+                    l_shoulder = kpts[5] if len(kpts) > 5 else None
+                    r_shoulder = kpts[6] if len(kpts) > 6 else None
+                    
+                    shoulder_y = []
+                    if l_shoulder is not None and l_shoulder[2] > 0.3:
+                        shoulder_y.append(l_shoulder[1])
+                    if r_shoulder is not None and r_shoulder[2] > 0.3:
+                        shoulder_y.append(r_shoulder[1])
+                    
+                    if shoulder_y:
+                        shoulder_y_history.append(np.mean(shoulder_y))
+            
+            if len(shoulder_y_history) < 6:
+                return False
+            
+            # Detect oscillation pattern (up-down-up-down)
+            # Calculate direction changes
+            y_array = np.array(shoulder_y_history)
+            diffs = np.diff(y_array)
+            
+            # Count sign changes (direction reversals)
+            sign_changes = np.sum(np.diff(np.sign(diffs)) != 0)
+            
+            # Calculate amplitude of oscillation
+            amplitude = np.max(y_array) - np.min(y_array)
+            
+            # 🔥 NEW: Calculate rhythm regularity (variance of intervals between peaks)
+            # Hít đất có rhythm đều, co giật không đều
+            abs_diffs = np.abs(diffs)
+            rhythm_variance = np.var(abs_diffs) if len(abs_diffs) > 2 else 0
+            
+            # 🔥 DEBUG: Log all values for analysis
+            self.logger.debug(f"📊 Push-up analysis: amplitude={amplitude:.1f}px, sign_changes={sign_changes}, rhythm_var={rhythm_variance:.1f}")
+            
+            # 🔥 IMPROVED LOGIC: Phân biệt hít đất vs co giật
+            # Hít đất THẬT SỰ: 
+            # - Amplitude RẤT LỚN (>200px) - người di chuyển từ sàn lên cao
+            # - Direction changes ÍT (<=4) - chỉ vài lần lên xuống
+            # - Rhythm đều (variance < 300)
+            
+            is_pushup = False
+            is_likely_seizure = False
+            
+            # CASE 1: Amplitude RẤT LỚN (>200px) + ít direction changes = HÍT ĐẤT THẬT
+            if amplitude > 200 and sign_changes <= 4:
+                is_pushup = True
+                self.logger.info(f"🏋️ PUSH-UP DETECTED (large amplitude): sign_changes={sign_changes}, amplitude={amplitude:.1f}px")
+            
+            # CASE 2: Amplitude lớn (150-200px) + ít direction changes + rhythm đều = có thể hít đất
+            elif amplitude > 150 and sign_changes <= 3 and rhythm_variance < 300:
+                is_pushup = True
+                self.logger.info(f"🏋️ PUSH-UP DETECTED (moderate): sign_changes={sign_changes}, amplitude={amplitude:.1f}px, rhythm_var={rhythm_variance:.1f}")
+            
+            # CASE 3: Amplitude nhỏ-vừa (<150px) = KHÔNG phải hít đất → cho phép seizure check
+            elif amplitude < 150:
+                is_likely_seizure = True
+                self.logger.debug(f"🧠 NOT push-up (small amplitude={amplitude:.1f}px) - allowing seizure detection")
+            
+            # CASE 4: Nhiều direction changes (>4) = không phải hít đất → cho phép seizure check
+            elif sign_changes > 4:
+                is_likely_seizure = True
+                self.logger.debug(f"🧠 NOT push-up (many dir changes={sign_changes}) - allowing seizure detection")
+            
+            # CASE 5: Rhythm không đều = không phải hít đất → cho phép seizure check
+            elif rhythm_variance > 500:
+                is_likely_seizure = True
+                self.logger.debug(f"🧠 NOT push-up (irregular rhythm, var={rhythm_variance:.1f}) - allowing seizure detection")
+            
+            return is_pushup
+            
+        except Exception as e:
+            self.logger.debug(f"Push-up detection error: {e}")
+            return False
     
     def _check_if_standing(self, keypoints: np.ndarray) -> bool:
-        """Check if person is standing based on keypoints
+        """Check if person is standing/bending/doing push-ups (NOT lying) based on keypoints
         
         Args:
             keypoints: Array of shape (15, 3) or (17, 3) with [x, y, confidence]
             
         Returns:
-            bool: True if person is standing, False otherwise
+            bool: True if person is standing/bending/push-ups (NOT lying), False if lying
         """
         try:
-            # Keypoints indices (COCO format)
-            # 0: nose, 5: left_shoulder, 6: right_shoulder
-            # 11: left_hip, 12: right_hip
-            # 13: left_knee, 14: right_knee
-            # 15: left_ankle, 16: right_ankle
+            # 🔥 First check for push-up pattern (blocks seizure detection)
+            if self._detect_pushup_pattern():
+                return True  # Push-ups = NOT lying = skip seizure detection
             
-            # Check if we have enough keypoints
-            if len(keypoints) < 15:
-                return False  # Can't determine, assume laying to be safe
+            # Dùng _is_person_lying để check
+            is_lying, reason, confidence = self._is_person_lying(keypoints)
             
-            # Get shoulder, hip, knee positions
-            shoulders_y = (keypoints[5][1] + keypoints[6][1]) / 2  # Average shoulder Y
-            hips_y = (keypoints[11][1] + keypoints[12][1]) / 2  # Average hip Y
-            
-            # Check if ankles/knees are visible
-            knees_visible = keypoints[13][2] > 0.3 and keypoints[14][2] > 0.3
-            
-            if knees_visible:
-                knees_y = (keypoints[13][1] + keypoints[14][1]) / 2
-            else:
-                knees_y = hips_y + 100  # Estimate if not visible
-            
-            # Person is standing if:
-            # 1. Shoulders are ABOVE hips (smaller Y value)
-            # 2. Vertical distance between shoulders and knees is significant
-            vertical_distance = knees_y - shoulders_y
-            
-            # Standing: shoulders much higher than knees (>80px vertical distance)
-            # Laying/Sitting: shoulders close to same level as knees (<50px)
-            is_standing = vertical_distance > 80
-            
-            return is_standing
+            # Nếu đang nằm → return False (không phải standing)
+            # Nếu không nằm (đứng/cúi) → return True (là standing)
+            return not is_lying
             
         except Exception as e:
             self.logger.warning(f"Failed to check standing pose: {e}")

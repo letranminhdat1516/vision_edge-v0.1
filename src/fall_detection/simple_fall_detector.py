@@ -557,33 +557,81 @@ class SimpleFallDetector:
                     self.fall_start_time = current_time
                     self.fall_start_position = center1_y
                     log.debug(f"⏱️ Fall tracking started: position={center1_y:.1f}px")
+                    # 🔥 FIX: Return early on first frame - need at least 2 frames to calculate velocity
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'tracking-started',
+                        'method': 'fall_tracking_init'
+                    }
                 
                 # Tính fall duration và fall velocity
                 fall_duration = current_time - self.fall_start_time
                 total_fall_distance = center2_y - self.fall_start_position
                 
-                # Tính vận tốc rơi (pixels/second)
-                if fall_duration > 0:
-                    fall_velocity = total_fall_distance / fall_duration
-                else:
-                    fall_velocity = 0
+                # 🔥 FIX: Cần ít nhất 0.1s để tính velocity hợp lệ
+                if fall_duration < 0.1:
+                    log.debug(f"⏱️ Fall tracking: waiting for duration >= 0.1s (current: {fall_duration:.2f}s)")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'tracking-in-progress',
+                        'method': 'fall_tracking_wait'
+                    }
                 
-                # Phân loại loại té dựa trên duration
+                # Tính vận tốc rơi (pixels/second)
+                fall_velocity = total_fall_distance / fall_duration
+                
+                # 🔥 NEW: CONTROLLED DESCENT DETECTION (Nằm xuống chủ động)
+                # Phân biệt: Nằm xuống chủ động (chậm, có kiểm soát) vs Té ngã (nhanh, đột ngột)
+                # - Té ngã thật: velocity > 400 px/s (rất nhanh)
+                # - Nằm xuống chủ động: velocity < 300 px/s (chậm, có kiểm soát)
+                MIN_FALL_VELOCITY = 300  # px/s - tối thiểu để coi là té ngã
+                
+                if fall_velocity < MIN_FALL_VELOCITY and fall_duration > 0.3:
+                    log.info(f"🧘 Rejected CONTROLLED DESCENT: velocity={fall_velocity:.1f}px/s < {MIN_FALL_VELOCITY}px/s, duration={fall_duration:.2f}s")
+                    log.info(f"   Person is LYING DOWN INTENTIONALLY, not falling")
+                    # Reset tracking
+                    self.fall_start_time = None
+                    self.fall_start_position = None
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'controlled-descent',
+                        'method': 'controlled_descent_filtered'
+                    }
+                
+                # Phân loại loại té dựa trên velocity và duration
                 fall_type = "unknown"
                 severity_multiplier = 1.0
                 
-                if fall_duration < 0.5:
+                if fall_velocity > 500:  # Rất nhanh
                     fall_type = "fast_fall"  # TÉ NHANH - Fall bình thường
                     severity_multiplier = 1.0
                     log.info(f"⚡ FAST FALL DETECTED: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
-                elif fall_duration >= 1.0:
+                elif fall_velocity > 300 and fall_duration < 1.0:
+                    fall_type = "moderate_fall"
+                    severity_multiplier = 1.1
+                    log.info(f"⚠️ MODERATE FALL: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
+                elif fall_duration >= 1.5:
                     fall_type = "slow_collapse"  # TÉ CHẬM - Đột quỵ/yếu sức
                     severity_multiplier = 1.3  # Tăng severity vì nguy hiểm hơn!
                     log.warning(f"🏥 SLOW COLLAPSE (Possible Stroke): duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
                 else:
-                    fall_type = "moderate_fall"
-                    severity_multiplier = 1.1
-                    log.info(f"⚠️ MODERATE FALL: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
+                    # Velocity thấp + duration ngắn = có thể là nằm xuống chủ động
+                    log.info(f"🧘 Rejected AMBIGUOUS DESCENT: velocity={fall_velocity:.1f}px/s, duration={fall_duration:.2f}s - unclear if fall or intentional")
+                    self.fall_start_time = None
+                    self.fall_start_position = None
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'ambiguous-descent',
+                        'method': 'ambiguous_descent_filtered'
+                    }
                 
                 downward_confidence = min(0.9, 0.50 + (vertical_movement / 180))  # GIẢM base 0.55→0.50
                 downward_confidence *= severity_multiplier  # Điều chỉnh theo loại té
