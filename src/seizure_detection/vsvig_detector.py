@@ -39,7 +39,7 @@ class VSViGSeizureDetector:
                  pose_model_path: Optional[str] = None,
                  dynamic_order_path: Optional[str] = None,
                  device: str = 'auto',
-                 confidence_threshold: float = 0.65):  # Tăng từ 0.50 lên 0.65 - giảm độ nhạy
+                 confidence_threshold: float = 0.80):  # 🔥 CỨNG: Tăng từ 0.65 lên 0.80 - chỉ detect khi thực sự co giật
         """
         Initialize VSViG seizure detector
         
@@ -80,6 +80,10 @@ class VSViGSeizureDetector:
         self.last_seizure_detection_time = 0  # Timestamp of last seizure
         self.seizure_cooldown = 45.0  # Tăng lên 45 seconds cooldown - tránh spam
         self.current_seizure_state = False  # Track if currently in seizure
+        
+        # 🆕 EXERCISE COOLDOWN - Sau khi detect exercise, không detect seizure trong 30s
+        self.last_exercise_detection_time = 0
+        self.exercise_cooldown = 30.0  # 30 giây cooldown sau exercise
         
         # Components
         self.pose_estimator = YOLOv8PoseEstimator(model_size='n')
@@ -251,17 +255,32 @@ class VSViGSeizureDetector:
                         is_lying, reason, conf = self._is_person_lying(fd['keypoints'])
                         lying_checks.append(is_lying)
                 
-                # 🔥 FIX: Chỉ cần MAJORITY (>70%) frames là lying, không cần ALL
-                # Điều này cho phép seizure detection ngay sau khi kết thúc hít đất
+                # 🔥 FIX 1: TĂNG lying_ratio requirement để chắc chắn người đang NẰM ỔN ĐỊNH
                 lying_ratio = sum(lying_checks) / len(lying_checks) if lying_checks else 0
-                mostly_lying = lying_ratio >= 0.7  # 70% frames phải là lying
+                mostly_lying = lying_ratio >= 0.95  # 🔥 CỨNG: 85%→95% frames phải là lying
                 
                 if not mostly_lying:
                     if self.stats['total_frames_processed'] % 30 == 0:  # Log mỗi 1 giây
-                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 70% - skipping seizure")
+                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 85% - skipping seizure")
                     result['temporal_ready'] = False
                     result['skipped_reason'] = 'not_mostly_lying'
                     result['lying_ratio'] = lying_ratio
+                    return result
+                
+                # 🔥 FIX 2: POSTURE TRANSITION DETECTION - Phát hiện đang thay đổi tư thế
+                # Nếu đang chuyển từ nằm → đứng hoặc ngược lại → KHÔNG phải co giật
+                first_half_lying = sum(lying_checks[:len(lying_checks)//2]) / (len(lying_checks)//2) if lying_checks else 0
+                second_half_lying = sum(lying_checks[len(lying_checks)//2:]) / (len(lying_checks) - len(lying_checks)//2) if lying_checks else 0
+                
+                # Nếu tỷ lệ lying thay đổi >30% giữa 2 nửa → đang thay đổi tư thế
+                lying_change = abs(first_half_lying - second_half_lying)
+                if lying_change > 0.3:
+                    if self.stats['total_frames_processed'] % 30 == 0:
+                        self.logger.info(f"🚫 POSTURE TRANSITION detected: first_half={first_half_lying:.1%}, second_half={second_half_lying:.1%}, change={lying_change:.1%}")
+                        self.logger.info(f"   Person is getting up or lying down - NOT seizure")
+                    result['temporal_ready'] = False
+                    result['skipped_reason'] = 'posture_transition'
+                    result['lying_change'] = lying_change
                     return result
                 
                 result['temporal_ready'] = True
@@ -270,6 +289,20 @@ class VSViGSeizureDetector:
                 # Debug logging for temporal readiness
                 if len(self.frame_buffer) == self.temporal_window:
                     self.logger.info(f"🧠 Temporal Window READY: {len(self.frame_buffer)}/{self.temporal_window} frames collected (all lying)")
+                
+                # 🆕 CHECK EXERCISE COOLDOWN - Nếu vừa detect exercise → skip seizure detection
+                import time
+                current_time = time.time()
+                time_since_exercise = current_time - self.last_exercise_detection_time
+                
+                if time_since_exercise < self.exercise_cooldown:
+                    if self.stats['total_frames_processed'] % 30 == 0:
+                        self.logger.info(f"🏋️ EXERCISE COOLDOWN: {self.exercise_cooldown - time_since_exercise:.1f}s remaining - skipping seizure detection")
+                    result['status'] = 'exercise_cooldown'
+                    result['seizure_detected'] = False
+                    result['alert_level'] = 'normal'
+                    self.stats['total_frames_processed'] += 1
+                    return result
                 
                 # Run VSViG seizure detection
                 seizure_confidence = self._run_vsvig_inference()
@@ -473,7 +506,12 @@ class VSViGSeizureDetector:
     
     def _analyze_motion_patterns(self, keypoint_sequence: np.ndarray) -> float:
         """
-        Analyze motion patterns for seizure detection - BALANCED THRESHOLDS
+        Analyze motion patterns for seizure detection - VERY STRICT THRESHOLDS
+        
+        🔥 FIX: PHÂN BIỆT RÕ giữa:
+        - TẬP THỂ DỤC (exercise): rhythm đều, amplitude LỚN, controlled, SMOOTH
+        - LẬT NGƯỜI (rolling): smooth motion, có hướng rõ ràng
+        - CO GIẬT THẬT (seizure): jerky, không đều, TẦN SỐ CAO, amplitude NHỎ
         """
         if keypoint_sequence.shape[0] < 5:  # Cần ít nhất 5 frames
             return 0.0
@@ -488,38 +526,71 @@ class VSViGSeizureDetector:
             # Calculate velocity magnitudes
             vel_magnitudes = np.sqrt(np.sum(velocities**2, axis=2))  # (T-1, 15)
             
-            # 🔧 ADJUSTED: Hạ threshold cho seizure khi nằm - rung nhẹ nhưng bất thường
-            # 1. High velocity variance (irregular movement)
+            # 🔥 FIX 1: EXERCISE PATTERN DETECTION
+            # Tập thể dục có: amplitude LỚN + rhythm ĐỀU + motion SMOOTH
+            # Co giật có: amplitude NHỎ-VỪA + rhythm KHÔNG ĐỀU + motion JERKY
+            
+            # Calculate amplitude of movement
+            total_amplitude = np.max(vel_magnitudes) - np.min(vel_magnitudes)
+            mean_velocity = np.mean(vel_magnitudes)
+            
+            # Calculate rhythm regularity (variance of velocity over time)
+            # Exercise: low variance (consistent speed)
+            # Seizure: high variance (erratic speed)
+            velocity_over_time = np.mean(vel_magnitudes, axis=1)  # Mean velocity per frame
+            rhythm_variance = np.var(velocity_over_time)
+            rhythm_regularity = 1.0 / (1.0 + rhythm_variance / 100.0)  # Higher = more regular
+            
+            # 🔥 EXERCISE FILTER: High amplitude + regular rhythm = EXERCISE, not seizure
+            is_exercise_pattern = (mean_velocity > 30 and rhythm_regularity > 0.5) or \
+                                  (total_amplitude > 100 and rhythm_regularity > 0.4)
+            
+            if is_exercise_pattern:
+                self.logger.debug(f"🏋️ EXERCISE PATTERN detected: amplitude={total_amplitude:.1f}, rhythm_reg={rhythm_regularity:.2f}, mean_vel={mean_velocity:.1f}")
+                return 0.0  # Tập thể dục, không phải co giật
+            
+            # 🔥 FIX 2: SMOOTH MOTION FILTER - Tăng threshold
+            vel_diff = np.diff(vel_magnitudes, axis=0)
+            jerkiness = np.mean(np.abs(vel_diff))
+            
+            # TĂNG threshold: 20 → 30
+            # Tập thể dục có jerkiness ~10-25, co giật > 35
+            is_smooth_motion = jerkiness < 30
+            if is_smooth_motion:
+                self.logger.debug(f"🚫 SMOOTH MOTION detected: jerkiness={jerkiness:.1f} < 30")
+                return 0.0
+            
+            # 🔥 FIX 3: TĂNG THRESHOLDS mạnh hơn
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 40.0) if velocity_variance > 20 else 0.0  # Hạ: 65→20 cho lying seizure
+            velocity_score = np.tanh(velocity_variance / 100.0) if velocity_variance > 80 else 0.0  # TĂNG: 60→80
             
-            # 2. Acceleration peaks  
-            accelerations = np.diff(velocities, axis=0)  # (T-2, 15, 2)
-            acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))  # (T-2, 15)
+            # Acceleration peaks
+            accelerations = np.diff(velocities, axis=0)
+            acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 60.0) if acceleration_peaks > 35 else 0.0  # Hạ: 110→35 cho lying seizure
+            acceleration_score = np.tanh(acceleration_peaks / 120.0) if acceleration_peaks > 90 else 0.0  # TĂNG: 70→90
             
-            # 3. Frequency analysis - count rapid direction changes
+            # Frequency analysis - direction changes
             direction_changes = 0
             if vel_magnitudes.shape[0] > 5:
-                for joint in range(min(8, vel_magnitudes.shape[1])):  # Check main joints
+                for joint in range(min(8, vel_magnitudes.shape[1])):
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 35.0) if direction_changes > 12 else 0.0  # Hạ: 35→12 cho lying seizure
+                frequency_score = np.tanh(direction_changes / 60.0) if direction_changes > 35 else 0.0  # TĂNG: 25→35
             else:
                 frequency_score = 0.0
             
-            # 4. Overall movement intensity
+            # Overall movement intensity
             total_movement = np.mean(vel_magnitudes)
-            intensity_score = np.tanh(total_movement / 18.0) if total_movement > 8 else 0.0  # Hạ: 30→8 cho lying seizure
+            intensity_score = np.tanh(total_movement / 30.0) if total_movement > 20 else 0.0  # TĂNG: 15→20
             
-            # 5. Sudden movement spikes (seizure characteristic)
+            # Movement spikes
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 30.0) if movement_spikes > 15 else 0.0  # Hạ: 50→15 cho lying seizure
+            spike_score = np.tanh(movement_spikes / 60.0) if movement_spikes > 40 else 0.0  # TĂNG: 30→40
             
-            # 🔧 ADJUSTED: Hạ threshold cho lying seizure detection
-            sensitive_threshold = 0.30  # Hạ: 0.50→0.30 để phát hiện rung nhẹ
+            # 🔥 FIX 4: Yêu cầu NHIỀU indicators hơn
+            sensitive_threshold = 0.40  # TĂNG: 0.35→0.40
             indicators = [
                 velocity_score > sensitive_threshold,
                 acceleration_score > sensitive_threshold, 
@@ -529,8 +600,8 @@ class VSViGSeizureDetector:
             ]
             
             active_indicators = sum(indicators)
-            if active_indicators < 2:
-                return 0.0  # Cần 2 indicators - đủ để phát hiện seizure khi nằm
+            if active_indicators < 4:  # TĂNG: 3→4 indicators cần thiết
+                return 0.0
             
             # Weighted combination
             seizure_confidence = (
@@ -541,14 +612,14 @@ class VSViGSeizureDetector:
                 0.15 * spike_score
             )
             
-            # Debug logging every few frames
+            # Debug logging
             frame_count = getattr(self, '_debug_frame_count', 0)
             self._debug_frame_count = frame_count + 1
-            if frame_count % 30 == 0:  # Log every 30 frames
-                self.logger.info(f"Seizure Scores - Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Int:{intensity_score:.3f}, Spike:{spike_score:.3f}, Final:{seizure_confidence:.3f}, Active:{active_indicators}")
+            if frame_count % 30 == 0:
+                self.logger.info(f"Seizure Scores - Jerk:{jerkiness:.1f}, RhythmReg:{rhythm_regularity:.2f}, Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Active:{active_indicators}")
             
-            # 🔧 ADJUSTED: Hạ threshold cho lying seizure
-            if seizure_confidence < 0.45:  # Hạ: 0.85→0.45 để phát hiện rung nhẹ khi nằm
+            # 🔥 FIX 5: TĂNG threshold cuối cùng
+            if seizure_confidence < 0.60:  # TĂNG: 0.55→0.60
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)
@@ -852,98 +923,235 @@ class VSViGSeizureDetector:
     
     def _detect_pushup_pattern(self) -> bool:
         """
-        Detect push-up (hít đất) pattern from temporal buffer.
-        Push-ups have REPETITIVE VERTICAL MOTION while body is horizontal.
+        🔥 IMPROVED: Detect EXERCISE patterns (hít đất, gập bụng, plank, giãn cơ)
         
-        PHÂN BIỆT HÍT ĐẤT vs CO GIẬT:
-        - Hít đất: amplitude LỚN (>150px), direction changes ÍT (3-6), rhythm ĐỀU
-        - Co giật: amplitude NHỎ-VỪA (<150px), direction changes NHIỀU (>6), rhythm KHÔNG ĐỀU
+        PHÂN BIỆT TẬP THỂ DỤC vs CO GIẬT:
+        =====================================================
+        TẬP THỂ DỤC (Exercise):
+        - Motion SMOOTH và CONTROLLED (jerkiness thấp)
+        - Rhythm ĐỀU đặn (regularity cao)  
+        - Chỉ một số body parts di chuyển
+        - Velocity thay đổi CHẬM và CÓ PATTERN
+        
+        CO GIẬT (Seizure):
+        - Motion JERKY và ERRATIC (jerkiness cao)
+        - Rhythm KHÔNG đều (regularity thấp)
+        - NHIỀU body parts di chuyển cùng lúc
+        - Velocity thay đổi NHANH và RANDOM
+        =====================================================
         
         Returns:
-            bool: True if push-up pattern detected (NOT seizure)
+            bool: True if exercise pattern detected (NOT seizure)
         """
         if len(self.frame_buffer) < 8:
             return False
         
         try:
-            # Get shoulder Y positions from recent frames
+            # ========== PHASE 1: Thu thập motion data từ NHIỀU body parts ==========
             shoulder_y_history = []
-            for fd in self.frame_buffer[-10:]:
+            hip_y_history = []
+            torso_y_history = []  # Trung bình shoulder và hip
+            head_y_history = []
+            
+            for fd in self.frame_buffer[-15:]:  # Tăng window để detect pattern tốt hơn
                 if 'keypoints' in fd and fd['keypoints'] is not None:
                     kpts = fd['keypoints']
-                    # Get shoulder Y (COCO: 5=L_shoulder, 6=R_shoulder)
+                    
+                    # Shoulder
                     l_shoulder = kpts[5] if len(kpts) > 5 else None
                     r_shoulder = kpts[6] if len(kpts) > 6 else None
-                    
                     shoulder_y = []
                     if l_shoulder is not None and l_shoulder[2] > 0.3:
                         shoulder_y.append(l_shoulder[1])
                     if r_shoulder is not None and r_shoulder[2] > 0.3:
                         shoulder_y.append(r_shoulder[1])
-                    
                     if shoulder_y:
                         shoulder_y_history.append(np.mean(shoulder_y))
+                    
+                    # Hip
+                    l_hip = kpts[11] if len(kpts) > 11 else None
+                    r_hip = kpts[12] if len(kpts) > 12 else None
+                    hip_y = []
+                    if l_hip is not None and l_hip[2] > 0.3:
+                        hip_y.append(l_hip[1])
+                    if r_hip is not None and r_hip[2] > 0.3:
+                        hip_y.append(r_hip[1])
+                    if hip_y:
+                        hip_y_history.append(np.mean(hip_y))
+                    
+                    # Torso (avg of shoulder and hip)
+                    if shoulder_y and hip_y:
+                        torso_y_history.append((np.mean(shoulder_y) + np.mean(hip_y)) / 2)
+                    
+                    # Head (nose)
+                    nose = kpts[0] if len(kpts) > 0 else None
+                    if nose is not None and nose[2] > 0.3:
+                        head_y_history.append(nose[1])
             
             if len(shoulder_y_history) < 6:
                 return False
             
-            # Detect oscillation pattern (up-down-up-down)
-            # Calculate direction changes
+            # ========== PHASE 2: Tính các metrics quan trọng ==========
+            
+            # 2.1. Amplitude và direction changes cho shoulder
             y_array = np.array(shoulder_y_history)
             diffs = np.diff(y_array)
-            
-            # Count sign changes (direction reversals)
             sign_changes = np.sum(np.diff(np.sign(diffs)) != 0)
-            
-            # Calculate amplitude of oscillation
             amplitude = np.max(y_array) - np.min(y_array)
             
-            # 🔥 NEW: Calculate rhythm regularity (variance of intervals between peaks)
-            # Hít đất có rhythm đều, co giật không đều
+            # 2.2. SMOOTHNESS: Tính jerkiness (đạo hàm bậc 2 - acceleration changes)
+            if len(diffs) >= 2:
+                acceleration = np.diff(diffs)
+                jerkiness = np.mean(np.abs(acceleration)) if len(acceleration) > 0 else 0
+            else:
+                jerkiness = 0
+            
+            # 2.3. RHYTHM REGULARITY: Độ đều của motion
             abs_diffs = np.abs(diffs)
-            rhythm_variance = np.var(abs_diffs) if len(abs_diffs) > 2 else 0
+            if len(abs_diffs) > 2 and np.mean(abs_diffs) > 0:
+                # Coefficient of variation - thấp = đều, cao = không đều
+                rhythm_cv = np.std(abs_diffs) / np.mean(abs_diffs) if np.mean(abs_diffs) > 0 else float('inf')
+                rhythm_regularity = 1.0 / (1.0 + rhythm_cv)  # 0-1, cao = đều
+            else:
+                rhythm_regularity = 0.5
             
-            # 🔥 DEBUG: Log all values for analysis
-            self.logger.debug(f"📊 Push-up analysis: amplitude={amplitude:.1f}px, sign_changes={sign_changes}, rhythm_var={rhythm_variance:.1f}")
+            # 2.4. CONTROLLED MOTION: Kiểm tra motion có pattern không
+            # Dùng autocorrelation để detect repetitive motion
+            if len(y_array) >= 8:
+                centered = y_array - np.mean(y_array)
+                autocorr = np.correlate(centered, centered, mode='full')
+                autocorr = autocorr[len(autocorr)//2:]
+                # Normalize
+                autocorr = autocorr / (autocorr[0] + 1e-6)
+                # Tìm peak ngoài peak đầu tiên
+                if len(autocorr) > 3:
+                    secondary_peaks = autocorr[2:]
+                    has_repetitive_pattern = np.max(secondary_peaks) > 0.5
+                else:
+                    has_repetitive_pattern = False
+            else:
+                has_repetitive_pattern = False
             
-            # 🔥 IMPROVED LOGIC: Phân biệt hít đất vs co giật
-            # Hít đất THẬT SỰ: 
-            # - Amplitude RẤT LỚN (>200px) - người di chuyển từ sàn lên cao
-            # - Direction changes ÍT (<=4) - chỉ vài lần lên xuống
-            # - Rhythm đều (variance < 300)
+            # 2.5. BODY STABILITY: Kiểm tra hip có ổn định không (exercise thường có hip stable)
+            if len(hip_y_history) >= 4:
+                hip_variance = np.var(hip_y_history)
+                hip_stable = hip_variance < 200  # Hip ít di chuyển
+            else:
+                hip_stable = False
             
-            is_pushup = False
-            is_likely_seizure = False
+            # 2.6. 🆕 LEG RAISE DETECTION: Detect giãn cơ chân (chỉ chân di chuyển, body stable)
+            # Thu thập ankle/knee positions
+            ankle_y_history = []
+            knee_y_history = []
+            for fd in self.frame_buffer[-15:]:
+                if 'keypoints' in fd and fd['keypoints'] is not None:
+                    kpts = fd['keypoints']
+                    # Ankles (COCO: 15=L_ankle, 16=R_ankle)
+                    l_ankle = kpts[15] if len(kpts) > 15 else None
+                    r_ankle = kpts[16] if len(kpts) > 16 else None
+                    ankle_y = []
+                    if l_ankle is not None and l_ankle[2] > 0.3:
+                        ankle_y.append(l_ankle[1])
+                    if r_ankle is not None and r_ankle[2] > 0.3:
+                        ankle_y.append(r_ankle[1])
+                    if ankle_y:
+                        ankle_y_history.append(np.mean(ankle_y))
+                    
+                    # Knees (COCO: 13=L_knee, 14=R_knee)
+                    l_knee = kpts[13] if len(kpts) > 13 else None
+                    r_knee = kpts[14] if len(kpts) > 14 else None
+                    knee_y = []
+                    if l_knee is not None and l_knee[2] > 0.3:
+                        knee_y.append(l_knee[1])
+                    if r_knee is not None and r_knee[2] > 0.3:
+                        knee_y.append(r_knee[1])
+                    if knee_y:
+                        knee_y_history.append(np.mean(knee_y))
             
-            # CASE 1: Amplitude RẤT LỚN (>200px) + ít direction changes = HÍT ĐẤT THẬT
-            if amplitude > 200 and sign_changes <= 4:
-                is_pushup = True
-                self.logger.info(f"🏋️ PUSH-UP DETECTED (large amplitude): sign_changes={sign_changes}, amplitude={amplitude:.1f}px")
+            # Tính leg motion amplitude
+            leg_amplitude = 0
+            if len(ankle_y_history) >= 4:
+                leg_amplitude = np.max(ankle_y_history) - np.min(ankle_y_history)
             
-            # CASE 2: Amplitude lớn (150-200px) + ít direction changes + rhythm đều = có thể hít đất
-            elif amplitude > 150 and sign_changes <= 3 and rhythm_variance < 300:
-                is_pushup = True
-                self.logger.info(f"🏋️ PUSH-UP DETECTED (moderate): sign_changes={sign_changes}, amplitude={amplitude:.1f}px, rhythm_var={rhythm_variance:.1f}")
+            # Tính upper body stability (head + shoulder)
+            upper_body_stable = False
+            if len(head_y_history) >= 4 and len(shoulder_y_history) >= 4:
+                head_variance = np.var(head_y_history)
+                shoulder_variance = np.var(shoulder_y_history)
+                upper_body_stable = head_variance < 100 and shoulder_variance < 100
             
-            # CASE 3: Amplitude nhỏ-vừa (<150px) = KHÔNG phải hít đất → cho phép seizure check
-            elif amplitude < 150:
-                is_likely_seizure = True
-                self.logger.debug(f"🧠 NOT push-up (small amplitude={amplitude:.1f}px) - allowing seizure detection")
+            # LEG RAISE pattern: chân di chuyển nhiều (>80px) + upper body stable
+            is_leg_raise = leg_amplitude > 80 and upper_body_stable
             
-            # CASE 4: Nhiều direction changes (>4) = không phải hít đất → cho phép seizure check
-            elif sign_changes > 4:
-                is_likely_seizure = True
-                self.logger.debug(f"🧠 NOT push-up (many dir changes={sign_changes}) - allowing seizure detection")
+            # ========== PHASE 3: DECISION LOGIC ==========
             
-            # CASE 5: Rhythm không đều = không phải hít đất → cho phép seizure check
-            elif rhythm_variance > 500:
-                is_likely_seizure = True
-                self.logger.debug(f"🧠 NOT push-up (irregular rhythm, var={rhythm_variance:.1f}) - allowing seizure detection")
+            is_exercise = False
+            exercise_type = "none"
             
-            return is_pushup
+            # 🔥 DEBUG
+            self.logger.debug(f"📊 Exercise analysis: amp={amplitude:.1f}, sign_ch={sign_changes}, "
+                            f"jerk={jerkiness:.1f}, rhythm={rhythm_regularity:.2f}, "
+                            f"repeat={has_repetitive_pattern}, hip_stable={hip_stable}, "
+                            f"leg_amp={leg_amplitude:.1f}, upper_stable={upper_body_stable}")
+            
+            # 🆕 CASE 0: LEG RAISE / GIÃN CƠ CHÂN (ưu tiên cao nhất)
+            # Chỉ CHÂN di chuyển, UPPER BODY stable → đang tập giãn cơ chân
+            if is_leg_raise:
+                is_exercise = True
+                exercise_type = "leg_raise"
+                self.logger.info(f"🦵 LEG RAISE DETECTED: leg_amp={leg_amplitude:.1f}px, upper_stable={upper_body_stable}")
+                # 🆕 SET EXERCISE COOLDOWN
+                import time
+                self.last_exercise_detection_time = time.time()
+                self.logger.info(f"⏰ EXERCISE COOLDOWN ACTIVATED: {self.exercise_cooldown}s - blocking seizure detection")
+                return True  # Return ngay để skip các case khác
+            
+            # CASE 1: HÍT ĐẤT / PUSH-UP (shoulder amplitude lớn, rhythm đều)
+            if amplitude > 80 and rhythm_regularity > 0.3 and jerkiness < 25:
+                is_exercise = True
+                exercise_type = "pushup"
+                self.logger.info(f"🏋️ PUSH-UP/EXERCISE DETECTED: amp={amplitude:.1f}px, rhythm={rhythm_regularity:.2f}, jerk={jerkiness:.1f}")
+            
+            # CASE 2: GẬP BỤNG / CRUNCH (hip stable, upper body moves rhythmically)
+            elif hip_stable and rhythm_regularity > 0.35 and jerkiness < 20:
+                is_exercise = True
+                exercise_type = "crunch"
+                self.logger.info(f"🏋️ CRUNCH/SIT-UP DETECTED: hip_stable={hip_stable}, rhythm={rhythm_regularity:.2f}, jerk={jerkiness:.1f}")
+            
+            # CASE 3: GIÃN CƠ / STRETCHING (slow, controlled movement)
+            elif jerkiness < 10 and rhythm_regularity > 0.4:
+                is_exercise = True
+                exercise_type = "stretching"
+                self.logger.info(f"🧘 STRETCHING DETECTED: jerk={jerkiness:.1f}, rhythm={rhythm_regularity:.2f}")
+            
+            # CASE 4: REPETITIVE EXERCISE (bất kỳ bài tập có pattern lặp lại)
+            elif has_repetitive_pattern and jerkiness < 30:
+                is_exercise = True
+                exercise_type = "repetitive"
+                self.logger.info(f"🏃 REPETITIVE EXERCISE DETECTED: pattern=True, jerk={jerkiness:.1f}")
+            
+            # CASE 5: CONTROLLED MOTION (chuyển động có kiểm soát, không giật)
+            elif rhythm_regularity > 0.5 and jerkiness < 15:
+                is_exercise = True
+                exercise_type = "controlled"
+                self.logger.info(f"✅ CONTROLLED MOTION DETECTED: rhythm={rhythm_regularity:.2f}, jerk={jerkiness:.1f}")
+            
+            # CASE 6: HIGH AMPLITUDE với direction changes ít = exercise
+            elif amplitude > 100 and sign_changes <= 5 and jerkiness < 35:
+                is_exercise = True
+                exercise_type = "high_amplitude"
+                self.logger.info(f"🏋️ HIGH AMPLITUDE EXERCISE: amp={amplitude:.1f}px, dir_ch={sign_changes}, jerk={jerkiness:.1f}")
+            
+            # 🆕 SET EXERCISE COOLDOWN khi detect bất kỳ exercise nào
+            if is_exercise:
+                import time
+                self.last_exercise_detection_time = time.time()
+                self.logger.info(f"⏰ EXERCISE COOLDOWN ACTIVATED: {self.exercise_cooldown}s - blocking seizure detection")
+            
+            return is_exercise
             
         except Exception as e:
-            self.logger.debug(f"Push-up detection error: {e}")
+            self.logger.debug(f"Exercise detection error: {e}")
             return False
     
     def _check_if_standing(self, keypoints: np.ndarray) -> bool:

@@ -691,6 +691,47 @@ class SimpleFallDetector:
                         self.fall_start_time = None
                         self.fall_start_position = None
             
+            # 🔥 NEW STRATEGY: HORIZONTAL/SIDEWAYS FALL (TÉ NGANG)
+            # Phát hiện khi người té ngã sang bên (không phải té xuống dưới)
+            # Đặc điểm: horizontal > vertical, aspect thay đổi lớn, vẫn có vertical movement
+            # 
+            # TÉ NGANG vs ĐI NGANG:
+            # - Té ngang: aspect TĂNG NHIỀU (>1.4), kết thúc ở tư thế NẰM (aspect > 1.5)
+            # - Đi ngang: aspect KHÔNG ĐỔI (~1.0), vẫn đứng sau khi di chuyển
+            
+            if (horizontal_movement > 80 and  # Di chuyển ngang đáng kể (>80px)
+                horizontal_movement > vertical_movement and  # Horizontal dominant
+                aspect_change > 1.4 and  # Aspect tăng nhiều (từ đứng → nằm)
+                aspect_ratio2 > 1.5 and  # Kết thúc ở tư thế NẰM NGANG
+                aspect_ratio1 < 1.3):  # Bắt đầu từ tư thế ĐỨNG
+                
+                # 🚫 REJECT: Nếu vertical quá nhỏ và aspect không tăng đủ = đi ngang
+                if vertical_movement < 20 and aspect_change < 1.6:
+                    log.info(f"🚶 Rejected WALKING SIDEWAYS: horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px, aspect_change={aspect_change:.2f}x")
+                else:
+                    # Calculate confidence for horizontal fall
+                    horizontal_fall_conf = min(0.85, 0.50 + 
+                        (aspect_change - 1.4) * 0.2 +  # Aspect change bonus
+                        min(horizontal_movement / 200, 0.15) +  # Horizontal movement bonus
+                        min(vertical_movement / 100, 0.10))  # Some vertical bonus
+                    
+                    if horizontal_fall_conf >= 0.55:
+                        log.warning(f"🚨 HORIZONTAL FALL DETECTED (TÉ NGANG)!")
+                        log.warning(f"   horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px")
+                        log.warning(f"   aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f} (change={aspect_change:.2f}x)")
+                        log.warning(f"   confidence={horizontal_fall_conf:.3f}")
+                        
+                        return {
+                            'fall_detected': True,
+                            'confidence': horizontal_fall_conf,
+                            'angle': 90.0,  # Horizontal = 90 degrees
+                            'category': 'fall',
+                            'method': 'horizontal_fall',
+                            'fall_type': 'sideways_fall',
+                            'fall_duration': 0.0,
+                            'fall_velocity': horizontal_movement  # Use horizontal as velocity
+                        }
+            
             # STRATEGY 0.5: MODERATE FALL - Cân bằng giữa nhạy và chính xác
             # 🎯 BALANCED: Detect fall thật nhưng TRÁNH NGỐI XUỐNG
             # Kiểm tra: aspect tăng nhiều (>1.25) + vertical đủ lớn (>65px)
