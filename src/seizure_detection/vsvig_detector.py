@@ -243,9 +243,9 @@ class VSViGSeizureDetector:
                 self.stats['total_frames_processed'] += 1
                 return result
             
-            # Debug: Show buffer filling progress every 5 frames
+            # Debug: Show buffer filling progress every 5 frames - only debug level
             if len(self.frame_buffer) % 5 == 0 and len(self.frame_buffer) < self.temporal_window:
-                self.logger.info(f"🧠 Filling temporal buffer: {len(self.frame_buffer)}/{self.temporal_window} frames")
+                self.logger.debug(f"🧠 Filling temporal buffer: {len(self.frame_buffer)}/{self.temporal_window} frames")
             
             # Check if we have enough frames for temporal analysis
             if len(self.frame_buffer) >= self.temporal_window:
@@ -287,9 +287,9 @@ class VSViGSeizureDetector:
                 result['temporal_ready'] = True
                 result['lying_ratio'] = lying_ratio
                 
-                # Debug logging for temporal readiness
+                # Debug logging for temporal readiness - only log once
                 if len(self.frame_buffer) == self.temporal_window:
-                    self.logger.info(f"🧠 Temporal Window READY: {len(self.frame_buffer)}/{self.temporal_window} frames collected (all lying)")
+                    self.logger.debug(f"🧠 Temporal Window READY: {len(self.frame_buffer)}/{self.temporal_window} frames collected (all lying)")
                 
                 # 🆕 CHECK EXERCISE COOLDOWN - Nếu vừa detect exercise → skip seizure detection
                 import time
@@ -411,8 +411,8 @@ class VSViGSeizureDetector:
             # Keep all 3 channels: x, y, confidence
             kpts_tensor = torch.from_numpy(kpts_tensor).float().to(self.device)  # (1, T, P, 3)
             
-            # Debug: print shapes
-            self.logger.info(f"DEBUG: patches_tensor shape: {patches_tensor.shape}, kpts_tensor shape: {kpts_tensor.shape}")
+            # Debug: print shapes - only debug level
+            self.logger.debug(f"DEBUG: patches_tensor shape: {patches_tensor.shape}, kpts_tensor shape: {kpts_tensor.shape}")
             
             # Run VSViG model
             with torch.no_grad():

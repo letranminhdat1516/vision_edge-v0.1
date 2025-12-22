@@ -406,15 +406,15 @@ class ProfessionalVietnameseCaptionPipeline:
         if event_type:
             # Use actual event_type (most reliable source)
             if event_type == 'fall':
-                medical_additions.append("⚠️ Cảnh báo: Phát hiện ngã đổ")
+                medical_additions.append("Cảnh báo: Phát hiện ngã đổ")
             elif event_type in ['seizure', 'abnormal_behavior']:
-                medical_additions.append("🚨 Cảnh báo: Phát hiện co giật")
+                medical_additions.append("Cảnh báo: Phát hiện co giật")
         else:
             # Fallback to filename detection (less reliable)
             if 'fall' in filename:
-                medical_additions.append("⚠️ Cảnh báo: Phát hiện ngã đổ")
+                medical_additions.append("Cảnh báo: Phát hiện ngã đổ")
             elif 'seizure' in filename:
-                medical_additions.append("🚨 Cảnh báo: Phát hiện co giật")
+                medical_additions.append("Cảnh báo: Phát hiện co giật")
         
         # Extract confidence (REMOVED - to avoid duplicate confidence display)
         # if 'conf_' in filename:

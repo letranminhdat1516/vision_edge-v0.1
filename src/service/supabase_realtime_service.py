@@ -163,17 +163,17 @@ class SupabaseRealtimeService:
                         if caption_result and isinstance(caption_result, tuple) and len(caption_result) > 0:
                             vietnamese_caption = caption_result[0]  # First element is the caption
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to generate Vietnamese caption: {e}")
+                    logger.warning(f" Failed to generate Vietnamese caption: {e}")
             
             # Create intelligent action message based on event type
             if event_type.lower() == 'seizure':
-                return f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                return f"KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
             elif event_type.lower() == 'fall':
-                return f"⚠️ CẢNH BÁO: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện ngã đổ - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                return f"CẢNH BÁO: {vietnamese_caption} Cảnh báo: Phát hiện ngã đổ - Cần theo dõi (Tin cậy: {confidence:.0%})"
             elif event_type.lower() == 'abnormal':
-                return f"⚠️ CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} ⚠️ Cảnh báo: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
+                return f"CẢNH BÁO BẤT THƯỜNG: {vietnamese_caption} Cảnh báo: Phát hiện hành vi bất thường - Cần theo dõi chặt chẽ (Tin cậy: {confidence:.0%})"
             else:
-                return f"🔍 PHÁT HIỆN: {vietnamese_caption} 📊 Cảnh báo: Phát hiện sự kiện {event_type} - Độ tin cậy: {confidence:.0%}"
+                return f"PHÁT HIỆN: {vietnamese_caption} Cảnh báo: Phát hiện sự kiện {event_type} - Độ tin cậy: {confidence:.0%}"
                 
         except Exception as e:
             logger.warning(f"⚠️ Error generating intelligent action: {e}")

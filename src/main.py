@@ -665,11 +665,11 @@ if __name__ == "__main__":
                     # Create enhanced action message
                     if status == "danger":
                         if event_type == "fall":
-                            intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY! (Tin cậy: {confidence:.0%})"
+                            intelligent_action = f" KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY! (Tin cậy: {confidence:.0%})"
                         else:
-                            intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
+                            intelligent_action = f" KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
                     else:
-                        intelligent_action = f"⚠️ CẢNH BÁO: {vietnamese_caption} - Cần theo dõi (Tin cậy: {confidence:.0%})"
+                        intelligent_action = f" CẢNH BÁO: {vietnamese_caption} - Cần theo dõi (Tin cậy: {confidence:.0%})"
                         
                     print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
                     if metadata.get('english_caption'):
@@ -847,23 +847,23 @@ if __name__ == "__main__":
                 # Generate intelligent action for console
                 if event_type == 'abnormal_behavior':
                     if confidence >= 0.50:
-                        intelligent_action = f"🆘 KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                        intelligent_action = f"KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                         status = 'danger'
                     elif confidence >= 0.30:
-                        intelligent_action = f"⚠️ CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ"
+                        intelligent_action = f"CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ"
                         status = 'warning'
                     else:
-                        intelligent_action = f"📊 QUAN SÁT: {random_description} - Tiếp tục theo dõi"
+                        intelligent_action = f"QUAN SÁT: {random_description} - Tiếp tục theo dõi"
                         status = 'normal'
                 elif event_type == 'fall':
                     if confidence >= 0.60:
-                        intelligent_action = f"🚨 KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
+                        intelligent_action = f"KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
                         status = 'danger'
                     elif confidence >= 0.40:
-                        intelligent_action = f"⚠️ CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi"
+                        intelligent_action = f"CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi"
                         status = 'warning'
                     else:
-                        intelligent_action = f"📊 THEO DÕI: {random_description} - Quan sát"
+                        intelligent_action = f"THEO DÕI: {random_description} - Quan sát"
                         status = 'normal'
                 
                 print(f"🎯 Test Event Details:")

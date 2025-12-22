@@ -153,9 +153,14 @@ class ProductionVideoTest:
                 print("❌ Production modules not available")
                 return False
             
-            # 1. YOLO Person Detector
+            # 1. YOLO Person Detector - Use yolov8s for better detection
+            # yolov8n misses some frames which causes gaps in fall detection buffer
             print("📦 Loading YOLO person detector...")
-            yolo_path = self.script_dir / "yolov8n.pt"
+            yolo_path = self.script_dir / "yolov8s.pt"  # Use 's' model for better detection
+            if not yolo_path.exists():
+                yolo_path = PROJECT_ROOT / "yolov8s.pt"
+            if not yolo_path.exists():
+                yolo_path = self.script_dir / "yolov8n.pt"  # Fallback to 'n' if 's' not available
             if not yolo_path.exists():
                 yolo_path = PROJECT_ROOT / "yolov8n.pt"
             if not yolo_path.exists():
@@ -349,14 +354,15 @@ class ProductionVideoTest:
                 # Log why fall was rejected
                 if fall_confidence > 0 and fall_confidence < 0.28:
                     print(f"⚠️ Fall REJECTED (low conf): conf={fall_confidence:.3f} < 0.28")
-                elif fall_confidence >= 0.28 and motion_level <= 0.015 and fall_method != 'rapid_downward':
+                elif fall_confidence >= 0.28 and motion_level <= 0.015 and fall_method not in ['rapid_downward', 'sideways_fall']:
                     print(f"⚠️ Fall REJECTED (low motion): conf={fall_confidence:.3f}, motion={motion_level:.3f} < 0.015")
                 
                 # PRODUCTION THRESHOLDS
                 has_real_motion = motion_level > 0.015
                 is_rapid_fall = fall_method == 'rapid_downward'
+                is_sideways_fall = fall_method == 'sideways_fall'  # 🆕 Té ngang bypass motion filter
                 
-                if fall_confidence >= 0.28 and (has_real_motion or is_rapid_fall):
+                if fall_confidence >= 0.28 and (has_real_motion or is_rapid_fall or is_sideways_fall):
                     result['fall_detected'] = True
                     result['fall_confidence'] = fall_confidence
                     result['fall_method'] = fall_method

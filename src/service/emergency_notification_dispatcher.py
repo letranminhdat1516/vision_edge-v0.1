@@ -298,28 +298,28 @@ class HealthcareEventPublisher:
         # Generate emergency context based on status
         if status == "danger":
             if event_type == "fall":
-                emergency_prefix = "🚨 KHẨN CẤP - TÉ NGÃ:"
+                emergency_prefix = "KHẨN CẤP - TÉ NGÃ:"
                 urgency_suffix = f" - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! (Tin cậy: {confidence:.0%})"
             elif event_type in ["abnormal_behavior", "seizure"]:
-                emergency_prefix = "🆘 KHẨN CẤP - CO GIẬT:"
+                emergency_prefix = "KHẨN CẤP - CO GIẬT:"
                 urgency_suffix = f" - CẦN ĐIỀU TRỊ Y TẾ NGAY! (Tin cậy: {confidence:.0%})"
             else:
-                emergency_prefix = "🚨 TÌNH HUỐNG KHẨN CẤP:"
+                emergency_prefix = "TÌNH HUỐNG KHẨN CẤP:"
                 urgency_suffix = f" - Cần hỗ trợ gấp! (Tin cậy: {confidence:.0%})"
                 
         elif status == "warning":
             if event_type == "fall":
-                emergency_prefix = "⚠️ CẢNH BÁO TÉ NGÃ:"
+                emergency_prefix = "CẢNH BÁO TÉ NGÃ:"
                 urgency_suffix = f" - Cần theo dõi và kiểm tra (Tin cậy: {confidence:.0%})"
             elif event_type in ["abnormal_behavior", "seizure"]:
-                emergency_prefix = "⚠️ CẢNH BÁO BẤT THƯỜNG:"
+                emergency_prefix = "CẢNH BÁO BẤT THƯỜNG:"
                 urgency_suffix = f" - Cần quan sát chặt chẽ (Tin cậy: {confidence:.0%})"
             else:
-                emergency_prefix = "⚠️ CẢNH BÁO:"
+                emergency_prefix = "CẢNH BÁO:"
                 urgency_suffix = f" - Cần theo dõi (Tin cậy: {confidence:.0%})"
                 
         else:  # normal
-            return f"✅ BÌNH THƯỜNG: {cleaned_caption}"
+            return f"BÌNH THƯỜNG: {cleaned_caption}"
         
         # Combine all parts
         enhanced_action = f"{emergency_prefix} {cleaned_caption}{urgency_suffix}"

@@ -726,7 +726,7 @@ class PostgreSQLHealthcareService:
                                 if event_type == 'fall' and (is_sitting_in_caption or is_standing_in_caption) and not is_lying_in_caption:
                                     logger.warning(f"🚫 FALSE POSITIVE (path 1): event='fall' but caption='{vietnamese_caption}'")
                                     logger.warning(f"   → Downgrading to NORMAL activity")
-                                    return f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                    return f"BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
                                 
                                 # 🔥 BUILD RESPONSE based on event_type and confidence
                                 if event_type == 'seizure':
@@ -735,9 +735,9 @@ class PostgreSQLHealthcareService:
                                         vietnamese_caption = f"một người co giật {vietnamese_caption}"
                                     
                                     if confidence >= 0.70:
-                                        action = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption}. 🚨 Cảnh báo: Phát hiện co giật - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                        action = f"KHẨN CẤP - CO GIẬT: {vietnamese_caption}. Cảnh báo: Phát hiện co giật - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                                     else:
-                                        action = f"⚠️ CẢNH BÁO - CO GIẬT: {vietnamese_caption}. Cần kiểm tra ngay!"
+                                        action = f"CẢNH BÁO - CO GIẬT: {vietnamese_caption}. Cần kiểm tra ngay!"
                                     
                                     logger.info(f"🚨 Generated seizure action: {action}")
                                     return action
@@ -748,27 +748,27 @@ class PostgreSQLHealthcareService:
                                     
                                     if confidence >= 0.60:
                                         if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                                            return f"🏥🆘 KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! ⚠️ Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
+                                            return f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
                                         else:
-                                            return f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! 🆘 Người đang nằm trên sàn!"
+                                            return f"KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! Người đang nằm trên sàn!"
                                     elif confidence >= 0.40:
-                                        return f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi"
+                                        return f"CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi"
                                     else:
-                                        return f"📊 THEO DÕI: {vietnamese_caption} - Quan sát"
+                                        return f"THEO DÕI: {vietnamese_caption} - Quan sát"
                                 
                                 elif event_type in ['abnormal_behavior', 'seizure']:
                                     if confidence >= 0.50:
-                                        return f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                        return f"KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                                     elif confidence >= 0.30:
-                                        return f"⚠️ CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
+                                        return f"CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
                                     else:
-                                        return f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
+                                        return f"QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
                                 
                                 elif event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
-                                    return f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                    return f"BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
                                 
                                 else:
-                                    return f"🔍 THEO DÕI: {vietnamese_caption} - Cần đánh giá thêm"
+                                    return f"THEO DÕI: {vietnamese_caption} - Cần đánh giá thêm"
                             else:
                                 logger.warning("⚠️ BLIP returned empty caption")
                         except Exception as e:
@@ -840,19 +840,19 @@ class PostgreSQLHealthcareService:
                                 logger.warning(f"   → Downgrading to NORMAL activity")
                                 
                                 # Return as NORMAL activity instead of FALL warning
-                                result = f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
-                                logger.info(f"✅ Downgraded false positive fall to normal: {result}")
+                                result = f" BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                logger.info(f" Downgraded false positive fall to normal: {result}")
                                 return result
                             
                             # Create full intelligent action message with medical context
                             if event_type in ['abnormal_behavior', 'seizure']:
                                 if confidence >= 0.50:
-                                    result = f"🆘 KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
-                                    logger.info(f"🚨 Generated seizure action: {result}")
+                                    result = f" KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                    logger.info(f" Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
-                                    result = f"⚠️ CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
-                                    logger.info(f"⚠️ Generated seizure warning action: {result}")
+                                    result = f" CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
+                                    logger.info(f" Generated seizure warning action: {result}")
                                     return result
                                 else:
                                     result = f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
@@ -866,52 +866,52 @@ class PostgreSQLHealthcareService:
                                 if confidence >= 0.60:
                                     # CRITICAL: Determine if this is stroke-related
                                     if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                                        result = f"🏥🆘 KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! ⚠️ Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
-                                        logger.info(f"🚨🏥 Generated STROKE WARNING: {result}")
+                                        result = f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
+                                        logger.info(f" Generated STROKE WARNING: {result}")
                                     elif is_lying:
-                                        result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! 🆘 Người đang nằm trên sàn!"
-                                        logger.info(f"🚨 Generated fall emergency with lying position: {result}")
+                                        result = f"KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! Người đang nằm trên sàn!"
+                                        logger.info(f" Generated fall emergency with lying position: {result}")
                                     else:
-                                        result = f"🚨 KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
-                                        logger.info(f"🚨 Generated fall emergency action: {result}")
+                                        result = f"KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
+                                        logger.info(f" Generated fall emergency action: {result}")
                                     return result
                                 elif confidence >= 0.40:
                                     # WARNING: Check for stroke indicators
                                     if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                                        result = f"⚠️ CẢNH BÁO - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - Té chậm {fall_duration:.1f}s - Có dấu hiệu đột quỵ! Cần theo dõi chặt chẽ"
-                                        logger.info(f"⚠️🏥 Generated STROKE WARNING (slow collapse): {result}")
+                                        result = f"CẢNH BÁO - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - Té chậm {fall_duration:.1f}s - Có dấu hiệu đột quỵ! Cần theo dõi chặt chẽ"
+                                        logger.info(f" Generated STROKE WARNING (slow collapse): {result}")
                                     # Check for bending posture (also stroke indicator)
                                     elif is_bending:
-                                        result = f"⚠️ CẢNH BÁO - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - Phát hiện tư thế cúi người bất thường - Có dấu hiệu đột quỵ! Cần theo dõi chặt chẽ"
-                                        logger.info(f"⚠️🏥 Generated STROKE WARNING (bending posture): {result}")
+                                        result = f"CẢNH BÁO - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - Phát hiện tư thế cúi người bất thường - Có dấu hiệu đột quỵ! Cần theo dõi chặt chẽ"
+                                        logger.info(f" Generated STROKE WARNING (bending posture): {result}")
                                     # Other risky postures
                                     elif is_unstable:
-                                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - 🔴 TƯ THẾ MẤT CÂN BẰNG - Có nguy cơ té cao! Cần theo dõi sát"
-                                        logger.info(f"⚠️ Generated fall warning with unstable posture: {result}")
+                                        result = f"CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - TƯ THẾ MẤT CÂN BẰNG - Có nguy cơ té cao! Cần theo dõi sát"
+                                        logger.info(f" Generated fall warning with unstable posture: {result}")
                                     elif is_crouching:
-                                        result = f"⚠️ CẢNH BÁO: {vietnamese_caption} - Tư thế ngồi xổm - Kiểm tra xem có cần hỗ trợ"
-                                        logger.info(f"⚠️ Generated crouching warning: {result}")
+                                        result = f"CẢNH BÁO: {vietnamese_caption} - Tư thế ngồi xổm - Kiểm tra xem có cần hỗ trợ"
+                                        logger.info(f" Generated crouching warning: {result}")
                                     else:
-                                        result = f"⚠️ CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi"
-                                        logger.info(f"⚠️ Generated fall warning action: {result}")
+                                        result = f"CẢNH BÁO TÉ NGÃ: {vietnamese_caption} - Cần theo dõi"
+                                        logger.info(f" Generated fall warning action: {result}")
                                     return result
                                 else:
                                     # OBSERVE: Pre-fall risk indicators
                                     if is_bending:
-                                        result = f"📊 THEO DÕI: {vietnamese_caption} - ⚠️ Đang cúi người - Có dấu hiệu nguy cơ té"
-                                        logger.info(f"📊 Generated bending observation: {result}")
+                                        result = f"THEO DÕI: {vietnamese_caption} - Đang cúi người - Có dấu hiệu nguy cơ té"
+                                        logger.info(f" Generated bending observation: {result}")
                                     else:
-                                        result = f"📊 THEO DÕI: {vietnamese_caption} - Quan sát"
-                                        logger.info(f"📊 Generated fall observation action: {result}")
+                                        result = f"THEO DÕI: {vietnamese_caption} - Quan sát"
+                                        logger.info(f" Generated fall observation action: {result}")
                                     return result
                             elif event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
                                 # NORMAL: Daily activities with descriptive captions
-                                result = f"✅ BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
-                                logger.info(f"✅ Generated normal activity caption: {result}")
+                                result = f"BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                logger.info(f" Generated normal activity caption: {result}")
                                 return result
                             else:
                                 # UNKNOWN/OTHER: General observation with caption
-                                result = f"🔍 THEO DÕI: {vietnamese_caption} - Cần đánh giá thêm"
+                                result = f"THEO DÕI: {vietnamese_caption} - Cần đánh giá thêm"
                                 logger.info(f"🔍 Generated unknown event caption: {result}")
                                 return result
                     else:
@@ -930,33 +930,33 @@ class PostgreSQLHealthcareService:
                 
                 if confidence >= 0.60:
                     if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                        return f"🏥🆘 KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: Phát hiện té chậm ({fall_duration:.1f}s) - YÊU CẦU CẤP CỨU 115 NGAY! ⚠️ Dấu hiệu đột quỵ!"
+                        return f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: Phát hiện té chậm ({fall_duration:.1f}s) - YÊU CẦU CẤP CỨU 115 NGAY! Dấu hiệu đột quỵ!"
                     else:
-                        return f"🚨 KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
+                        return f"KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
                 elif confidence >= 0.40:
-                    return f"⚠️ CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Cần kiểm tra ngay"
+                    return f"CẢNH BÁO TÉ NGÃ: Phát hiện té ngã - Cần kiểm tra ngay"
                 else:
-                    return f"📊 THEO DÕI: Nghi ngờ té ngã hoặc tư thế nguy hiểm - Quan sát chặt chẽ"
+                    return f"THEO DÕI: Nghi ngờ té ngã hoặc tư thế nguy hiểm - Quan sát chặt chẽ"
                     
             elif event_type in ['abnormal_behavior', 'seizure']:
                 if confidence >= 0.50:
-                    return f"🆘 KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                    return f"KHẨN CẤP - CO GIẬT: Phát hiện co giật nghiêm trọng - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
                 elif confidence >= 0.30:
-                    return f"⚠️ CẢNH BÁO CO GIẬT: Phát hiện co giật - Cần theo dõi chặt chẽ"
+                    return f"CẢNH BÁO CO GIẬT: Phát hiện co giật - Cần theo dõi chặt chẽ"
                 else:
-                    return f"📊 QUAN SÁT: Nghi ngờ co giật - Tiếp tục theo dõi"
+                    return f"QUAN SÁT: Nghi ngờ co giật - Tiếp tục theo dõi"
             
             elif event_type in ['normal_activity', 'walking', 'sitting', 'standing']:
                 # NORMAL: Simple description for daily activities
                 motion_level = context.get('motion_level', 0) if context else 0
                 if motion_level > 0.05:
-                    return f"✅ BÌNH THƯỜNG: Hoạt động di chuyển (cường độ: {motion_level:.2f}) - Trạng thái tốt"
+                    return f"BÌNH THƯỜNG: Hoạt động di chuyển (cường độ: {motion_level:.2f}) - Trạng thái tốt"
                 else:
-                    return f"✅ BÌNH THƯỜNG: Hoạt động tĩnh tại (cường độ: {motion_level:.2f}) - Trạng thái ổn định"
+                    return f"BÌNH THƯỜNG: Hoạt động tĩnh tại (cường độ: {motion_level:.2f}) - Trạng thái ổn định"
                     
             else:
                 # UNKNOWN/OTHER: General observation
-                return f"🔍 THEO DÕI: Sự kiện {event_type} - Cần đánh giá và quan sát thêm"
+                return f"THEO DÕI: Sự kiện {event_type} - Cần đánh giá và quan sát thêm"
                 
         except Exception as e:
             logger.error(f"❌ Error generating intelligent action: {e}")

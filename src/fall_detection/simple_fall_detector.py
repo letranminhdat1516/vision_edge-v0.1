@@ -15,12 +15,12 @@ class SimpleFallDetector:
     Uses lightweight approach without AI models.
     """
     
-    def __init__(self, confidence_threshold=0.28):  # CÂN BẰNG 0.20→0.35→0.28: vừa detect được vừa tránh false positive
+    def __init__(self, confidence_threshold=0.40):  # TĂNG 0.28→0.40: giảm false positive khi ngồi xuống
         """
         Initialize simplified fall detector.
         
         Args:
-            confidence_threshold: Minimum confidence for fall detection (0.28 = balanced sweet spot)
+            confidence_threshold: Minimum confidence for fall detection (0.40 = balanced sweet spot)
         """
         self.confidence_threshold = confidence_threshold
         self.previous_frame = None
@@ -307,14 +307,13 @@ class SimpleFallDetector:
                 }
             
             # 🧘 PRIORITY CHECK 2: SMALL POSTURE ADJUSTMENT (điều chỉnh tư thế nhỏ)
-            # Movement nhỏ (<40px) thường là cúi người, xê dịch tư thế, KHÔNG phải té ngã thật
-            # 🔧 GIẢM 100px → 40px: Log cho thấy té thật có vertical=50-80px bị reject sai!
-            # Buffer 5 frames (0.15s) chỉ capture được ~50-80px movement
+            # Movement nhỏ (<60px) thường là cúi người, xê dịch tư thế, KHÔNG phải té ngã thật
+            # 🔧 TĂNG 40px → 60px: Giảm false positive khi ngồi xuống
             # 
             # ⚠️ BYPASS: TÉ NGANG (sideways fall) có vertical nhỏ nhưng horizontal + aspect change lớn
             # Điều kiện bypass: horizontal > 40px + aspect_change > 1.2 + final_aspect > 1.4
             is_moving_downward = center2_y > center1_y
-            has_small_downward_movement = vertical_movement < 40 and is_moving_downward
+            has_small_downward_movement = vertical_movement < 60 and is_moving_downward
             
             # 🔥 CHECK FOR SIDEWAYS FALL PATTERN - BYPASS posture adjustment filter
             is_sideways_fall_pattern = (
@@ -431,13 +430,13 @@ class SimpleFallDetector:
             
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
-            # 🎯 GIẢM 80→50px: Log cho thấy té thật có vertical=53px bị bỏ lỡ!
+            # 🎯 TĂNG 50→70px: Giảm false positive khi ngồi xuống
             
             # 🔍 Log STRATEGY 0 check
-            if vertical_movement > 40:  # Log khi gần threshold
-                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >50), horizontal={horizontal_movement:.1f}px, downward={center2_y > center1_y}")
+            if vertical_movement > 50:  # Log khi gần threshold
+                log.info(f"🔍 STRATEGY 0 CHECK: vertical={vertical_movement:.1f}px (need >70), horizontal={horizontal_movement:.1f}px, downward={center2_y > center1_y}")
             
-            if vertical_movement > 50 and center2_y > center1_y:  # GIẢM 80→50px: NHẠY HƠN để detect fall thật
+            if vertical_movement > 70 and center2_y > center1_y:  # TĂNG 50→70px: GIẢM FALSE POSITIVE
                 # 🚫 HORIZONTAL MOVEMENT FILTER: Reject WALKING/MOVING ACROSS
                 # Nếu horizontal > vertical = người đi ngang, KHÔNG PHẢI TÉ NGÃ!
                 # Té ngã thật: vertical >> horizontal (rơi xuống dưới)
@@ -535,11 +534,12 @@ class SimpleFallDetector:
                 # Falling: aspect >= 1.2 (horizontal, width >= height)
                 final_aspect_ratio = aspect_ratio2
                 
-                # 🔧 GIẢM SITTING FILTER: Chỉ reject khi ở GIỮA frame (< 70%)
-                # Log cho thấy té thật ở 74% bị reject sai!
-                # Position < 70% = đang ngồi/đứng ở giữa frame
-                # Position >= 70% = có thể đang té xuống sàn
-                is_sitting_or_squatting = (final_position_ratio < 0.70) and (final_aspect_ratio < 1.0)
+                # 🔧 TĂNG SITTING FILTER: Reject khi ở DƯỚI 80% frame VÀ aspect < 1.2
+                # Log cho thấy ngồi xuống thường ở 60-80% và aspect < 1.2
+                # Té thật thường kết thúc ở > 85% và aspect >= 1.2 (nằm ngang)
+                # Position < 80% VÀ aspect < 1.2 = đang NGỒI/ĐỨNG
+                # Position >= 80% HOẶC aspect >= 1.2 = có thể đang té xuống sàn
+                is_sitting_or_squatting = (final_position_ratio < 0.80) and (final_aspect_ratio < 1.2)
                 
                 if is_sitting_or_squatting:  # Vị trí < 70% VÀ aspect < 1.0 = đang NGỒI/ĐỨNG
                     # 🔄 CHECK REPEATED SITTING PATTERN (ngồi-đứng-ngồi-đứng)
