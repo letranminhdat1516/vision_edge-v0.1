@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 class FallDetectionTest:
     """Test Fall Detection với video - Chi tiết từng frame"""
     
-    def __init__(self, video_input: str = "chung", slow_mode: bool = False, fast_mode: bool = False, realtime_mode: bool = False):
+    def __init__(self, video_input: str = "chung", slow_mode: bool = False, fast_mode: bool = False, realtime_mode: bool = False, start_frame: int = None, end_frame: int = None):
         self.script_dir = Path(__file__).parent
         self.resource_folder = self.script_dir / "resource"
         
@@ -68,6 +68,8 @@ class FallDetectionTest:
         self.slow_mode = slow_mode  # Chậm để phân tích
         self.fast_mode = fast_mode  # Nhanh, không hiển thị
         self.realtime_mode = realtime_mode  # Sync với video FPS thật
+        self.start_frame = start_frame  # Frame bắt đầu (optional)
+        self.end_frame = end_frame  # Frame kết thúc (optional)
         
         # Statistics
         self.stats = {
@@ -305,6 +307,8 @@ class FallDetectionTest:
         print(f"💾 Output: {self.output_folder}")
         print(f"🐌 Slow mode: {self.slow_mode}")
         print(f"🚀 Fast mode: {self.fast_mode}")
+        if self.start_frame is not None or self.end_frame is not None:
+            print(f"🎬 Frame range: {self.start_frame or 0} - {self.end_frame or 'end'}")
         print("="*70 + "\n")
         
         if not self.initialize():
@@ -324,21 +328,31 @@ class FallDetectionTest:
         total_frames = camera.total_frames
         video_fps = camera.video_fps
         
+        # Determine frame range
+        start = self.start_frame or 0
+        end = self.end_frame or total_frames
+        
         print(f"▶️ Video: {total_frames} frames, {video_fps:.1f} FPS")
+        print(f"▶️ Processing frames: {start} to {end}")
         print(f"⌨️ Controls: Q=Quit, SPACE=Pause, S=Save frame")
         print("-"*70 + "\n")
+        
+        # Seek to start frame if needed (fast seek using OpenCV)
+        if start > 0:
+            print(f"⏩ Seeking to frame {start}...")
+            camera.cap.set(cv2.CAP_PROP_POS_FRAMES, start)
         
         # Create window if not fast mode
         if not self.fast_mode:
             cv2.namedWindow('Fall Detection Test', cv2.WINDOW_NORMAL)
         
         # Process loop
-        frame_number = 0
+        frame_number = start
         paused = False
         start_time = time.time()
         
         try:
-            while True:
+            while frame_number < end:
                 if not paused:
                     frame_start_time = time.time()  # Track frame processing time
                     frame = camera.get_frame()
@@ -556,13 +570,17 @@ def main():
     parser.add_argument('--slow', action='store_true', help='Slow mode (10 FPS) for analysis')
     parser.add_argument('--fast', action='store_true', help='Fast mode (no display)')
     parser.add_argument('--realtime', action='store_true', help='Realtime mode (sync with video FPS)')
+    parser.add_argument('--start', type=int, default=None, help='Start frame number')
+    parser.add_argument('--end', type=int, default=None, help='End frame number')
     args = parser.parse_args()
     
     tester = FallDetectionTest(
         video_input=args.video,
         slow_mode=args.slow,
         fast_mode=args.fast,
-        realtime_mode=args.realtime
+        realtime_mode=args.realtime,
+        start_frame=args.start,
+        end_frame=args.end
     )
     tester.run()
 

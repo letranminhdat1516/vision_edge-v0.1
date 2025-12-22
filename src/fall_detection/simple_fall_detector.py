@@ -310,10 +310,20 @@ class SimpleFallDetector:
             # Movement nhỏ (<40px) thường là cúi người, xê dịch tư thế, KHÔNG phải té ngã thật
             # 🔧 GIẢM 100px → 40px: Log cho thấy té thật có vertical=50-80px bị reject sai!
             # Buffer 5 frames (0.15s) chỉ capture được ~50-80px movement
+            # 
+            # ⚠️ BYPASS: TÉ NGANG (sideways fall) có vertical nhỏ nhưng horizontal + aspect change lớn
+            # Điều kiện bypass: horizontal > 40px + aspect_change > 1.2 + final_aspect > 1.4
             is_moving_downward = center2_y > center1_y
             has_small_downward_movement = vertical_movement < 40 and is_moving_downward
             
-            if has_small_downward_movement:
+            # 🔥 CHECK FOR SIDEWAYS FALL PATTERN - BYPASS posture adjustment filter
+            is_sideways_fall_pattern = (
+                horizontal_movement > 40 and  # Horizontal movement đáng kể
+                aspect_change > 1.2 and  # Aspect tăng đáng kể (đổi tư thế)
+                aspect_ratio2 > 1.4  # Kết thúc ở tư thế nằm ngang
+            )
+            
+            if has_small_downward_movement and not is_sideways_fall_pattern:
                 log.info(f"🧘 Rejected POSTURE ADJUSTMENT: vertical={vertical_movement:.1f}px downward (<40px threshold)")
                 log.info(f"   Small movement: likely bending/adjusting posture, not falling")
                 
@@ -324,6 +334,54 @@ class SimpleFallDetector:
                     'category': 'posture-adjustment',
                     'method': 'small_movement_filtered'
                 }
+            
+            # 🔥 EARLY CHECK: SIDEWAYS FALL DETECTION (TÉ NGANG)
+            # Phải check SỚM trước các filter khác vì vertical nhỏ sẽ bị reject
+            if is_sideways_fall_pattern:
+                log.info(f"🔍 SIDEWAYS FALL CANDIDATE: horiz={horizontal_movement:.1f}px, vert={vertical_movement:.1f}px")
+                log.info(f"   aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f} (change={aspect_change:.2f}x)")
+                
+                # 🚫 REJECT: Walking sideways - aspect không thay đổi nhiều + vẫn đứng
+                is_walking_sideways = (aspect_change < 1.3 and aspect_ratio2 < 1.5 and vertical_movement < 15)
+                
+                if is_walking_sideways:
+                    log.info(f"🚶 Rejected WALKING SIDEWAYS: aspect_change={aspect_change:.2f}x < 1.3, final_aspect={aspect_ratio2:.2f} < 1.5")
+                else:
+                    # 🚨 DANGER COOLDOWN CHECK cho sideways fall
+                    current_time = time.time()
+                    time_since_last_danger = current_time - self.last_danger_fall_time
+                    
+                    if time_since_last_danger < self.danger_cooldown:
+                        log.info(f"⏰ Rejected SIDEWAYS FALL COOLDOWN: last_danger={time_since_last_danger:.1f}s ago (need >{self.danger_cooldown}s)")
+                    else:
+                        # Calculate confidence for sideways fall
+                        sideways_conf = 0.55  # Base confidence
+                        sideways_conf += min((aspect_change - 1.2) * 0.25, 0.15)  # Aspect change bonus
+                        sideways_conf += min(horizontal_movement / 150, 0.15)  # Horizontal movement bonus
+                        sideways_conf += min(vertical_movement / 80, 0.10)  # Some vertical bonus
+                        sideways_conf = min(0.90, sideways_conf)  # Cap at 0.90
+                        
+                        if sideways_conf >= 0.50:
+                            log.warning(f"🚨 SIDEWAYS FALL DETECTED (TÉ NGANG)!")
+                            log.warning(f"   horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px")
+                            log.warning(f"   aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f} (change={aspect_change:.2f}x)")
+                            log.warning(f"   confidence={sideways_conf:.3f}")
+                            
+                            # Update cooldown
+                            self.last_danger_fall_time = current_time
+                            log.info(f"⏰ DANGER cooldown started: next event allowed after {self.danger_cooldown}s")
+                            
+                            return {
+                                'fall_detected': True,
+                                'confidence': sideways_conf,
+                                'angle': 90.0,  # Horizontal = 90 degrees
+                                'category': 'fall',
+                                'method': 'sideways_fall',
+                                'fall_type': 'sideways_fall',
+                                'fall_duration': 0.0,
+                                'fall_velocity': horizontal_movement,
+                                'alert_level': 'DANGER'
+                            }
             
             # 🛌 PRIORITY CHECK 3: SLOW LYING DOWN (nằm từ từ xuống)
             # Detect controlled descent (ngồi xuống/nằm xuống có kiểm soát) vs rapid fall (té ngã)
@@ -693,46 +751,8 @@ class SimpleFallDetector:
                         self.fall_start_time = None
                         self.fall_start_position = None
             
-            # 🔥 NEW STRATEGY: HORIZONTAL/SIDEWAYS FALL (TÉ NGANG)
-            # Phát hiện khi người té ngã sang bên (không phải té xuống dưới)
-            # Đặc điểm: horizontal > vertical, aspect thay đổi lớn, vẫn có vertical movement
-            # 
-            # TÉ NGANG vs ĐI NGANG:
-            # - Té ngang: aspect TĂNG NHIỀU (>1.4), kết thúc ở tư thế NẰM (aspect > 1.5)
-            # - Đi ngang: aspect KHÔNG ĐỔI (~1.0), vẫn đứng sau khi di chuyển
-            
-            if (horizontal_movement > 80 and  # Di chuyển ngang đáng kể (>80px)
-                horizontal_movement > vertical_movement and  # Horizontal dominant
-                aspect_change > 1.4 and  # Aspect tăng nhiều (từ đứng → nằm)
-                aspect_ratio2 > 1.5 and  # Kết thúc ở tư thế NẰM NGANG
-                aspect_ratio1 < 1.3):  # Bắt đầu từ tư thế ĐỨNG
-                
-                # 🚫 REJECT: Nếu vertical quá nhỏ và aspect không tăng đủ = đi ngang
-                if vertical_movement < 20 and aspect_change < 1.6:
-                    log.info(f"🚶 Rejected WALKING SIDEWAYS: horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px, aspect_change={aspect_change:.2f}x")
-                else:
-                    # Calculate confidence for horizontal fall
-                    horizontal_fall_conf = min(0.85, 0.50 + 
-                        (aspect_change - 1.4) * 0.2 +  # Aspect change bonus
-                        min(horizontal_movement / 200, 0.15) +  # Horizontal movement bonus
-                        min(vertical_movement / 100, 0.10))  # Some vertical bonus
-                    
-                    if horizontal_fall_conf >= 0.55:
-                        log.warning(f"🚨 HORIZONTAL FALL DETECTED (TÉ NGANG)!")
-                        log.warning(f"   horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px")
-                        log.warning(f"   aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f} (change={aspect_change:.2f}x)")
-                        log.warning(f"   confidence={horizontal_fall_conf:.3f}")
-                        
-                        return {
-                            'fall_detected': True,
-                            'confidence': horizontal_fall_conf,
-                            'angle': 90.0,  # Horizontal = 90 degrees
-                            'category': 'fall',
-                            'method': 'horizontal_fall',
-                            'fall_type': 'sideways_fall',
-                            'fall_duration': 0.0,
-                            'fall_velocity': horizontal_movement  # Use horizontal as velocity
-                        }
+            # NOTE: SIDEWAYS FALL detection đã được xử lý ở PRIORITY CHECK 2 (trước POSTURE ADJUSTMENT)
+            # Code duplicate đã được xóa để tránh confusion
             
             # STRATEGY 0.5: MODERATE FALL - Cân bằng giữa nhạy và chính xác
             # 🎯 BALANCED: Detect fall thật nhưng TRÁNH NGỐI XUỐNG
