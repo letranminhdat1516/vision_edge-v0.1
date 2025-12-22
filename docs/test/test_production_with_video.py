@@ -56,7 +56,7 @@ class ProductionVideoTest:
     """
     
     def __init__(self, video_input: str = "1", show_display: bool = True, speed: float = 1.0,
-                 no_cooldown: bool = False, skip_frames: int = 1):
+                 no_cooldown: bool = False, skip_frames: int = 1, fast_mode: bool = False):
         self.script_dir = Path(__file__).parent
         self.resource_folder = self.script_dir / "resource"
         
@@ -70,6 +70,8 @@ class ProductionVideoTest:
         self.speed = speed  # 1.0 = normal, 0.5 = slow, 2.0 = fast
         self.no_cooldown = no_cooldown  # Disable all cooldowns for testing
         self.skip_frames = max(1, skip_frames)  # Process every Nth frame (1=all, 2=every 2nd, etc)
+        self.fast_mode = fast_mode  # 🆕 Disable keypoints visualization for SPEED
+        self.preview_mode = False  # 🆕 PREVIEW MODE: Just watch video, no processing
         
         # Output folder
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -97,6 +99,7 @@ class ProductionVideoTest:
         self.fall_detector = None
         self.seizure_detector = None
         self.seizure_predictor = None
+        self.pose_estimator = None  # 🆕 For keypoint visualization
         
         # Detection state (same as production)
         self.last_fall_time = None
@@ -187,6 +190,14 @@ class ProductionVideoTest:
                 warning_threshold=0.55
             )
             print("✅ Seizure predictor initialized")
+            
+            # 5. 🆕 Pose Estimator for keypoint visualization
+            print("🦴 Loading pose estimator for keypoints...")
+            pose_path = PROJECT_ROOT / "yolov8n-pose.pt"
+            if not pose_path.exists():
+                pose_path = Path("yolov8n-pose.pt")
+            self.pose_estimator = YOLO(str(pose_path))
+            print("✅ Pose estimator loaded")
             
             print("="*80 + "\n")
             return True
@@ -433,10 +444,162 @@ class ProductionVideoTest:
         cv2.imwrite(str(filepath), frame)
         logger.info(f"🚨 Alert saved: {filename}")
     
-    def draw_results(self, frame: np.ndarray, result: dict) -> np.ndarray:
+    def get_keypoints(self, frame: np.ndarray) -> list:
+        """🆕 Get keypoints from pose estimator"""
+        if self.pose_estimator is None:
+            return []
+        
+        try:
+            results = self.pose_estimator(frame, conf=0.3, verbose=False)
+            keypoints_list = []
+            
+            for result in results:
+                if hasattr(result, 'keypoints') and result.keypoints is not None:
+                    kpts = result.keypoints.data.cpu().numpy()
+                    for person_kpts in kpts:
+                        keypoints_list.append(person_kpts)
+            
+            return keypoints_list
+        except Exception as e:
+            logger.debug(f"Keypoint extraction error: {e}")
+            return []
+    
+    def draw_keypoints(self, frame: np.ndarray, keypoints_list: list) -> np.ndarray:
+        """🆕 Draw keypoints skeleton on frame"""
+        display = frame.copy()
+        
+        # COCO keypoint connections (skeleton)
+        SKELETON = [
+            (0, 1), (0, 2),  # Nose to eyes
+            (1, 3), (2, 4),  # Eyes to ears
+            (5, 6),  # Shoulders
+            (5, 7), (7, 9),  # Left arm
+            (6, 8), (8, 10),  # Right arm
+            (5, 11), (6, 12),  # Torso
+            (11, 12),  # Hips
+            (11, 13), (13, 15),  # Left leg
+            (12, 14), (14, 16),  # Right leg
+        ]
+        
+        # Colors for different body parts
+        COLORS = {
+            'head': (255, 255, 0),      # Cyan - head
+            'torso': (0, 255, 0),       # Green - torso
+            'left_arm': (255, 0, 255),  # Magenta - left arm
+            'right_arm': (0, 255, 255), # Yellow - right arm  
+            'left_leg': (255, 128, 0),  # Orange - left leg
+            'right_leg': (0, 128, 255), # Light blue - right leg
+        }
+        
+        KEYPOINT_NAMES = [
+            'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
+            'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+            'left_wrist', 'right_wrist', 'left_hip', 'right_hip',
+            'left_knee', 'right_knee', 'left_ankle', 'right_ankle'
+        ]
+        
+        for keypoints in keypoints_list:
+            if len(keypoints) < 17:
+                continue
+            
+            # Draw skeleton connections
+            for i, (start_idx, end_idx) in enumerate(SKELETON):
+                if start_idx >= len(keypoints) or end_idx >= len(keypoints):
+                    continue
+                    
+                start_kpt = keypoints[start_idx]
+                end_kpt = keypoints[end_idx]
+                
+                # Check confidence
+                if start_kpt[2] < 0.3 or end_kpt[2] < 0.3:
+                    continue
+                
+                start_pos = (int(start_kpt[0]), int(start_kpt[1]))
+                end_pos = (int(end_kpt[0]), int(end_kpt[1]))
+                
+                # Color based on body part
+                if i < 4:
+                    color = COLORS['head']
+                elif i == 4:
+                    color = COLORS['torso']
+                elif i < 7:
+                    color = COLORS['left_arm']
+                elif i < 9:
+                    color = COLORS['right_arm']
+                elif i < 12:
+                    color = COLORS['torso']
+                elif i < 14:
+                    color = COLORS['left_leg']
+                else:
+                    color = COLORS['right_leg']
+                
+                cv2.line(display, start_pos, end_pos, color, 2)
+            
+            # Draw keypoints as circles
+            for idx, kpt in enumerate(keypoints):
+                if kpt[2] < 0.3:
+                    continue
+                
+                x, y = int(kpt[0]), int(kpt[1])
+                conf = kpt[2]
+                
+                # Color based on body part
+                if idx < 5:
+                    color = COLORS['head']
+                elif idx < 11:
+                    color = COLORS['torso']
+                else:
+                    color = COLORS['left_leg'] if idx % 2 == 1 else COLORS['right_leg']
+                
+                # Size based on confidence
+                radius = int(4 + conf * 4)
+                cv2.circle(display, (x, y), radius, color, -1)
+                cv2.circle(display, (x, y), radius, (0, 0, 0), 1)
+                
+                # Draw keypoint name for important points
+                if idx in [0, 5, 6, 11, 12, 15, 16]:  # nose, shoulders, hips, ankles
+                    name = KEYPOINT_NAMES[idx][:3].upper()
+                    cv2.putText(display, name, (x+5, y-5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+            
+            # 🆕 Draw aspect ratio info
+            valid_kpts = keypoints[keypoints[:, 2] > 0.3]
+            if len(valid_kpts) >= 5:
+                min_x, min_y = np.min(valid_kpts[:, 0]), np.min(valid_kpts[:, 1])
+                max_x, max_y = np.max(valid_kpts[:, 0]), np.max(valid_kpts[:, 1])
+                w = max_x - min_x
+                h = max_y - min_y
+                aspect_ratio = w / h if h > 0 else 0
+                
+                # Draw bbox around keypoints
+                cv2.rectangle(display, (int(min_x), int(min_y)), (int(max_x), int(max_y)), 
+                             (255, 255, 255), 1)
+                
+                # Aspect ratio text
+                aspect_text = f"AR:{aspect_ratio:.2f}"
+                if aspect_ratio > 1.3:
+                    aspect_color = (0, 0, 255)  # Red = lying
+                    aspect_text += " LYING"
+                elif aspect_ratio < 0.7:
+                    aspect_color = (0, 255, 0)  # Green = standing
+                    aspect_text += " STAND"
+                else:
+                    aspect_color = (255, 255, 0)  # Cyan = transition
+                    aspect_text += " TRANS"
+                
+                cv2.putText(display, aspect_text, (int(min_x), int(min_y) - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, aspect_color, 2)
+        
+        return display
+    
+    def draw_results(self, frame: np.ndarray, result: dict, keypoints_list: list = None) -> np.ndarray:
         """Draw detection results on frame"""
         display_frame = frame.copy()
         h, w = display_frame.shape[:2]
+        
+        # 🆕 Draw keypoints first (background layer)
+        if keypoints_list:
+            display_frame = self.draw_keypoints(display_frame, keypoints_list)
         
         # Draw person bounding boxes
         for person in result['persons']:
@@ -455,55 +618,89 @@ class ProductionVideoTest:
             
             cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, thickness)
         
-        # Info panel (top-left)
-        panel_width = 350
+        # Info panel (top-left) - TĂNG SIZE cho dễ đọc
+        panel_width = 450
+        panel_height = 500
         overlay = display_frame.copy()
-        cv2.rectangle(overlay, (0, 0), (panel_width, 280), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.7, display_frame, 0.3, 0, display_frame)
+        cv2.rectangle(overlay, (0, 0), (panel_width, panel_height), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.8, display_frame, 0.2, 0, display_frame)
         
-        y = 25
-        cv2.putText(display_frame, "PRODUCTION TEST", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        y += 30
+        y = 40
+        cv2.putText(display_frame, "PRODUCTION TEST", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
+        y += 45
         
-        cv2.putText(display_frame, f"Frame: {result['frame_number']}", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y += 22
-        cv2.putText(display_frame, f"Persons: {len(result['persons'])}", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y += 22
-        cv2.putText(display_frame, f"Motion: {result['motion_level']:.3f}", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        y += 30
+        cv2.putText(display_frame, f"Frame: {result['frame_number']}", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        y += 35
+        cv2.putText(display_frame, f"Persons: {len(result['persons'])}", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        y += 35
+        cv2.putText(display_frame, f"Motion: {result['motion_level']:.3f}", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        y += 45
         
         # Fall detection status
-        cv2.putText(display_frame, "FALL DETECTION:", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-        y += 22
+        cv2.putText(display_frame, "FALL:", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
         fall_conf = result.get('fall_confidence', 0.0)
-        fall_color = (0, 0, 255) if result['fall_detected'] else (100, 100, 100)
-        cv2.putText(display_frame, f"  Confidence: {fall_conf:.3f}", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, fall_color, 1)
-        y += 30
+        fall_color = (0, 0, 255) if result['fall_detected'] else (150, 150, 150)
+        cv2.putText(display_frame, f"{fall_conf:.2f}", (120, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, fall_color, 2)
+        y += 40
         
         # Seizure detection status
-        cv2.putText(display_frame, "SEIZURE DETECTION:", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-        y += 22
+        cv2.putText(display_frame, "SEIZURE:", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
         seizure_conf = result.get('seizure_confidence', 0.0)
-        seizure_color = (0, 165, 255) if result['seizure_detected'] else (100, 100, 100)
-        cv2.putText(display_frame, f"  Confidence: {seizure_conf:.3f}", (10, y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, seizure_color, 1)
-        y += 30
+        seizure_color = (0, 165, 255) if result['seizure_detected'] else (150, 150, 150)
+        cv2.putText(display_frame, f"{seizure_conf:.2f}", (180, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, seizure_color, 2)
+        y += 45
         
         # Cooldown status
         cooldown = result.get('cooldown_status', {})
         if cooldown.get('global_blocked'):
-            cv2.putText(display_frame, f"GLOBAL COOLDOWN: {cooldown['global_cooldown_remaining']:.1f}s", 
-                       (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 100, 100), 1)
-        y += 22
+            cv2.putText(display_frame, f"COOLDOWN: {cooldown['global_cooldown_remaining']:.0f}s", 
+                       (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 100, 100), 2)
+            y += 35
         
-        # Event type banner
+        # 🆕 DEBUG INFO - Thêm thông tin chi tiết (FONT LỚN HƠN)
+        cv2.putText(display_frame, "BUFFERS:", (15, y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
+        y += 35
+        
+        # Fall buffer info
+        if self.fall_detector:
+            buffer_size = len(self.fall_detector.frame_buffer)
+            cv2.putText(display_frame, f"Fall: {buffer_size}/5", (15, y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            y += 30
+        
+        # Seizure buffer info  
+        if self.seizure_detector:
+            seizure_buffer = len(self.seizure_detector.frame_buffer)
+            cv2.putText(display_frame, f"Seizure: {seizure_buffer}/10", (15, y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            y += 35
+        
+        # Aspect ratio from keypoints - HIỂN THỊ LỚN
+        if keypoints_list and len(keypoints_list) > 0:
+            kpts = keypoints_list[0]
+            valid_kpts = kpts[kpts[:, 2] > 0.3]
+            if len(valid_kpts) >= 5:
+                min_x, max_x = np.min(valid_kpts[:, 0]), np.max(valid_kpts[:, 0])
+                min_y, max_y = np.min(valid_kpts[:, 1]), np.max(valid_kpts[:, 1])
+                ar = (max_x - min_x) / (max_y - min_y) if (max_y - min_y) > 0 else 0
+                ar_status = "LYING" if ar > 1.3 else ("STAND" if ar < 0.7 else "TRANS")
+                ar_color = (0, 0, 255) if ar > 1.3 else ((0, 255, 0) if ar < 0.7 else (255, 255, 0))
+                cv2.putText(display_frame, f"POSE: {ar_status}", (15, y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, ar_color, 2)
+                y += 30
+                cv2.putText(display_frame, f"AR: {ar:.2f}", (15, y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, ar_color, 2)
+        
+        # Event type banner - FONT LỚN HƠN
         event_type = result['event_type'].upper()
         if event_type == 'FALL':
             banner_color = (0, 0, 255)
@@ -512,23 +709,23 @@ class ProductionVideoTest:
             banner_color = (0, 165, 255)
             banner_text = "!!! SEIZURE DETECTED !!!"
         else:
-            banner_color = (0, 255, 0)
+            banner_color = (0, 100, 0)
             banner_text = "NORMAL"
         
-        # Draw banner at bottom
-        cv2.rectangle(display_frame, (0, h-40), (w, h), banner_color, -1)
-        text_size = cv2.getTextSize(banner_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+        # Draw banner at bottom - LỚN HƠN
+        cv2.rectangle(display_frame, (0, h-60), (w, h), banner_color, -1)
+        text_size = cv2.getTextSize(banner_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
         text_x = (w - text_size[0]) // 2
-        cv2.putText(display_frame, banner_text, (text_x, h-12),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(display_frame, banner_text, (text_x, h-18),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
         
-        # Statistics (bottom-right)
-        stats_x = w - 200
-        stats_y = h - 100
+        # Statistics (bottom-right) - FONT LỚN HƠN
+        stats_x = w - 300
+        stats_y = h - 120
         cv2.putText(display_frame, f"Falls: {self.stats['fall_detections']}", 
-                   (stats_x, stats_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                   (stats_x, stats_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         cv2.putText(display_frame, f"Seizures: {self.stats['seizure_detections']}", 
-                   (stats_x, stats_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                   (stats_x, stats_y + 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
         return display_frame
     
@@ -544,6 +741,8 @@ class ProductionVideoTest:
         print(f"⏩ Speed: {self.speed}x")
         print(f"🔄 Skip frames: {self.skip_frames} (process 1/{self.skip_frames} frames)")
         print(f"⏸️ Cooldown: {'OFF' if self.no_cooldown else 'ON'}")
+        print(f"🚀 Fast mode: {'ON (no keypoints)' if self.fast_mode else 'OFF (with keypoints)'}")
+        print(f"👁️ Preview mode: {'ON (no processing)' if self.preview_mode else 'OFF (full detection)'}")
         print("="*80)
         
         if self.show_display:
@@ -608,12 +807,28 @@ class ProductionVideoTest:
                             break
                         continue
                     
+                    # 🆕 PREVIEW MODE: Skip all processing, just show video
+                    if self.preview_mode:
+                        if self.show_display:
+                            # Just show raw frame with simple overlay
+                            cv2.putText(frame, f"PREVIEW - Frame {frame_number}", (10, 30),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            cv2.imshow("Production Test", frame)
+                        continue
+                    
                     # Process frame using PRODUCTION LOGIC
                     result = self.process_frame(frame, frame_number)
                     
+                    # 🆕 Get keypoints for visualization (ONLY if NOT fast mode)
+                    keypoints_list = []
+                    if not self.fast_mode and frame_number % 5 == 0:  # Every 5 frames if not fast
+                        self._cached_keypoints = self.get_keypoints(frame)
+                    if not self.fast_mode:
+                        keypoints_list = getattr(self, '_cached_keypoints', [])
+                    
                     # Display
                     if self.show_display:
-                        display_frame = self.draw_results(frame, result)
+                        display_frame = self.draw_results(frame, result, keypoints_list)
                         cv2.imshow("Production Test", display_frame)
                     
                     # Progress log
@@ -624,8 +839,9 @@ class ProductionVideoTest:
                               f"Seizures: {self.stats['seizure_detections']} | "
                               f"Motion: {result['motion_level']:.3f}")
                 
-                # Keyboard control
-                wait_time = int(1000 / video_fps / self.speed) if not paused else 100
+                # Keyboard control - FIXED: use waitKey(1) for speed, timing handled by processing
+                wait_time = 1 if self.fast_mode or self.preview_mode else int(1000 / video_fps / self.speed)
+                wait_time = max(1, wait_time) if not paused else 100
                 key = cv2.waitKey(wait_time) & 0xFF
                 
                 if key == ord('q') or key == 27:
@@ -710,6 +926,8 @@ def main():
     parser.add_argument('--speed', type=float, default=1.0, help='Playback speed (0.25-4.0)')
     parser.add_argument('--no-cooldown', action='store_true', help='Disable all cooldowns for testing')
     parser.add_argument('--skip', type=int, default=1, help='Process every Nth frame (1=all, 2=skip 1, 3=skip 2, etc)')
+    parser.add_argument('--fast', action='store_true', help='🆕 FAST MODE: Disable keypoints for normal speed playback')
+    parser.add_argument('--preview', action='store_true', help='🆕 PREVIEW: Just watch video at normal speed, NO detection')
     args = parser.parse_args()
     
     tester = ProductionVideoTest(
@@ -717,8 +935,12 @@ def main():
         show_display=args.show,
         speed=args.speed,
         no_cooldown=args.no_cooldown,
-        skip_frames=args.skip
+        skip_frames=args.skip,
+        fast_mode=args.fast
     )
+    tester.preview_mode = args.preview
+    if args.preview:
+        tester.fast_mode = True  # Preview implies fast
     tester.run()
 
 

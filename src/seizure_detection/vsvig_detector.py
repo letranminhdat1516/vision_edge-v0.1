@@ -81,9 +81,10 @@ class VSViGSeizureDetector:
         self.seizure_cooldown = 45.0  # Tăng lên 45 seconds cooldown - tránh spam
         self.current_seizure_state = False  # Track if currently in seizure
         
-        # 🆕 EXERCISE COOLDOWN - Sau khi detect exercise, không detect seizure trong 30s
+        # 🆕 EXERCISE COOLDOWN - TẮT ĐỂ DETECT SEIZURE TỐT HƠN
         self.last_exercise_detection_time = 0
-        self.exercise_cooldown = 30.0  # 30 giây cooldown sau exercise
+        self.exercise_cooldown = 0.0  # TẮT - không block seizure detection
+        self.enable_exercise_detection = False  # TẮT exercise detection hoàn toàn
         
         # Components
         self.pose_estimator = YOLOv8PoseEstimator(model_size='n')
@@ -943,6 +944,10 @@ class VSViGSeizureDetector:
         Returns:
             bool: True if exercise pattern detected (NOT seizure)
         """
+        # 🆕 Check if exercise detection is enabled
+        if not getattr(self, 'enable_exercise_detection', True):
+            return False  # Skip exercise detection completely
+        
         if len(self.frame_buffer) < 8:
             return False
         

@@ -36,7 +36,7 @@ class SimpleFallDetector:
         
         # 🚨 DANGER EVENT COOLDOWN: Tránh spam fall events liên tiếp
         self.last_danger_fall_time = 0  # Thời điểm fall event DANGER cuối cùng
-        self.danger_cooldown = 40  # 30 giây cooldown cho DANGER events (conf >= 0.60)
+        self.danger_cooldown = 15  # 🔧 FIX v3: 40s→15s cooldown - nếu có ngã thứ 2 ngay sau thì vẫn detect được
         
         # 🪑 REPEATED SITTING PATTERN: Phát hiện ngồi-đứng liên tục (squat exercise)
         self.sitting_events = []  # [(timestamp, position_y), ...]
@@ -260,8 +260,8 @@ class SimpleFallDetector:
             vertical_movement = abs(center2_y - center1_y)
             horizontal_movement = abs(center2_x - center1_x)
             
-            # 🔍 AGGRESSIVE DEBUG LOGGING - Log mọi frame có movement để debug
-            if vertical_movement > 30 or aspect_change > 1.2:  # Log khi có thay đổi đáng kể
+            # 🔍 DEBUG - Chỉ log khi có thay đổi đáng kể
+            if vertical_movement > 30 or aspect_change > 1.2:
                 log.info(f"📊 FALL CHECK: aspect_change={aspect_change:.2f}x (need >1.15 moderate / >1.6 dynamic), vertical={vertical_movement:.1f}px (need >50 moderate / >45 dynamic)")
                 log.info(f"   🔄 Movement: horizontal={horizontal_movement:.1f}px, vertical={vertical_movement:.1f}px, ratio={vertical_movement/(horizontal_movement+1):.2f}")
                 log.info(f"   Aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f}")
@@ -307,14 +307,14 @@ class SimpleFallDetector:
                 }
             
             # 🧘 PRIORITY CHECK 2: SMALL POSTURE ADJUSTMENT (điều chỉnh tư thế nhỏ)
-            # Movement nhỏ (<100px) thường là cúi người, xê dịch tư thế, KHÔNG phải té ngã thật
-            # Té ngã thật: vertical >= 150px (rơi từ đứng xuống sàn)
-            # Cúi người/ngồi xuống: vertical < 100px (chỉ hơi thấp xuống một chút)
+            # Movement nhỏ (<40px) thường là cúi người, xê dịch tư thế, KHÔNG phải té ngã thật
+            # 🔧 GIẢM 100px → 40px: Log cho thấy té thật có vertical=50-80px bị reject sai!
+            # Buffer 5 frames (0.15s) chỉ capture được ~50-80px movement
             is_moving_downward = center2_y > center1_y
-            has_small_downward_movement = vertical_movement < 100 and is_moving_downward
+            has_small_downward_movement = vertical_movement < 40 and is_moving_downward
             
             if has_small_downward_movement:
-                log.info(f"🧘 Rejected POSTURE ADJUSTMENT: vertical={vertical_movement:.1f}px downward (<100px threshold)")
+                log.info(f"🧘 Rejected POSTURE ADJUSTMENT: vertical={vertical_movement:.1f}px downward (<40px threshold)")
                 log.info(f"   Small movement: likely bending/adjusting posture, not falling")
                 
                 return {
@@ -411,12 +411,10 @@ class SimpleFallDetector:
                 bbox_size2 = w2 * h2
                 size_change_ratio = abs(bbox_size2 - bbox_size1) / (bbox_size1 + 1)  # % thay đổi size
                 
-                # Nếu bbox size thay đổi >40% VÀ vertical > 150px = di chuyển depth
-                # VÍ DỤ: bbox từ 1214x849 → 1478x1011 = size tăng 39% (tiến gần camera)
-                #        hoặc ngược lại = size giảm (lùi xa camera)
-                # TĂNG threshold 15%→40% vì log cho thấy té thật có 29-48% size change
+                # 🔧 FIX v2: TĂNG threshold 80%→150% vì log cho thấy té thật có 97-122% size change bị reject!
+                # Chỉ reject khi size thay đổi RẤT LỚN (>150%) = chắc chắn là depth movement
                 # BYPASS: vertical > 400px = té từ rất cao, KHÔNG thể là depth movement
-                is_depth_movement = size_change_ratio > 0.40 and vertical_movement > 150 and vertical_movement < 400
+                is_depth_movement = size_change_ratio > 1.50 and vertical_movement > 150 and vertical_movement < 400
                 
                 if is_depth_movement:
                     log.info(f"🚶 Rejected DEPTH MOVEMENT: bbox_size change={size_change_ratio:.2%}, vertical={vertical_movement:.1f}px")
@@ -479,11 +477,13 @@ class SimpleFallDetector:
                 # Falling: aspect >= 1.2 (horizontal, width >= height)
                 final_aspect_ratio = aspect_ratio2
                 
-                # Position < 95% OR (Position < 98% AND Aspect < 1.2) = SITTING/SQUATTING
-                is_sitting_or_squatting = (final_position_ratio < 0.95) or \
-                                         (final_position_ratio < 0.98 and final_aspect_ratio < 1.2)
+                # 🔧 GIẢM SITTING FILTER: Chỉ reject khi ở GIỮA frame (< 70%)
+                # Log cho thấy té thật ở 74% bị reject sai!
+                # Position < 70% = đang ngồi/đứng ở giữa frame
+                # Position >= 70% = có thể đang té xuống sàn
+                is_sitting_or_squatting = (final_position_ratio < 0.70) and (final_aspect_ratio < 1.0)
                 
-                if is_sitting_or_squatting:  # Vị trí < 95% HOẶC (< 98% VÀ aspect < 1.2) = NGỒI/XỔM
+                if is_sitting_or_squatting:  # Vị trí < 70% VÀ aspect < 1.0 = đang NGỒI/ĐỨNG
                     # 🔄 CHECK REPEATED SITTING PATTERN (ngồi-đứng-ngồi-đứng)
                     # Nếu phát hiện ngồi xuống nhiều lần trong 10s = đang tập squat
                     current_time_check = time.time()
@@ -515,32 +515,31 @@ class SimpleFallDetector:
                         'method': 'sitting_filtered'
                     }
                 
-                # 🧎 BENDING DETECTION: CÚI NGƯỜI (bending down) → WARNING
-                # Người CÚI: aspect < 1.0 (vẫn đứng, height > width) → confidence thấp
-                # Người TÉ: aspect >= 1.0 (nằm ngang, width >= height) → confidence cao
-                if aspect_ratio2 < 1.0:  # Tư thế cuối vẫn ĐỨNG/CÚI
-                    bending_confidence = 0.45  # WARNING level (0.40-0.59)
-                    log.warning(f"🧎 BENDING DETECTED: final_aspect={aspect_ratio2:.2f} < 1.0 (bending, not lying) - WARNING level, conf={bending_confidence}")
-                    
-                    # Update last danger time để tránh spam
-                    self.last_danger_fall_time = current_time
+                # 🧎 BENDING DETECTION: CÚI NGƯỜI (bending down) → KHÔNG PHẢI FALL!
+                # 🔧 FIX v2: Chỉ reject khi aspect < 0.6 (cúi rất sâu, chắc chắn là cúi)
+                # aspect 0.6-1.0 có thể là TÉ VỀ PHÍA TRƯỚC → cho phép detect
+                # aspect < 0.6: chắc chắn là cúi người bình thường → reject
+                if aspect_ratio2 < 0.6:  # 🔧 FIX: 1.0→0.6 - chỉ reject cúi rất sâu
+                    log.info(f"🧎 Rejected DEEP BENDING: final_aspect={aspect_ratio2:.2f} < 0.6 (person deeply bent, NOT falling)")
+                    log.info(f"   Deep bending is NORMAL activity, not a fall")
                     
                     return {
-                        'fall_detected': True,
-                        'confidence': bending_confidence,
+                        'fall_detected': False,
+                        'confidence': 0.0,
                         'angle': 0.0,
-                        'category': 'bending-posture',
-                        'method': 'bending_warning',
-                        'fall_type': 'bending_down',
-                        'alert_level': 'warning'  # Không phải CRITICAL
+                        'category': 'bending-normal',
+                        'method': 'bending_filtered'
                     }
                 
-                # 🔥 FILTER BBOX JITTER: Reject if motion_level is very low (person motionless)
-                # When person is laying still, bbox can jitter 100-200px due to detection variance
-                # Only allow rapid fall detection if there's actual motion in the scene
+                # 🔥 FILTER BBOX JITTER: DISABLED - motion_level không đáng tin cậy
+                # 🔧 FIX v2: Bỏ hẳn filter này vì gây quá nhiều false negatives
+                # motion_level tính trên toàn frame, không phản ánh chuyển động của người
                 motion_str = f"{motion_level:.3f}" if motion_level is not None else "None"
-                if motion_level is not None and motion_level < 0.05:  # Giảm 0.15→0.05: chỉ reject jitter thực sự
-                    log.debug(f"⚠️ Rejected bbox jitter: vertical_movement={vertical_movement:.1f}px but motion_level={motion_str} too low")
+                # DISABLED: filter này reject quá nhiều fall thật
+                # if motion_level is not None and motion_level < 0.001:
+                #     log.debug(f"⚠️ Rejected bbox jitter: vertical_movement={vertical_movement:.1f}px but motion_level={motion_str} too low")
+                if False:  # 🔧 FIX: DISABLED - gây false negatives
+                    log.debug(f"⚠️ [DISABLED] bbox jitter filter")
                     return {
                         'fall_detected': False,
                         'confidence': 0.0,
@@ -585,12 +584,12 @@ class SimpleFallDetector:
                 fall_velocity = total_fall_distance / fall_duration
                 
                 # 🔥 NEW: CONTROLLED DESCENT DETECTION (Nằm xuống chủ động)
-                # Phân biệt: Nằm xuống chủ động (chậm, có kiểm soát) vs Té ngã (nhanh, đột ngột)
-                # - Té ngã thật: velocity > 400 px/s (rất nhanh)
-                # - Nằm xuống chủ động: velocity < 300 px/s (chậm, có kiểm soát)
-                MIN_FALL_VELOCITY = 300  # px/s - tối thiểu để coi là té ngã
+                # 🔧 FIX v2: GIẢM 300→150px/s vì log cho thấy té thật có velocity=163px/s bị reject!
+                # - Té ngã thật: velocity > 150 px/s
+                # - Nằm xuống chủ động: velocity < 150 px/s (rất chậm, có kiểm soát)
+                MIN_FALL_VELOCITY = 150  # 🔧 FIX: 300→150 px/s - tối thiểu để coi là té ngã
                 
-                if fall_velocity < MIN_FALL_VELOCITY and fall_duration > 0.3:
+                if fall_velocity < MIN_FALL_VELOCITY and fall_duration > 0.5:  # 🔧 FIX: duration 0.3→0.5s
                     log.info(f"🧘 Rejected CONTROLLED DESCENT: velocity={fall_velocity:.1f}px/s < {MIN_FALL_VELOCITY}px/s, duration={fall_duration:.2f}s")
                     log.info(f"   Person is LYING DOWN INTENTIONALLY, not falling")
                     # Reset tracking
@@ -608,11 +607,13 @@ class SimpleFallDetector:
                 fall_type = "unknown"
                 severity_multiplier = 1.0
                 
-                if fall_velocity > 500:  # Rất nhanh
+                # 🔧 FIX v3: GIẢM velocity thresholds vì log cho thấy té thật có velocity=128-197px/s bị reject!
+                # Velocity >= 150px/s với duration hợp lý = ngã thật
+                if fall_velocity > 400:  # 🔧 FIX: 500→400px/s - Rất nhanh
                     fall_type = "fast_fall"  # TÉ NHANH - Fall bình thường
                     severity_multiplier = 1.0
                     log.info(f"⚡ FAST FALL DETECTED: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
-                elif fall_velocity > 300 and fall_duration < 1.0:
+                elif fall_velocity >= 150:  # 🔧 FIX: 300→150px/s - Velocity trung bình cũng là ngã
                     fall_type = "moderate_fall"
                     severity_multiplier = 1.1
                     log.info(f"⚠️ MODERATE FALL: duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
@@ -621,8 +622,8 @@ class SimpleFallDetector:
                     severity_multiplier = 1.3  # Tăng severity vì nguy hiểm hơn!
                     log.warning(f"🏥 SLOW COLLAPSE (Possible Stroke): duration={fall_duration:.2f}s, velocity={fall_velocity:.1f}px/s")
                 else:
-                    # Velocity thấp + duration ngắn = có thể là nằm xuống chủ động
-                    log.info(f"🧘 Rejected AMBIGUOUS DESCENT: velocity={fall_velocity:.1f}px/s, duration={fall_duration:.2f}s - unclear if fall or intentional")
+                    # Velocity quá thấp (< 150px/s) + duration ngắn = có thể là nằm xuống chủ động
+                    log.info(f"🧘 Rejected AMBIGUOUS DESCENT: velocity={fall_velocity:.1f}px/s < 150, duration={fall_duration:.2f}s - too slow for fall")
                     self.fall_start_time = None
                     self.fall_start_position = None
                     return {
@@ -639,16 +640,17 @@ class SimpleFallDetector:
                 
                 if downward_confidence >= 0.50:  # GIẢM threshold 0.60→0.50 để dễ detect
                     # 🪑 FINAL CHECK: Nếu là FAST FALL nhưng vẫn đang NGỒI/XỔM
-                    # Check both position and aspect ratio
-                    # Squatting: Position < 95% OR (Position < 98% AND Aspect < 1.2)
+                    # 🔧 FIX v3: Chỉ reject FAST SITTING khi velocity < 600px/s
+                    # Vì log cho thấy ngã thật với velocity=1170px/s vẫn bị reject do position=82.9%
+                    # Velocity >= 600px/s quá cao = chắc chắn là ngã, không thể ngồi xuống với tốc độ đó
                     final_position_ratio_check = center2_y / frame_height
                     final_aspect_check = aspect_ratio2
                     
-                    is_fast_sitting = (final_position_ratio_check < 0.95) or \
-                                     (final_position_ratio_check < 0.98 and final_aspect_check < 1.2)
+                    # 🔧 FIX v3: Thêm velocity check - chỉ reject khi velocity thấp
+                    is_fast_sitting = (fall_velocity < 600 and final_position_ratio_check < 0.85 and final_aspect_check < 1.0)
                     
                     if fall_type == "fast_fall" and is_fast_sitting:
-                        log.info(f"🪑 Rejected FAST SITTING: fast_fall but position={final_position_ratio_check:.1%}, aspect={final_aspect_check:.2f} - Person sitting/squatting quickly, not falling")
+                        log.info(f"🪑 Rejected FAST SITTING: velocity={fall_velocity:.1f}px/s < 600, position={final_position_ratio_check:.1%}, aspect={final_aspect_check:.2f} - slow enough to be sitting")
                         # Reset tracking
                         self.fall_start_time = None
                         self.fall_start_position = None
