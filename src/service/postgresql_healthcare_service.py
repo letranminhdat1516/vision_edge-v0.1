@@ -748,7 +748,7 @@ class PostgreSQLHealthcareService:
                                     
                                     if confidence >= 0.60:
                                         if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                                            return f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
+                                            return f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! - Dấu hiệu đột quỵ!"
                                         else:
                                             return f"KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! Người đang nằm trên sàn!"
                                     elif confidence >= 0.40:
@@ -866,7 +866,7 @@ class PostgreSQLHealthcareService:
                                 if confidence >= 0.60:
                                     # CRITICAL: Determine if this is stroke-related
                                     if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                                        result = f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! Té chậm {fall_duration:.1f}s - Dấu hiệu đột quỵ!"
+                                        result = f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: {vietnamese_caption} - YÊU CẦU CẤP CỨU 115 NGAY! - Dấu hiệu đột quỵ!"
                                         logger.info(f" Generated STROKE WARNING: {result}")
                                     elif is_lying:
                                         result = f"KHẨN CẤP - TÉ NGÃ: {vietnamese_caption} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC! Người đang nằm trên sàn!"
@@ -930,7 +930,7 @@ class PostgreSQLHealthcareService:
                 
                 if confidence >= 0.60:
                     if fall_type == 'slow_collapse' or fall_duration >= 1.0:
-                        return f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: Phát hiện té chậm ({fall_duration:.1f}s) - YÊU CẦU CẤP CỨU 115 NGAY! Dấu hiệu đột quỵ!"
+                        return f"KHẨN CẤP - ĐỘT QUỴ NGHI NGỜ: - YÊU CẦU CẤP CỨU 115 NGAY! Dấu hiệu đột quỵ!"
                     else:
                         return f"KHẨN CẤP - TÉ NGÃ: Phát hiện té ngã nghiêm trọng - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
                 elif confidence >= 0.40:
@@ -1208,10 +1208,12 @@ class PostgreSQLHealthcareService:
             event_type = event_data.get('event_type', '')
             status = event_data.get('status', '')
             
+            # 🔥 FIX: Extract confidence early to avoid UnboundLocalError
+            confidence = event_data.get('confidence', 0.0)
+            
             # Determine status from event data or infer from event type
             if not status:
                 if event_type in ['fall', 'seizure']:
-                    confidence = event_data.get('confidence', 0.0)
                     if confidence >= 0.60:
                         status = 'danger'
                     elif confidence >= 0.40:
@@ -1290,8 +1292,9 @@ class PostgreSQLHealthcareService:
                     logger.info(f"   BLIP only: {blip_caption[:150]}...")
                 
                 # 🚫 BỎ QUA: Nếu có từ "đứng" trong caption → FALSE POSITIVE
+                # 🔥 BYPASS: Nếu fall confidence >= 0.85 thì KHÔNG filter vì BLIP có thể sai khi té sấp
                 has_standing_keyword = 'đứng' in blip_caption_lower
-                if has_standing_keyword:
+                if has_standing_keyword and confidence < 0.85:
                     logger.info(f"🚫 FILTERED: {status.upper()} event with STANDING keyword - NOT saving to DB")
                     logger.info(f"   BLIP Caption: {blip_caption[:100]}...")
                     logger.info(f"   ❌ Reason: Person is STANDING (đứng) - false positive")
@@ -1301,6 +1304,8 @@ class PostgreSQLHealthcareService:
                         'reason': f'{status.upper()} event with STANDING keyword (đứng) - false positive',
                         'description': vietnamese_description
                     }
+                elif has_standing_keyword and confidence >= 0.85:
+                    logger.info(f"⚠️ BYPASS STANDING filter: confidence={confidence:.2f} >= 0.85 - trusting fall detector over BLIP")
                 
                 # 🚫 BỎ QUA: Nếu có từ "quỳ"/"ngã gối"/"xổm" trong caption → KNEELING/SQUATTING (not falling)
                 has_kneeling_keyword = 'quỳ' in blip_caption_lower or 'ngã gối' in blip_caption_lower or 'xổm' in blip_caption_lower or 'ngồi xổm' in blip_caption_lower

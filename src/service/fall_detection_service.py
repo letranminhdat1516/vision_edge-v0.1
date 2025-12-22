@@ -2,7 +2,7 @@ from fall_detection.simple_fall_detector import SimpleFallDetector
 import time
 
 class FallDetectionService:
-    def __init__(self, confidence_threshold=0.15):  # Giảm từ 0.4 xuống 0.25 để nhạy hơn
+    def __init__(self, confidence_threshold=0.40):  # TĂNG 0.15→0.40 để giảm false positive khi ngồi xuống
         self.detector = SimpleFallDetector(confidence_threshold=confidence_threshold)
     
     def detect_fall(self, frame, person=None, timestamp=None, person_bbox=None):

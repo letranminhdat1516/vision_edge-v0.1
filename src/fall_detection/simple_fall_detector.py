@@ -38,6 +38,11 @@ class SimpleFallDetector:
         self.last_danger_fall_time = 0  # Thời điểm fall event DANGER cuối cùng
         self.danger_cooldown = 15  # 🔧 FIX v3: 40s→15s cooldown - nếu có ngã thứ 2 ngay sau thì vẫn detect được
         
+        # 🧍 STANDING UP COOLDOWN: Sau khi đứng dậy, block fall detection 3s
+        # Vì sau đứng dậy, người có thể cúi/nghiêng nhẹ bị detect nhầm là fall
+        self.last_standing_up_time = 0
+        self.standing_up_cooldown = 3  # 3 giây cooldown sau khi đứng dậy
+        
         # 🪑 REPEATED SITTING PATTERN: Phát hiện ngồi-đứng liên tục (squat exercise)
         self.sitting_events = []  # [(timestamp, position_y), ...]
         self.sitting_pattern_window = 10  # 10 giây window
@@ -298,6 +303,10 @@ class SimpleFallDetector:
                 self.fall_start_time = None
                 self.fall_start_position = None
                 
+                # 🧍 UPDATE STANDING UP COOLDOWN
+                self.last_standing_up_time = time.time()
+                log.info(f"⏰ STANDING UP cooldown started: blocking fall detection for {self.standing_up_cooldown}s")
+                
                 return {
                     'fall_detected': False,
                     'confidence': 0.0,
@@ -339,6 +348,19 @@ class SimpleFallDetector:
             if is_sideways_fall_pattern:
                 log.info(f"🔍 SIDEWAYS FALL CANDIDATE: horiz={horizontal_movement:.1f}px, vert={vertical_movement:.1f}px")
                 log.info(f"   aspect: {aspect_ratio1:.2f} → {aspect_ratio2:.2f} (change={aspect_change:.2f}x)")
+                
+                # 🧍 STANDING UP COOLDOWN CHECK cho sideways fall
+                current_time = time.time()
+                time_since_standing_up = current_time - self.last_standing_up_time
+                if time_since_standing_up < self.standing_up_cooldown:
+                    log.info(f"⏰ Rejected SIDEWAYS FALL (STANDING UP COOLDOWN): {time_since_standing_up:.1f}s < {self.standing_up_cooldown}s")
+                    return {
+                        'fall_detected': False,
+                        'confidence': 0.0,
+                        'angle': 0.0,
+                        'category': 'standing-up-cooldown',
+                        'method': 'standing_up_cooldown_filtered'
+                    }
                 
                 # 🚫 REJECT: Walking sideways - aspect không thay đổi nhiều + vẫn đứng
                 is_walking_sideways = (aspect_change < 1.3 and aspect_ratio2 < 1.5 and vertical_movement < 15)
@@ -431,6 +453,20 @@ class SimpleFallDetector:
             # STRATEGY 0: RAPID DOWNWARD MOVEMENT (person falling/dropping)
             # Detect large vertical movement downward - HIGHEST PRIORITY!
             # 🎯 TĂNG 50→70px: Giảm false positive khi ngồi xuống
+            
+            # 🧍 CHECK STANDING UP COOLDOWN: Block fall detection ngay sau khi đứng dậy
+            current_time = time.time()
+            time_since_standing_up = current_time - self.last_standing_up_time
+            if time_since_standing_up < self.standing_up_cooldown:
+                log.info(f"⏰ Blocked by STANDING UP COOLDOWN: {time_since_standing_up:.1f}s < {self.standing_up_cooldown}s")
+                log.info(f"   Person just stood up, ignoring small downward movements")
+                return {
+                    'fall_detected': False,
+                    'confidence': 0.0,
+                    'angle': 0.0,
+                    'category': 'standing-up-cooldown',
+                    'method': 'standing_up_cooldown_filtered'
+                }
             
             # 🔍 Log STRATEGY 0 check
             if vertical_movement > 50:  # Log khi gần threshold
@@ -526,22 +562,23 @@ class SimpleFallDetector:
                 # Nếu vị trí cuối (center2_y) ở giữa frame = NGỒI, không phải TÉ NGÃ
                 # Frame height = dynamic → NGỒI thường ở 40-70% chiều cao
                 # NGỒI XỔM gần sàn → 70-95% chiều cao (chưa nằm hoàn toàn)
-                # TÉ NGÃ thật → người nằm sàn → y >= 90% + aspect >= 1.2 (nằm ngang)
+                # TÉ NGÃ thật → người nằm sàn → y >= 90% + aspect >= 1.4 (nằm ngang)
                 final_position_ratio = center2_y / frame_height
                 
                 # 🔥 ENHANCED: Check aspect ratio for squatting detection
                 # Squatting: aspect < 1.2 (still vertical, height > width)
-                # Falling: aspect >= 1.2 (horizontal, width >= height)
+                # Falling: aspect >= 1.4 (horizontal, width >> height)
                 final_aspect_ratio = aspect_ratio2
                 
-                # 🔧 TĂNG SITTING FILTER: Reject khi ở DƯỚI 80% frame VÀ aspect < 1.2
-                # Log cho thấy ngồi xuống thường ở 60-80% và aspect < 1.2
-                # Té thật thường kết thúc ở > 85% và aspect >= 1.2 (nằm ngang)
-                # Position < 80% VÀ aspect < 1.2 = đang NGỒI/ĐỨNG
-                # Position >= 80% HOẶC aspect >= 1.2 = có thể đang té xuống sàn
-                is_sitting_or_squatting = (final_position_ratio < 0.80) and (final_aspect_ratio < 1.2)
+                # 🔧 FIX v4: ĐẢO NGƯỢC LOGIC - Chỉ CHO PHÉP fall khi CHẮC CHẮN là té
+                # TÉ THẬT: position >= 90% VÀ aspect >= 1.4 (nằm sát sàn + nằm ngang hoàn toàn)
+                # CÒN LẠI: có thể là NGỒI/XỔM → REJECT
+                # 
+                # Logic cũ (SAI): position < 85% AND aspect < 1.3 = sitting → Bypass khi 1 điều kiện đúng
+                # Logic mới (ĐÚNG): Chỉ fall khi position >= 90% VÀ aspect >= 1.4 → Chặt hơn
+                is_definitely_falling = (final_position_ratio >= 0.90) and (final_aspect_ratio >= 1.4)
                 
-                if is_sitting_or_squatting:  # Vị trí < 70% VÀ aspect < 1.0 = đang NGỒI/ĐỨNG
+                if not is_definitely_falling:  # Không chắc chắn là té → REJECT
                     # 🔄 CHECK REPEATED SITTING PATTERN (ngồi-đứng-ngồi-đứng)
                     # Nếu phát hiện ngồi xuống nhiều lần trong 10s = đang tập squat
                     current_time_check = time.time()
@@ -564,7 +601,8 @@ class SimpleFallDetector:
                             'method': 'repeated_sitting_filtered'
                         }
                     
-                    log.info(f"🪑 Rejected SITTING: final_y={center2_y:.1f}px ({final_position_ratio:.1%} < 85% of {frame_height}px) - Person sitting/squatting, not falling")
+                    log.info(f"🪑 Rejected SITTING (NOT DEFINITELY FALL): position={final_position_ratio:.1%} (need >=90%), aspect={final_aspect_ratio:.2f} (need >=1.4)")
+                    log.info(f"   Person is likely sitting/squatting, not falling to ground")
                     return {
                         'fall_detected': False,
                         'confidence': 0.0,
@@ -697,18 +735,22 @@ class SimpleFallDetector:
                 downward_confidence = min(0.95, downward_confidence)  # Cap ở 0.95
                 
                 if downward_confidence >= 0.50:  # GIẢM threshold 0.60→0.50 để dễ detect
-                    # 🪑 FINAL CHECK: Nếu là FAST FALL nhưng vẫn đang NGỒI/XỔM
-                    # 🔧 FIX v3: Chỉ reject FAST SITTING khi velocity < 600px/s
-                    # Vì log cho thấy ngã thật với velocity=1170px/s vẫn bị reject do position=82.9%
-                    # Velocity >= 600px/s quá cao = chắc chắn là ngã, không thể ngồi xuống với tốc độ đó
+                    # 🪑 FINAL CHECK: Chỉ cho phép RAPID FALL khi CHẮC CHẮN là té ngã
+                    # TÉ THẬT: position >= 90% VÀ aspect >= 1.4 (nằm sát sàn + nằm ngang)
+                    # HOẶC velocity >= 600px/s (quá nhanh để là ngồi)
                     final_position_ratio_check = center2_y / frame_height
                     final_aspect_check = aspect_ratio2
                     
-                    # 🔧 FIX v3: Thêm velocity check - chỉ reject khi velocity thấp
-                    is_fast_sitting = (fall_velocity < 600 and final_position_ratio_check < 0.85 and final_aspect_check < 1.0)
+                    # 🔧 FIX v4: Logic nhất quán với STRATEGY 0
+                    # Chỉ CHO PHÉP fall khi: velocity >= 600 HOẶC (position >= 90% VÀ aspect >= 1.4)
+                    is_definitely_rapid_fall = (
+                        fall_velocity >= 600 or  # Velocity quá cao = chắc chắn té
+                        (final_position_ratio_check >= 0.90 and final_aspect_check >= 1.4)  # Nằm sát sàn + nằm ngang
+                    )
                     
-                    if fall_type == "fast_fall" and is_fast_sitting:
-                        log.info(f"🪑 Rejected FAST SITTING: velocity={fall_velocity:.1f}px/s < 600, position={final_position_ratio_check:.1%}, aspect={final_aspect_check:.2f} - slow enough to be sitting")
+                    if not is_definitely_rapid_fall:
+                        log.info(f"🪑 Rejected RAPID SITTING: velocity={fall_velocity:.1f}px/s, position={final_position_ratio_check:.1%} (need >=90%), aspect={final_aspect_check:.2f} (need >=1.4)")
+                        log.info(f"   Not fast enough OR not on ground - likely sitting/squatting")
                         # Reset tracking
                         self.fall_start_time = None
                         self.fall_start_position = None
@@ -716,8 +758,8 @@ class SimpleFallDetector:
                             'fall_detected': False,
                             'confidence': 0.0,
                             'angle': 0.0,
-                            'category': 'fast-sitting',
-                            'method': 'fast_sitting_filtered'
+                            'category': 'rapid-sitting',
+                            'method': 'rapid_sitting_filtered'
                         }
                     
                     log.warning(f"🚨 RAPID FALL DETECTED: type={fall_type}, vertical={vertical_movement:.1f}px, duration={fall_duration:.2f}s, motion={motion_str}, conf={downward_confidence:.3f}")
@@ -763,9 +805,20 @@ class SimpleFallDetector:
                 horizontal_movement < vertical_movement * 1.2 and  # Vertical phải lớn hơn horizontal
                 aspect_ratio1 < 1.3):  # 🚫 REJECT REVERSE: initial pose must be UPRIGHT (not lying)
                 
-                # 🚫 FILTER NGỐI XUỐNG: Nếu aspect không tăng nhiều lắm = chỉ ngồi
-                if aspect_change < 1.35:  # Ngồi xuống thường aspect ~1.2-1.3x
-                    log.info(f"⚠️ Rejected SITTING: vertical={vertical_movement:.1f}px, aspect={aspect_change:.2f}x < 1.35 (likely sitting down)")
+                # 🪑 SITTING FILTER CHO STRATEGY 0.5: Check position + aspect
+                final_position_for_moderate = center2_y / frame_height
+                final_aspect_for_moderate = aspect_ratio2
+                
+                # 🚫 FILTER NGỐI XUỐNG: 
+                # 1. Aspect change không đủ cao (< 1.35)
+                # 2. HOẶC position còn cao (< 85%) VÀ aspect cuối nhỏ (< 1.3) = chưa nằm xuống sàn
+                is_moderate_sitting = (
+                    aspect_change < 1.35 or  # Aspect thay đổi ít = ngồi
+                    (final_position_for_moderate < 0.85 and final_aspect_for_moderate < 1.3)  # Position cao + aspect nhỏ = ngồi
+                )
+                
+                if is_moderate_sitting:
+                    log.info(f"⚠️ Rejected SITTING (STRATEGY 0.5): vertical={vertical_movement:.1f}px, aspect={aspect_change:.2f}x, position={final_position_for_moderate:.1%}, final_aspect={final_aspect_for_moderate:.2f}")
                     return {
                         'fall_detected': False,
                         'confidence': 0.0,

@@ -400,36 +400,8 @@ class ProfessionalVietnameseCaptionPipeline:
                 else:
                     base_caption = base_caption + f" trong {camera_name}"
         
-        medical_additions = []
-        
-        # STEP 3: Detect emergency type - prioritize event_type parameter over filename
-        if event_type:
-            # Use actual event_type (most reliable source)
-            if event_type == 'fall':
-                medical_additions.append("Cảnh báo: Phát hiện ngã đổ")
-            elif event_type in ['seizure', 'abnormal_behavior']:
-                medical_additions.append("Cảnh báo: Phát hiện co giật")
-        else:
-            # Fallback to filename detection (less reliable)
-            if 'fall' in filename:
-                medical_additions.append("Cảnh báo: Phát hiện ngã đổ")
-            elif 'seizure' in filename:
-                medical_additions.append("Cảnh báo: Phát hiện co giật")
-        
-        # Extract confidence (REMOVED - to avoid duplicate confidence display)
-        # if 'conf_' in filename:
-        #     try:
-        #         conf_part = filename.split('conf_')[1].split('.')[0]
-        #         confidence = float(conf_part)
-        #         medical_additions.append(f"- Độ tin cậy: {confidence:.1%}")
-        #     except:
-        #         pass
-        
-        # Combine base caption with medical context
-        if medical_additions:
-            enhanced = f"{base_caption}. {' - '.join(medical_additions)}"
-            return enhanced
-        
+        # REMOVED: medical_additions - cảnh báo đã được thêm ở postgresql_healthcare_service
+        # Chỉ trả về base_caption thuần từ BLIP
         return base_caption
     
     def generate_professional_caption(self, image_path, event_type=None, camera_name=None, confidence=None):
