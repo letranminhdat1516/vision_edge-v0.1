@@ -39,7 +39,7 @@ class VSViGSeizureDetector:
                  pose_model_path: Optional[str] = None,
                  dynamic_order_path: Optional[str] = None,
                  device: str = 'auto',
-                 confidence_threshold: float = 0.80):  # 🔥 CỨNG: Tăng từ 0.65 lên 0.80 - chỉ detect khi thực sự co giật
+                 confidence_threshold: float = 0.70):  # 🔥 
         """
         Initialize VSViG seizure detector
         
