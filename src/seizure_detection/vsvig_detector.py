@@ -509,10 +509,11 @@ class VSViGSeizureDetector:
         """
         Analyze motion patterns for seizure detection - VERY STRICT THRESHOLDS
         
-        🔥 FIX: PHÂN BIỆT RÕ giữa:
+        🔥 IMPROVED FILTER: PHÂN BIỆT RÕ giữa:
         - TẬP THỂ DỤC (exercise): rhythm đều, amplitude LỚN, controlled, SMOOTH
         - LẬT NGƯỜI (rolling): smooth motion, có hướng rõ ràng
-        - CO GIẬT THẬT (seizure): jerky, không đều, TẦN SỐ CAO, amplitude NHỎ
+        - NGỒI/ĐỨNG (sitting/standing): minimal upper body motion, stable position
+        - CO GIẬT THẬT (seizure): jerky, không đều, TẦN SỐ CAO, amplitude NHỎ, TOÀN THÂN
         """
         if keypoint_sequence.shape[0] < 5:  # Cần ít nhất 5 frames
             return 0.0
@@ -526,6 +527,20 @@ class VSViGSeizureDetector:
             
             # Calculate velocity magnitudes
             vel_magnitudes = np.sqrt(np.sum(velocities**2, axis=2))  # (T-1, 15)
+            
+            # 🔥 NEW FILTER 0: SITTING/STANDING DETECTION
+            # Người ngồi/đứng có: upper body ít di chuyển, position ổn định
+            upper_body_joints = [0, 1, 2, 3, 4, 5, 6]  # Head, shoulders, arms
+            lower_body_joints = [7, 8, 9, 10, 11, 12, 13, 14]  # Hips, legs
+            
+            if vel_magnitudes.shape[1] >= 7:
+                upper_body_motion = np.mean(vel_magnitudes[:, :7])
+                lower_body_motion = np.mean(vel_magnitudes[:, 7:]) if vel_magnitudes.shape[1] > 7 else 0
+                
+                # Nếu upper body gần như không di chuyển → đang ngồi/đứng yên
+                if upper_body_motion < 8:
+                    self.logger.debug(f"🪑 SITTING/STANDING detected: upper_body_motion={upper_body_motion:.1f} < 8")
+                    return 0.0
             
             # 🔥 FIX 1: EXERCISE PATTERN DETECTION
             # Tập thể dục có: amplitude LỚN + rhythm ĐỀU + motion SMOOTH
@@ -543,33 +558,48 @@ class VSViGSeizureDetector:
             rhythm_regularity = 1.0 / (1.0 + rhythm_variance / 100.0)  # Higher = more regular
             
             # 🔥 EXERCISE FILTER: High amplitude + regular rhythm = EXERCISE, not seizure
-            is_exercise_pattern = (mean_velocity > 30 and rhythm_regularity > 0.5) or \
-                                  (total_amplitude > 100 and rhythm_regularity > 0.4)
+            is_exercise_pattern = (mean_velocity > 25 and rhythm_regularity > 0.45) or \
+                                  (total_amplitude > 80 and rhythm_regularity > 0.35)
             
             if is_exercise_pattern:
                 self.logger.debug(f"🏋️ EXERCISE PATTERN detected: amplitude={total_amplitude:.1f}, rhythm_reg={rhythm_regularity:.2f}, mean_vel={mean_velocity:.1f}")
                 return 0.0  # Tập thể dục, không phải co giật
             
-            # 🔥 FIX 2: SMOOTH MOTION FILTER - Tăng threshold
+            # 🔥 FIX 2: SMOOTH MOTION FILTER - motion mượt = không phải co giật
             vel_diff = np.diff(vel_magnitudes, axis=0)
             jerkiness = np.mean(np.abs(vel_diff))
             
-            # TĂNG threshold: 20 → 30
-            # Tập thể dục có jerkiness ~10-25, co giật > 35
-            is_smooth_motion = jerkiness < 30
+            # TĂNG threshold: 25 → 35 (co giật phải có jerkiness > 35)
+            is_smooth_motion = jerkiness < 35
             if is_smooth_motion:
-                self.logger.debug(f"🚫 SMOOTH MOTION detected: jerkiness={jerkiness:.1f} < 30")
+                self.logger.debug(f"🚫 SMOOTH MOTION detected: jerkiness={jerkiness:.1f} < 35")
                 return 0.0
             
-            # 🔥 FIX 3: TĂNG THRESHOLDS mạnh hơn
+            # 🔥 NEW FILTER 3: ISOLATED MOTION FILTER
+            # Co giật thật ảnh hưởng TOÀN THÂN, không chỉ 1-2 joints
+            # Nếu chỉ có 1-2 joints di chuyển → không phải co giật
+            joint_motion_threshold = 15  # Threshold để coi là "có di chuyển"
+            active_joints = 0
+            for joint in range(vel_magnitudes.shape[1]):
+                joint_motion = np.mean(vel_magnitudes[:, joint])
+                if joint_motion > joint_motion_threshold:
+                    active_joints += 1
+            
+            # Co giật cần ít nhất 60% joints di chuyển
+            active_ratio = active_joints / vel_magnitudes.shape[1] if vel_magnitudes.shape[1] > 0 else 0
+            if active_ratio < 0.60:
+                self.logger.debug(f"🚫 ISOLATED MOTION detected: only {active_joints}/{vel_magnitudes.shape[1]} joints moving ({active_ratio:.1%})")
+                return 0.0
+            
+            # 🔥 FIX 4: TĂNG THRESHOLDS mạnh hơn
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 100.0) if velocity_variance > 80 else 0.0  # TĂNG: 60→80
+            velocity_score = np.tanh(velocity_variance / 100.0) if velocity_variance > 100 else 0.0  # TĂNG: 80→100
             
             # Acceleration peaks
             accelerations = np.diff(velocities, axis=0)
             acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 120.0) if acceleration_peaks > 90 else 0.0  # TĂNG: 70→90
+            acceleration_score = np.tanh(acceleration_peaks / 120.0) if acceleration_peaks > 100 else 0.0  # TĂNG: 90→100
             
             # Frequency analysis - direction changes
             direction_changes = 0
@@ -578,20 +608,20 @@ class VSViGSeizureDetector:
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 60.0) if direction_changes > 35 else 0.0  # TĂNG: 25→35
+                frequency_score = np.tanh(direction_changes / 60.0) if direction_changes > 40 else 0.0  # TĂNG: 35→40
             else:
                 frequency_score = 0.0
             
             # Overall movement intensity
             total_movement = np.mean(vel_magnitudes)
-            intensity_score = np.tanh(total_movement / 30.0) if total_movement > 20 else 0.0  # TĂNG: 15→20
+            intensity_score = np.tanh(total_movement / 30.0) if total_movement > 25 else 0.0  # TĂNG: 20→25
             
             # Movement spikes
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 60.0) if movement_spikes > 40 else 0.0  # TĂNG: 30→40
+            spike_score = np.tanh(movement_spikes / 60.0) if movement_spikes > 50 else 0.0  # TĂNG: 40→50
             
-            # 🔥 FIX 4: Yêu cầu NHIỀU indicators hơn
-            sensitive_threshold = 0.40  # TĂNG: 0.35→0.40
+            # 🔥 FIX 5: Yêu cầu TẤT CẢ indicators - chặt hơn
+            sensitive_threshold = 0.45  # TĂNG: 0.40→0.45
             indicators = [
                 velocity_score > sensitive_threshold,
                 acceleration_score > sensitive_threshold, 
@@ -601,7 +631,7 @@ class VSViGSeizureDetector:
             ]
             
             active_indicators = sum(indicators)
-            if active_indicators < 4:  # TĂNG: 3→4 indicators cần thiết
+            if active_indicators < 5:  # TĂNG: 4→5 - YÊU CẦU TẤT CẢ 5 INDICATORS
                 return 0.0
             
             # Weighted combination
@@ -617,10 +647,10 @@ class VSViGSeizureDetector:
             frame_count = getattr(self, '_debug_frame_count', 0)
             self._debug_frame_count = frame_count + 1
             if frame_count % 30 == 0:
-                self.logger.info(f"Seizure Scores - Jerk:{jerkiness:.1f}, RhythmReg:{rhythm_regularity:.2f}, Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Active:{active_indicators}")
+                self.logger.info(f"Seizure Scores - Jerk:{jerkiness:.1f}, RhythmReg:{rhythm_regularity:.2f}, Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Active:{active_indicators}/5, ActiveJoints:{active_ratio:.1%}")
             
-            # 🔥 FIX 5: TĂNG threshold cuối cùng
-            if seizure_confidence < 0.60:  # TĂNG: 0.55→0.60
+            # 🔥 FIX 6: TĂNG threshold cuối cùng - phải rất chắc chắn
+            if seizure_confidence < 0.70:  # TĂNG: 0.60→0.70
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)
@@ -796,13 +826,14 @@ class VSViGSeizureDetector:
     
     def _is_person_lying(self, keypoints: np.ndarray) -> tuple:
         """
-        Kiểm tra xem người có đang NẰM hay không (cải thiện phân biệt NẰM vs CÚI vs HÍT ĐẤT)
+        🔥 IMPROVED: Kiểm tra xem người có đang NẰM hay không
         
-        PHÂN BIỆT:
-        - NẰM: body horizontal, head và hip gần cùng level Y, aspect_ratio > 1.4, KHÔNG CÓ vertical motion lặp lại
-        - CÚI: head THẤP hơn hip (Y lớn hơn), đang cúi xuống giúp người khác
-        - ĐỨNG/NGỒI: head CAO hơn hip nhiều
-        - HÍT ĐẤT: body horizontal NHƯNG có vertical motion lặp lại (lên xuống)
+        PHÂN BIỆT CHÍNH XÁC:
+        - NẰM THẬT: body horizontal, head và hip gần cùng level Y, aspect_ratio > 1.4
+        - NGỒI: head CAO hơn hip, aspect_ratio < 1.0
+        - ĐỨNG: head CAO hơn hip nhiều, aspect_ratio < 0.5
+        - CÚI: head THẤP hơn hip (Y lớn hơn), đang cúi xuống
+        - HÍT ĐẤT: body horizontal NHƯNG có vertical motion lặp lại
         
         Args:
             keypoints: Array of shape (15, 3) or (17, 3) with [x, y, confidence]
@@ -812,6 +843,7 @@ class VSViGSeizureDetector:
         """
         is_lying = False
         is_bending = False
+        is_sitting = False
         reasons = []
         confidence = 0.0
         
@@ -822,18 +854,27 @@ class VSViGSeizureDetector:
             # 1. Tính aspect ratio từ keypoints bbox
             aspect_ratio = self._calculate_aspect_ratio_from_keypoints(keypoints)
             
-            if aspect_ratio > 1.5:  # Rõ ràng nằm ngang
+            # 🔥 STRICTER THRESHOLDS
+            if aspect_ratio > 1.8:  # RẤT RÕ RÀNG nằm ngang (TĂNG: 1.5→1.8)
                 is_lying = True
-                confidence += 0.5
-                reasons.append(f"aspect={aspect_ratio:.2f}>1.5")
-            elif aspect_ratio > 1.2:
+                confidence += 0.6
+                reasons.append(f"aspect={aspect_ratio:.2f}>1.8_LYING")
+            elif aspect_ratio > 1.4:  # Có thể nằm (TĂNG: 1.2→1.4)
                 confidence += 0.3
-                reasons.append(f"aspect={aspect_ratio:.2f}>1.2")
-            elif aspect_ratio < 0.6:  # Rõ ràng đứng
-                confidence -= 0.4
-                reasons.append(f"aspect={aspect_ratio:.2f}<0.6_standing")
+                reasons.append(f"aspect={aspect_ratio:.2f}>1.4_maybe_lying")
+            elif aspect_ratio < 0.5:  # RẤT RÕ RÀNG đứng
+                confidence -= 0.6
+                is_sitting = False
+                reasons.append(f"aspect={aspect_ratio:.2f}<0.5_STANDING")
+            elif aspect_ratio < 0.8:  # Có thể đứng hoặc ngồi (GIẢM: 0.6→0.8)
+                confidence -= 0.3
+                is_sitting = True
+                reasons.append(f"aspect={aspect_ratio:.2f}<0.8_sitting_standing")
+            else:
+                # aspect_ratio từ 0.8 đến 1.4 - không chắc chắn
+                reasons.append(f"aspect={aspect_ratio:.2f}_uncertain")
             
-            # 2. Check head-hip position (phân biệt NẰM vs CÚI)
+            # 2. Check head-hip position (phân biệt NẰM vs CÚI vs NGỒI)
             # COCO: 0=nose, 5=L_shoulder, 6=R_shoulder, 11=L_hip, 12=R_hip
             nose = keypoints[0]
             l_shoulder = keypoints[5]
@@ -871,29 +912,49 @@ class VSViGSeizureDetector:
                     bbox_height = np.max(valid_kpts[:, 1]) - np.min(valid_kpts[:, 1])
                     normalized_diff = signed_diff / max(bbox_height, 1)
                     
-                    # CASE 1: Head CAO hơn hip nhiều → ĐỨNG
-                    if normalized_diff > 0.5:
+                    # 🔥 STRICTER THRESHOLDS
+                    # CASE 1: Head CAO hơn hip nhiều → ĐỨNG/NGỒI (TĂNG: 0.5→0.4)
+                    if normalized_diff > 0.4:
                         is_lying = False
-                        confidence -= 0.4
-                        reasons.append(f"standing_diff={normalized_diff:.2f}>0.5")
+                        is_sitting = True
+                        confidence -= 0.5
+                        reasons.append(f"sitting_standing_diff={normalized_diff:.2f}>0.4")
                     
-                    # CASE 2: Head và hip GẦN CÙNG LEVEL → NẰM
-                    elif abs(normalized_diff) < 0.3:
+                    # CASE 2: Head và hip GẦN CÙNG LEVEL → NẰM (GIẢM: 0.3→0.25)
+                    elif abs(normalized_diff) < 0.25:
                         is_lying = True
                         confidence += 0.5
                         reasons.append(f"lying_diff={normalized_diff:.2f}~0")
                     
-                    # CASE 3: Head THẤP hơn hip → CÚI XUỐNG (bending)
-                    elif normalized_diff < -0.15:
+                    # CASE 3: Head THẤP hơn hip → CÚI XUỐNG (bending) (GIẢM: -0.15→-0.1)
+                    elif normalized_diff < -0.1:
                         is_lying = False
                         is_bending = True
                         confidence -= 0.5
-                        reasons.append(f"BENDING_diff={normalized_diff:.2f}<-0.15")
+                        reasons.append(f"BENDING_diff={normalized_diff:.2f}<-0.1")
                     
-                    # CASE 4: Vùng giữa
+                    # CASE 4: Head CAO hơn hip một chút → có thể ngồi
+                    elif normalized_diff > 0.25:
+                        is_sitting = True
+                        confidence -= 0.3
+                        reasons.append(f"maybe_sitting_diff={normalized_diff:.2f}")
+                    
+                    # CASE 5: Vùng giữa - không chắc chắn
                     else:
-                        confidence += 0.1
                         reasons.append(f"uncertain_diff={normalized_diff:.2f}")
+            
+            # 🔥 NEW: Check body angle (angle from vertical)
+            body_angle = self._calculate_body_angle_from_keypoints(keypoints)
+            if body_angle is not None:
+                if body_angle < 30:  # Body gần thẳng đứng
+                    is_lying = False
+                    is_sitting = True
+                    confidence -= 0.4
+                    reasons.append(f"upright_angle={body_angle:.1f}<30")
+                elif body_angle > 70:  # Body gần nằm ngang
+                    is_lying = True
+                    confidence += 0.4
+                    reasons.append(f"horizontal_angle={body_angle:.1f}>70")
             
         except Exception as e:
             self.logger.debug(f"Lying check error: {e}")
@@ -904,23 +965,72 @@ class VSViGSeizureDetector:
         if is_pushup:
             is_lying = False
             is_bending = False
+            is_sitting = False
             confidence = -0.5  # Force NOT lying
             reasons.append("PUSHUP_DETECTED")
         
-        # Final decision
-        if is_bending:
+        # Final decision - STRICTER
+        if is_bending or is_pushup:
             is_lying = False
             confidence = min(confidence, 0)
-        elif is_pushup:
+        elif is_sitting and confidence < 0.6:  # Nếu có dấu hiệu ngồi và không chắc chắn nằm
             is_lying = False
-            confidence = min(confidence, 0)
-        elif confidence >= 0.5:
+            confidence = min(confidence, 0.3)
+        elif confidence >= 0.6:  # TĂNG: 0.5→0.6
             is_lying = True
-        elif confidence <= 0:
+        elif confidence <= 0.1:  # GIẢM: 0→0.1
             is_lying = False
         
         reason_str = " | ".join(reasons) if reasons else "no_data"
         return is_lying, reason_str, max(0, min(confidence, 1.0))
+    
+    def _calculate_body_angle_from_keypoints(self, keypoints: np.ndarray) -> float:
+        """
+        🔥 NEW: Calculate body angle from vertical (0° = standing, 90° = lying)
+        """
+        try:
+            # Get shoulder center
+            l_shoulder = keypoints[5]
+            r_shoulder = keypoints[6]
+            shoulder_y, shoulder_x = None, None
+            
+            if l_shoulder[2] > 0.3 and r_shoulder[2] > 0.3:
+                shoulder_y = (l_shoulder[1] + r_shoulder[1]) / 2
+                shoulder_x = (l_shoulder[0] + r_shoulder[0]) / 2
+            elif l_shoulder[2] > 0.3:
+                shoulder_y, shoulder_x = l_shoulder[1], l_shoulder[0]
+            elif r_shoulder[2] > 0.3:
+                shoulder_y, shoulder_x = r_shoulder[1], r_shoulder[0]
+            
+            # Get hip center
+            l_hip = keypoints[11]
+            r_hip = keypoints[12]
+            hip_y, hip_x = None, None
+            
+            if l_hip[2] > 0.3 and r_hip[2] > 0.3:
+                hip_y = (l_hip[1] + r_hip[1]) / 2
+                hip_x = (l_hip[0] + r_hip[0]) / 2
+            elif l_hip[2] > 0.3:
+                hip_y, hip_x = l_hip[1], l_hip[0]
+            elif r_hip[2] > 0.3:
+                hip_y, hip_x = r_hip[1], r_hip[0]
+            
+            if shoulder_y is None or hip_y is None:
+                return None
+            
+            # Calculate angle from vertical
+            dx = abs(shoulder_x - hip_x)
+            dy = abs(shoulder_y - hip_y)
+            
+            if dy < 1:
+                return 90  # Horizontal body
+            
+            import math
+            angle = math.degrees(math.atan2(dx, dy))
+            return angle
+            
+        except Exception as e:
+            return None
     
     def _detect_pushup_pattern(self) -> bool:
         """

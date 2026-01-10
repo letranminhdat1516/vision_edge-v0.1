@@ -357,13 +357,14 @@ class FallDetector():
 
     def detect_controlled_descent(self, current_pose, prev_pose, time_lapse):
         """
-        Detect if movement is controlled descent (sitting/standing) vs fall.
+        🔥 IMPROVED: Detect if movement is controlled descent (sitting/standing) vs fall.
         
         Characteristics of sitting/standing:
         - Vertical descent is slow and controlled (> 0.5s)
         - Horizontal position remains stable
         - Hip keypoints move downward gradually
         - Final position: hip lower than shoulders (seated position)
+        - Body angle remains relatively upright
         
         Characteristics of falling:
         - Rapid vertical descent (< 0.5s)
@@ -373,6 +374,9 @@ class FallDetector():
         """
         if not prev_pose or not current_pose:
             return False
+        
+        is_controlled = False
+        reasons = []
         
         # 1. CHECK VERTICAL VELOCITY (slow = sitting, fast = falling)
         prev_hip_y = None
@@ -396,7 +400,6 @@ class FallDetector():
             horizontal_movement = abs(curr_hip_x - prev_hip_x)
             
             # 3. CHECK FINAL POSITION (seated vs sprawled)
-            # For sitting: hip lower than shoulders but shoulders still upright
             curr_shoulder_y = None
             if self.LEFT_SHOULDER in current_pose:
                 curr_shoulder_y = current_pose[self.LEFT_SHOULDER][0]
@@ -405,27 +408,172 @@ class FallDetector():
             
             is_seated_position = False
             if curr_shoulder_y is not None:
-                # Seated: hip lower than shoulders, shoulders relatively upright
                 shoulder_hip_distance = abs(curr_shoulder_y - curr_hip_y)
-                is_seated_position = shoulder_hip_distance > 30  # Reasonable distance
+                is_seated_position = shoulder_hip_distance > 30
             
-            # DECISION LOGIC
-            # Sitting/Standing characteristics:
-            # - Slow vertical velocity (< 100 px/s)
-            # - High horizontal stability (< 30 px movement)
-            # - Seated position maintained
-            is_controlled = (
-                vertical_velocity < 100 and  # Slow descent
-                horizontal_movement < 30 and  # Stable horizontally
-                is_seated_position  # In seated position
-            )
+            # 🔥 NEW: CHECK BODY ANGLE (upright vs horizontal)
+            body_angle = self._calculate_body_angle(current_pose)
+            is_upright = body_angle < 45  # Body is relatively upright
+            
+            # 🔥 NEW: CHECK ASPECT RATIO (width/height of keypoints bbox)
+            aspect_ratio = self._calculate_aspect_ratio(current_pose)
+            is_vertical_posture = aspect_ratio < 1.2  # Width < Height = upright
+            
+            # DECISION LOGIC - Multiple conditions for controlled descent
+            slow_velocity = vertical_velocity < 150  # Relaxed threshold
+            stable_horizontal = horizontal_movement < 50  # Relaxed threshold
+            
+            # Any of these combinations indicate controlled descent (NOT fall)
+            if slow_velocity and stable_horizontal:
+                is_controlled = True
+                reasons.append(f"slow_vel={vertical_velocity:.1f}<150")
+            
+            if is_seated_position and is_upright:
+                is_controlled = True
+                reasons.append(f"seated_upright")
+            
+            if is_vertical_posture and stable_horizontal:
+                is_controlled = True
+                reasons.append(f"vertical_posture_ar={aspect_ratio:.2f}")
+            
+            if is_upright and body_angle < 35:
+                is_controlled = True
+                reasons.append(f"upright_angle={body_angle:.1f}<35")
             
             if is_controlled:
-                log.info(f"🪑 Controlled descent detected: v_vel={vertical_velocity:.1f} px/s, h_move={horizontal_movement:.1f} px, seated={is_seated_position}")
+                log.info(f"🪑 Controlled descent detected: {', '.join(reasons)} | v_vel={vertical_velocity:.1f}, h_move={horizontal_movement:.1f}, angle={body_angle:.1f}, ar={aspect_ratio:.2f}")
             
             return is_controlled
         
         return False
+    
+    def _calculate_body_angle(self, pose_dix):
+        """
+        🔥 NEW: Calculate body angle from vertical (0° = standing, 90° = lying)
+        """
+        if not pose_dix:
+            return 45  # Unknown - neutral
+        
+        try:
+            # Get shoulder center and hip center
+            shoulder_y, shoulder_x = None, None
+            hip_y, hip_x = None, None
+            
+            if self.LEFT_SHOULDER in pose_dix and self.RIGHT_SHOULDER in pose_dix:
+                shoulder_y = (pose_dix[self.LEFT_SHOULDER][0] + pose_dix[self.RIGHT_SHOULDER][0]) / 2
+                shoulder_x = (pose_dix[self.LEFT_SHOULDER][1] + pose_dix[self.RIGHT_SHOULDER][1]) / 2
+            elif self.LEFT_SHOULDER in pose_dix:
+                shoulder_y, shoulder_x = pose_dix[self.LEFT_SHOULDER][0], pose_dix[self.LEFT_SHOULDER][1]
+            elif self.RIGHT_SHOULDER in pose_dix:
+                shoulder_y, shoulder_x = pose_dix[self.RIGHT_SHOULDER][0], pose_dix[self.RIGHT_SHOULDER][1]
+            
+            if self.LEFT_HIP in pose_dix and self.RIGHT_HIP in pose_dix:
+                hip_y = (pose_dix[self.LEFT_HIP][0] + pose_dix[self.RIGHT_HIP][0]) / 2
+                hip_x = (pose_dix[self.LEFT_HIP][1] + pose_dix[self.RIGHT_HIP][1]) / 2
+            elif self.LEFT_HIP in pose_dix:
+                hip_y, hip_x = pose_dix[self.LEFT_HIP][0], pose_dix[self.LEFT_HIP][1]
+            elif self.RIGHT_HIP in pose_dix:
+                hip_y, hip_x = pose_dix[self.RIGHT_HIP][0], pose_dix[self.RIGHT_HIP][1]
+            
+            if shoulder_y is None or hip_y is None:
+                return 45
+            
+            # Calculate angle from vertical axis
+            # In image coords: Y increases downward, X increases rightward
+            # Vertical body: shoulder.y < hip.y (shoulder above hip)
+            dx = abs(shoulder_x - hip_x)
+            dy = abs(shoulder_y - hip_y)
+            
+            if dy < 1:
+                return 90  # Horizontal body
+            
+            angle = math.degrees(math.atan2(dx, dy))
+            return angle
+            
+        except Exception as e:
+            log.debug(f"Body angle calculation error: {e}")
+            return 45
+    
+    def _calculate_aspect_ratio(self, pose_dix):
+        """
+        🔥 NEW: Calculate aspect ratio (width/height) of keypoints bounding box
+        - Standing/Sitting: aspect_ratio < 1.0 (taller than wide)
+        - Lying down: aspect_ratio > 1.5 (wider than tall)
+        """
+        if not pose_dix:
+            return 1.0  # Unknown
+        
+        try:
+            all_y = []
+            all_x = []
+            
+            for key in [self.LEFT_SHOULDER, self.RIGHT_SHOULDER, self.LEFT_HIP, self.RIGHT_HIP]:
+                if key in pose_dix:
+                    all_y.append(pose_dix[key][0])
+                    all_x.append(pose_dix[key][1])
+            
+            if len(all_y) < 2 or len(all_x) < 2:
+                return 1.0
+            
+            height = max(all_y) - min(all_y)
+            width = max(all_x) - min(all_x)
+            
+            if height < 1:
+                return 10.0  # Very horizontal
+            
+            return width / height
+            
+        except Exception as e:
+            log.debug(f"Aspect ratio calculation error: {e}")
+            return 1.0
+    
+    def _check_shoulders_above_hips(self, pose_dix):
+        """
+        🔥 NEW: Check if shoulders are above hips (normal upright posture)
+        In image coords: Y increases downward
+        - Shoulders above hips: shoulder_y < hip_y
+        - Shoulders at same level or below: indicates lying down
+        """
+        if not pose_dix:
+            return True  # Assume upright if unknown
+        
+        try:
+            shoulder_y = None
+            hip_y = None
+            
+            # Get average shoulder Y
+            shoulder_ys = []
+            if self.LEFT_SHOULDER in pose_dix:
+                shoulder_ys.append(pose_dix[self.LEFT_SHOULDER][0])
+            if self.RIGHT_SHOULDER in pose_dix:
+                shoulder_ys.append(pose_dix[self.RIGHT_SHOULDER][0])
+            if shoulder_ys:
+                shoulder_y = sum(shoulder_ys) / len(shoulder_ys)
+            
+            # Get average hip Y
+            hip_ys = []
+            if self.LEFT_HIP in pose_dix:
+                hip_ys.append(pose_dix[self.LEFT_HIP][0])
+            if self.RIGHT_HIP in pose_dix:
+                hip_ys.append(pose_dix[self.RIGHT_HIP][0])
+            if hip_ys:
+                hip_y = sum(hip_ys) / len(hip_ys)
+            
+            if shoulder_y is None or hip_y is None:
+                return True  # Assume upright if unknown
+            
+            # Shoulders should be significantly above hips (shoulder_y < hip_y by at least 20px)
+            # If shoulder_y >= hip_y - 20, person might be lying down
+            shoulders_above = shoulder_y < (hip_y - 20)
+            
+            if not shoulders_above:
+                log.debug(f"Shoulders NOT clearly above hips: shoulder_y={shoulder_y:.1f}, hip_y={hip_y:.1f}")
+            
+            return shoulders_above
+            
+        except Exception as e:
+            log.debug(f"Shoulder-hip check error: {e}")
+            return True  # Assume upright if error
 
     def estimate_spinal_vector_score(self, pose):
         pose_dix = {}
@@ -541,16 +689,38 @@ class FallDetector():
                         leaning_angle = self.find_changes_in_angle(pose_dix,
                                                                    inx=t)
 
-                        # 🔥 NEW: PREVENT FALSE POSITIVE - Detect sitting/standing
+                        # 🔥 IMPROVED: PREVENT FALSE POSITIVE - Multiple checks
+                        
+                        # Check 1: Controlled descent (sitting/standing motion)
                         is_sitting_or_standing = self.detect_controlled_descent(
                             pose_dix, 
                             self._prev_data[t][self.POSE_VAL],
                             lapse
                         )
                         
+                        # Check 2: Current body angle - is person still upright?
+                        body_angle = self._calculate_body_angle(pose_dix)
+                        is_still_upright = body_angle < 40  # Less than 40° from vertical
+                        
+                        # Check 3: Aspect ratio - is body shape still vertical?
+                        aspect_ratio = self._calculate_aspect_ratio(pose_dix)
+                        is_vertical_shape = aspect_ratio < 1.3  # Width < 1.3 * Height
+                        
+                        # Check 4: Shoulder-hip relationship - shoulders above hips?
+                        shoulders_above_hips = self._check_shoulders_above_hips(pose_dix)
+                        
+                        # FILTER: Skip if ANY of these indicate NOT a fall
                         if is_sitting_or_standing:
-                            log.info("Detected controlled descent (sitting/standing) - NOT a fall")
-                            continue  # Skip this detection, not a fall
+                            log.info(f"🚫 FALSE POSITIVE: Controlled descent (sitting/standing) - NOT a fall")
+                            continue
+                        
+                        if is_still_upright and is_vertical_shape:
+                            log.info(f"🚫 FALSE POSITIVE: Upright posture (angle={body_angle:.1f}°, ar={aspect_ratio:.2f}) - NOT a fall")
+                            continue
+                        
+                        if shoulders_above_hips and body_angle < 50:
+                            log.info(f"🚫 FALSE POSITIVE: Normal posture (shoulders above hips, angle={body_angle:.1f}°) - NOT a fall")
+                            continue
 
                         # Get leaning_probability by comparing leaning_angle
                         # with fall_factor probability.

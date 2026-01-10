@@ -715,16 +715,28 @@ class PostgreSQLHealthcareService:
                             if vietnamese_caption and len(vietnamese_caption.strip()) > 0:
                                 logger.info(f"✅ BLIP caption generated: {vietnamese_caption}")
                                 
-                                # 🔥 NEW: FALSE POSITIVE FILTER - Check if caption contradicts fall detection
+                                # 🔥 IMPROVED: FALSE POSITIVE FILTER - Multiple checks
                                 caption_lower = vietnamese_caption.lower()
-                                is_sitting_in_caption = any(word in caption_lower for word in ['ngồi', 'sitting', 'seated', 'sat', 'ghế', 'chair', 'sofa'])
-                                is_standing_in_caption = any(word in caption_lower for word in ['đứng', 'standing', 'stood', 'đi bộ', 'walking', 'walks'])
-                                is_lying_in_caption = any(word in caption_lower for word in ['nằm', 'lying', 'on ground', 'on floor', 'ngã', 'fell', 'fallen'])
                                 
-                                # 🚨 CRITICAL: If event_type is 'fall' but caption says sitting/standing (not lying)
-                                # This is a FALSE POSITIVE - downgrade to NORMAL
-                                if event_type == 'fall' and (is_sitting_in_caption or is_standing_in_caption) and not is_lying_in_caption:
-                                    logger.warning(f"🚫 FALSE POSITIVE (path 1): event='fall' but caption='{vietnamese_caption}'")
+                                # Detect normal activities in caption
+                                sitting_words = ['ngồi', 'sitting', 'seated', 'sat', 'ghế', 'chair', 'sofa', 'bàn', 'table', 'desk', 'máy tính', 'computer', 'laptop', 'điện thoại', 'phone']
+                                standing_words = ['đứng', 'standing', 'stood', 'đi bộ', 'walking', 'walks', 'đi', 'walk', 'bước', 'moving', 'di chuyển']
+                                lying_words = ['nằm', 'lying', 'on ground', 'on floor', 'ngã', 'fell', 'fallen', 'sàn', 'mặt đất', 'trên sàn', 'ground']
+                                working_words = ['làm việc', 'working', 'work', 'typing', 'đánh máy', 'xem', 'watching', 'nhìn', 'looking', 'nói chuyện', 'talking', 'gọi điện', 'calling']
+                                
+                                is_sitting = any(word in caption_lower for word in sitting_words)
+                                is_standing = any(word in caption_lower for word in standing_words)
+                                is_lying = any(word in caption_lower for word in lying_words)
+                                is_working = any(word in caption_lower for word in working_words)
+                                
+                                # 🚨 CRITICAL: FALSE POSITIVE DETECTION
+                                # If event_type is 'fall' but caption indicates normal activity
+                                is_normal_activity = (is_sitting or is_standing or is_working) and not is_lying
+                                
+                                if event_type == 'fall' and is_normal_activity:
+                                    logger.warning(f"🚫 FALSE POSITIVE DETECTED: event='fall' but caption indicates normal activity")
+                                    logger.warning(f"   Caption: '{vietnamese_caption}'")
+                                    logger.warning(f"   is_sitting={is_sitting}, is_standing={is_standing}, is_working={is_working}, is_lying={is_lying}")
                                     logger.warning(f"   → Downgrading to NORMAL activity")
                                     return f"BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
                                 
@@ -743,6 +755,12 @@ class PostgreSQLHealthcareService:
                                     return action
                                 
                                 elif event_type == 'fall':
+                                    # 🔥 DOUBLE CHECK: Only proceed if caption confirms lying/fall
+                                    if not is_lying and confidence < 0.80:
+                                        logger.warning(f"🚫 FALL FILTER: Caption does NOT confirm lying, confidence={confidence:.2f}<0.80")
+                                        logger.warning(f"   → Downgrading to OBSERVATION")
+                                        return f"THEO DÕI: {vietnamese_caption} - Cần xác nhận thêm"
+                                    
                                     fall_type = context.get('fall_type') if context else None
                                     fall_duration = context.get('fall_duration', 0) if context else 0
                                     
@@ -818,41 +836,56 @@ class PostgreSQLHealthcareService:
                                 vietnamese_caption = vietnamese_caption.replace('Nằm', 'Ngã')
                                 logger.info(f"🔄 Replaced 'nằm' → 'ngã' in caption: {vietnamese_caption}")
                             
-                            # 🔥 ENHANCED: Detect posture keywords in caption for medical context
+                            # 🔥 IMPROVED: Comprehensive posture analysis from caption
                             caption_lower = vietnamese_caption.lower()
                             
-                            # Posture analysis from caption
+                            # Detect normal activities (NOT fall)
+                            sitting_words = ['ngồi', 'sitting', 'seated', 'sat', 'ghế', 'chair', 'sofa', 'bàn', 'table', 'desk', 'máy tính', 'computer', 'laptop', 'điện thoại', 'phone']
+                            standing_words = ['đứng', 'standing', 'stood', 'đi bộ', 'walking', 'walks', 'đi', 'walk', 'bước', 'moving', 'di chuyển']
+                            working_words = ['làm việc', 'working', 'work', 'typing', 'đánh máy', 'xem', 'watching', 'nhìn', 'looking', 'nói chuyện', 'talking', 'gọi điện', 'calling']
+                            
+                            # Detect lying/fall indicators
+                            lying_words = ['nằm', 'lying', 'on ground', 'on floor', 'ngã', 'fell', 'fallen', 'sàn', 'mặt đất', 'trên sàn', 'ground']
+                            
+                            # Posture analysis
                             is_bending = any(word in caption_lower for word in ['cúi', 'nghiêng', 'bending', 'leaning', 'stooping'])
                             is_crouching = any(word in caption_lower for word in ['ngồi xổm', 'squatting', 'crouching'])
-                            is_lying = any(word in caption_lower for word in ['nằm', 'lying', 'on ground', 'on floor', 'ngã', 'fell', 'fallen'])
+                            is_lying = any(word in caption_lower for word in lying_words)
                             is_unstable = any(word in caption_lower for word in ['mất cân bằng', 'unsteady', 'wobbling', 'swaying'])
+                            is_sitting = any(word in caption_lower for word in sitting_words)
+                            is_standing = any(word in caption_lower for word in standing_words)
+                            is_working = any(word in caption_lower for word in working_words)
                             
-                            # 🔥 NEW: Detect SITTING/STANDING postures - FALSE POSITIVE filter for fall detection
-                            is_sitting = any(word in caption_lower for word in ['ngồi', 'sitting', 'seated', 'sat', 'ghế', 'chair', 'sofa'])
-                            is_standing = any(word in caption_lower for word in ['đứng', 'standing', 'stood', 'đi bộ', 'walking', 'walks'])
+                            # 🚨 CRITICAL FILTER: Comprehensive FALSE POSITIVE detection
+                            is_normal_activity = (is_sitting or is_standing or is_working) and not is_lying
                             
-                            # 🚨 CRITICAL FILTER: If caption says "sitting/standing" but event_type is "fall"
-                            # This is a FALSE POSITIVE - downgrade to NORMAL activity
-                            if event_type == 'fall' and (is_sitting or is_standing) and not is_lying:
-                                logger.warning(f"🚫 FALSE POSITIVE DETECTED: event_type='fall' but caption says sitting/standing!")
+                            if event_type == 'fall' and is_normal_activity:
+                                logger.warning(f"🚫 FALSE POSITIVE DETECTED: event_type='fall' but caption indicates normal activity!")
                                 logger.warning(f"   Caption: {vietnamese_caption}")
-                                logger.warning(f"   is_sitting={is_sitting}, is_standing={is_standing}, is_lying={is_lying}")
+                                logger.warning(f"   is_sitting={is_sitting}, is_standing={is_standing}, is_working={is_working}, is_lying={is_lying}")
                                 logger.warning(f"   → Downgrading to NORMAL activity")
                                 
                                 # Return as NORMAL activity instead of FALL warning
-                                result = f" BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
-                                logger.info(f" Downgraded false positive fall to normal: {result}")
+                                result = f"BÌNH THƯỜNG: {vietnamese_caption} - Hoạt động thường ngày"
+                                logger.info(f"✅ Downgraded false positive fall to normal: {result}")
                                 return result
+                            
+                            # 🔥 ADDITIONAL FILTER: If fall but caption doesn't confirm lying
+                            if event_type == 'fall' and not is_lying and confidence < 0.80:
+                                logger.warning(f"🚫 FALL FILTER: Caption does NOT confirm lying, confidence={confidence:.2f}<0.80")
+                                logger.warning(f"   Caption: {vietnamese_caption}")
+                                logger.warning(f"   → Downgrading to OBSERVATION")
+                                return f"THEO DÕI: {vietnamese_caption} - Cần xác nhận thêm"
                             
                             # Create full intelligent action message with medical context
                             if event_type in ['abnormal_behavior', 'seizure']:
                                 if confidence >= 0.50:
-                                    result = f" KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
-                                    logger.info(f" Generated seizure action: {result}")
+                                    result = f"KHẨN CẤP - CO GIẬT: {vietnamese_caption} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                                    logger.info(f"🚨 Generated seizure action: {result}")
                                     return result
                                 elif confidence >= 0.30:
-                                    result = f" CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
-                                    logger.info(f" Generated seizure warning action: {result}")
+                                    result = f"CẢNH BÁO CO GIẬT: {vietnamese_caption} - Cần theo dõi chặt chẽ"
+                                    logger.info(f"⚠️ Generated seizure warning action: {result}")
                                     return result
                                 else:
                                     result = f"📊 QUAN SÁT: {vietnamese_caption} - Tiếp tục theo dõi"
