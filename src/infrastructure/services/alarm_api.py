@@ -1,14 +1,7 @@
 """
 Alarm API - REST API để trigger/stop alarm độc lập không phụ thuộc lifecycle_state
 
-Có thể integrate vào:
-1. Flask/FastAPI server (nếu muốn chạy riêng Python API)
-2. Hoặc call trực tiếp từ NestJS backend (via child process hoặc HTTP)
 
-Endpoints:
-- POST /api/alarm/trigger - Trigger alarm cho event
-- POST /api/alarm/stop - Stop alarm
-- GET /api/alarm/status - Get alarm status
 """
 
 import json
@@ -40,27 +33,7 @@ class AlarmAPI:
         triggered_by: str = "api",
         reason: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Trigger alarm cho một event cụ thể
-        
-        KHÔNG phụ thuộc vào lifecycle_state - có thể trigger alarm bất cứ lúc nào
-        
-        Args:
-            event_id: ID của event
-            user_id: ID của user
-            camera_id: ID của camera
-            triggered_by: Ai trigger ('api', 'mobile_app', 'admin', etc.)
-            reason: Lý do trigger (optional)
-        
-        Returns:
-            {
-                "success": True/False,
-                "message": "...",
-                "event_id": "...",
-                "alarm_triggered": True/False,
-                "timestamp": "..."
-            }
-        """
+ 
         try:
             if not self.postgresql_service:
                 return {
@@ -127,20 +100,7 @@ class AlarmAPI:
         """
         Stop alarm
         
-        Args:
-            event_id: ID của event (optional - nếu không có sẽ stop all alarms)
-            user_id: ID của user (optional)
-            stopped_by: Ai stop ('api', 'mobile_app', 'admin', etc.)
-            reason: Lý do stop (optional)
-        
-        Returns:
-            {
-                "success": True/False,
-                "message": "...",
-                "event_id": "...",
-                "alarm_stopped": True/False,
-                "timestamp": "..."
-            }
+
         """
         try:
             if not self.postgresql_service:
@@ -205,13 +165,7 @@ class AlarmAPI:
     def get_alarm_status(self) -> Dict[str, Any]:
         """
         Get current alarm status
-        
-        Returns:
-            {
-                "is_playing": True/False,
-                "active_alarms": [...],
-                "timestamp": "..."
-            }
+
         """
         try:
             from infrastructure.services.audio_alert_service import audio_alert_service
@@ -224,6 +178,7 @@ class AlarmAPI:
             return {
                 "success": True,
                 "is_playing": audio_alert_service.is_playing,
+                "event_id": audio_alert_service.current_alarm_event_id,
                 "active_alarms": active_alarms,
                 "audio_backend": audio_alert_service.audio_backend,
                 "volume": audio_alert_service.volume,
@@ -247,8 +202,14 @@ class AlarmAPI:
         reason: Optional[str]
     ) -> bool:
         """Send PostgreSQL NOTIFY to trigger alarm"""
+        conn = None
+        cursor = None
         try:
             conn = self.postgresql_service.get_connection()
+            if not conn:
+                logger.error("❌ Failed to send alarm trigger notification: connection pool exhausted")
+                return False
+            
             cursor = conn.cursor()
             
             payload = json.dumps({
@@ -265,14 +226,20 @@ class AlarmAPI:
             cursor.execute("SELECT pg_notify('system_alarm_trigger_channel', %s)", (payload,))
             conn.commit()
             
-            cursor.close()
-            self.postgresql_service.return_connection(conn)
-            
             return True
         
         except Exception as e:
             logger.error(f"❌ Failed to send alarm trigger notification: {e}")
             return False
+        
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                self.postgresql_service.return_connection(conn)
     
     def _send_alarm_stop_notification(
         self,
@@ -282,8 +249,14 @@ class AlarmAPI:
         reason: Optional[str]
     ) -> bool:
         """Send PostgreSQL NOTIFY to stop alarm"""
+        conn = None
+        cursor = None
         try:
             conn = self.postgresql_service.get_connection()
+            if not conn:
+                logger.error("❌ Failed to send alarm stop notification: connection pool exhausted")
+                return False
+            
             cursor = conn.cursor()
             
             payload = json.dumps({
@@ -298,14 +271,20 @@ class AlarmAPI:
             cursor.execute("SELECT pg_notify('system_alarm_stop_channel', %s)", (payload,))
             conn.commit()
             
-            cursor.close()
-            self.postgresql_service.return_connection(conn)
-            
             return True
         
         except Exception as e:
             logger.error(f"❌ Failed to send alarm stop notification: {e}")
             return False
+        
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                self.postgresql_service.return_connection(conn)
     
     def _log_alarm_trigger(self, event_id: str, user_id: str, triggered_by: str, reason: Optional[str]):
         """
@@ -316,8 +295,14 @@ class AlarmAPI:
         - Ghi rõ trong notes là "triggered via API"
         - Update escalated_at timestamp
         """
+        conn = None
+        cursor = None
         try:
             conn = self.postgresql_service.get_connection()
+            if not conn:
+                logger.warning("⚠️ Failed to log alarm trigger: connection pool exhausted")
+                return
+            
             cursor = conn.cursor()
             
             # Update lifecycle_state = ALARM_ACTIVATED + notes
@@ -339,12 +324,18 @@ class AlarmAPI:
             
             if rows_updated > 0:
                 logger.info(f"✅ Event {event_id[:8]}... → ALARM_ACTIVATED (manual trigger via API)")
-            
-            cursor.close()
-            self.postgresql_service.return_connection(conn)
         
         except Exception as e:
             logger.warning(f"⚠️ Failed to log alarm trigger: {e}")
+        
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                self.postgresql_service.return_connection(conn)
     
     def _log_alarm_stop(self, event_id: str, stopped_by: str, reason: Optional[str]):
         """
@@ -356,8 +347,14 @@ class AlarmAPI:
         - Ghi rõ trong notes là "stopped via API"
         - Update resolved_at timestamp
         """
+        conn = None
+        cursor = None
         try:
             conn = self.postgresql_service.get_connection()
+            if not conn:
+                logger.warning("⚠️ Failed to log alarm stop: connection pool exhausted")
+                return
+            
             cursor = conn.cursor()
             
             # Update lifecycle_state = RESOLVED + notes
@@ -381,17 +378,29 @@ class AlarmAPI:
             
             if rows_updated > 0:
                 logger.info(f"✅ Event {event_id[:8]}... → RESOLVED (manual stop via API)")
-            
-            cursor.close()
-            self.postgresql_service.return_connection(conn)
         
         except Exception as e:
             logger.warning(f"⚠️ Failed to log alarm stop: {e}")
+        
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                self.postgresql_service.return_connection(conn)
     
     def _get_active_alarms(self) -> list:
         """Get list of active alarms from database"""
+        conn = None
+        cursor = None
         try:
             conn = self.postgresql_service.get_connection()
+            if not conn:
+                logger.error("❌ Failed to get active alarms: connection pool exhausted")
+                return []
+            
             cursor = conn.cursor()
             
             query = """
@@ -425,14 +434,20 @@ class AlarmAPI:
                     'escalated_at': row[6].isoformat() if row[6] else None
                 })
             
-            cursor.close()
-            self.postgresql_service.return_connection(conn)
-            
             return alarms
         
         except Exception as e:
             logger.error(f"❌ Failed to get active alarms: {e}")
             return []
+        
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except:
+                    pass
+            if conn:
+                self.postgresql_service.return_connection(conn)
 
 
 # Singleton

@@ -30,7 +30,7 @@ class EventLifecycleWorker:
         # Configuration (có thể load từ .env)
         self.batch_size = int(os.getenv('EVENT_LIFECYCLE_BATCH_SIZE', '50'))
         self.check_interval = 10  # seconds - chạy mỗi 10s
-        self.alarm_delay_seconds = 30  # seconds - delay trước khi auto-alarm
+        self.alarm_delay_seconds = 60  # seconds - delay trước khi auto-alarm
         self.resolve_delay_seconds = 30  # seconds - delay trước khi auto-resolve
         self.auto_call_delay_seconds = 60 # seconds - delay trước khi auto-call (3 phút)
         
