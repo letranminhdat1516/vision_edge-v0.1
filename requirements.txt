@@ -10,6 +10,9 @@ websockets==11.0.3
 
 # Database drivers
 asyncpg==0.29.0          # PostgreSQL async driver
+psycopg2-binary>=2.9.0   # PostgreSQL sync driver (legacy)
+psycopg[binary]>=3.1.0   # PostgreSQL sync driver (new)
+sqlalchemy>=2.0.0        # SQL toolkit and ORM
 redis[hiredis]==5.0.1    # Redis async client with performance boost
 
 # Supabase integration for realtime events
@@ -29,6 +32,14 @@ orjson==3.9.10           # Fast JSON serialization
 opencv-python>=4.8.0
 numpy>=1.26.0
 Pillow>=10.0.0
+
+# PyTorch and Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+
+# MinIO for object storage
+minio>=7.2.0
 
 # Supabase integration
 supabase>=2.0.0
@@ -61,3 +72,6 @@ sshkeyboard>=2.3.1
 black==23.7.0
 flake8==6.0.0
 mypy==1.5.1
+
+# Audio playback
+pygame>=2.5.0

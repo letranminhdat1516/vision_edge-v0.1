@@ -48,7 +48,14 @@ class SimpleFallDetector:
         self.sitting_pattern_window = 10  # 10 giây window
         self.sitting_pattern_threshold = 3  # 3 lần ngồi-đứng trong 10s = exercise
         
-        # 🎯 STATE MACHINE: Track person posture state
+        # �️ PUSH-UP DETECTION: Phát hiện hít đất (lên xuống lặp lại khi nằm ngang)
+        self.pushup_events = []  # [(timestamp, center_y, aspect_ratio), ...]
+        self.pushup_pattern_window = 8  # 8 giây window để phát hiện push-up
+        self.pushup_pattern_threshold = 2  # 2 lần lên/xuống trong 8s = push-up
+        self.last_vertical_direction = None  # "up" hoặc "down" 
+        self.direction_changes = []  # Lưu thời điểm thay đổi hướng
+        
+        # �🎯 STATE MACHINE: Track person posture state
         self.person_state = "UNKNOWN"  # STANDING, SITTING, LYING, UNKNOWN
         self.lying_start_time = None  # Thời điểm bắt đầu nằm
         self.state_change_time = None  # Thời điểm thay đổi state cuối cùng
@@ -323,6 +330,35 @@ class SimpleFallDetector:
             # Điều kiện bypass: horizontal > 40px + aspect_change > 1.2 + final_aspect > 1.4
             is_moving_downward = center2_y > center1_y
             has_small_downward_movement = vertical_movement < 60 and is_moving_downward
+            
+            # 🏋️ PUSH-UP DETECTION: Check TRƯỚC tất cả fall detection logic
+            # Push-up: body horizontal + repetitive up/down motion
+            # 🔥 NHƯNG: Nếu vertical movement QUÁ LỚN (>150px) → đây là FALL, không phải push-up!
+            current_time_pushup = time.time()
+            is_pushup = self._detect_pushup_pattern(center2_y, aspect_ratio2, current_time_pushup)
+            
+            # 🔥 OVERRIDE: Nếu movement lớn → KHÔNG phải push-up, có thể là FALL
+            # Push-up thật: vertical 20-100px, lặp lại
+            # Fall thật: vertical >150px, một lần duy nhất
+            is_large_movement = vertical_movement > 150 or (vertical_movement > 100 and aspect_change > 1.15)
+            
+            if is_pushup and not is_large_movement:
+                log.info(f"🏋️ Rejected PUSH-UP EXERCISE: repetitive vertical motion with horizontal body")
+                log.info(f"   Aspect ratio: {aspect_ratio2:.2f} (horizontal), vertical movement: {vertical_movement:.1f}px")
+                return {
+                    'fall_detected': False,
+                    'confidence': 0.0,
+                    'angle': 0.0,
+                    'category': 'exercise-pushup',
+                    'method': 'pushup_exercise_filtered'
+                }
+            elif is_pushup and is_large_movement:
+                # 🔥 OVERRIDE: Large movement → có thể là FALL, reset push-up tracking
+                log.info(f"🔥 PUSH-UP OVERRIDE: Large movement detected ({vertical_movement:.1f}px, aspect_change={aspect_change:.2f}x)")
+                log.info(f"   Clearing push-up tracking - this might be a FALL!")
+                self.pushup_events = []
+                self.direction_changes = []
+                self.last_vertical_direction = None
             
             # 🔥 CHECK FOR SIDEWAYS FALL PATTERN - BYPASS posture adjustment filter
             is_sideways_fall_pattern = (
@@ -1001,7 +1037,79 @@ class SimpleFallDetector:
         self.frame_buffer.clear()
         self.previous_frame = None
         self.previous_timestamp = None
+        # Reset push-up detection
+        self.pushup_events = []
+        self.direction_changes = []
+        self.last_vertical_direction = None
         log.debug("Fall detector state reset")
+    
+    def _detect_pushup_pattern(self, center_y, aspect_ratio, current_time):
+        """
+        🏋️ Detect push-up (hít đất) exercise pattern
+        
+        Push-up characteristics:
+        - Aspect ratio > 1.4 (body horizontal/lying)
+        - Vertical movement UP-DOWN-UP-DOWN (repetitive)
+        - Small but consistent vertical oscillations (20-80px)
+        - Movement within short time window (2-4s per rep)
+        
+        Args:
+            center_y: Current center Y position
+            aspect_ratio: Current aspect ratio (width/height)
+            current_time: Current timestamp
+            
+        Returns:
+            bool: True if push-up pattern detected
+        """
+        # Push-up: person is HORIZONTAL (aspect > 1.3)
+        if aspect_ratio < 1.3:
+            # Not horizontal - clear push-up tracking
+            self.pushup_events = []
+            self.direction_changes = []
+            self.last_vertical_direction = None
+            return False
+        
+        # Add current event
+        self.pushup_events.append((current_time, center_y, aspect_ratio))
+        
+        # Clean old events (outside window)
+        self.pushup_events = [(t, y, ar) for t, y, ar in self.pushup_events 
+                              if current_time - t <= self.pushup_pattern_window]
+        
+        # Need at least 3 events to detect pattern
+        if len(self.pushup_events) < 3:
+            return False
+        
+        # Analyze vertical movement direction changes
+        prev_y = self.pushup_events[0][1]
+        for i in range(1, len(self.pushup_events)):
+            curr_y = self.pushup_events[i][1]
+            curr_time = self.pushup_events[i][0]
+            movement = curr_y - prev_y
+            
+            # Only count significant movements (>15px)
+            if abs(movement) > 15:
+                current_direction = "down" if movement > 0 else "up"
+                
+                # Detect direction change
+                if self.last_vertical_direction and current_direction != self.last_vertical_direction:
+                    self.direction_changes.append(curr_time)
+                    
+                self.last_vertical_direction = current_direction
+            
+            prev_y = curr_y
+        
+        # Clean old direction changes
+        self.direction_changes = [t for t in self.direction_changes 
+                                  if current_time - t <= self.pushup_pattern_window]
+        
+        # Push-up detected: >= 2 direction changes in window (1 full rep = up+down)
+        if len(self.direction_changes) >= self.pushup_pattern_threshold:
+            log.info(f"🏋️ PUSH-UP DETECTED: {len(self.direction_changes)} direction changes in {self.pushup_pattern_window}s")
+            log.info(f"   Aspect ratio: {aspect_ratio:.2f} (horizontal body)")
+            return True
+        
+        return False
     
     def get_stats(self):
         """Get detector statistics."""

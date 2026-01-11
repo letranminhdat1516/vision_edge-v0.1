@@ -15,6 +15,9 @@ import logging
 from pathlib import Path
 from service.advanced_healthcare_pipeline import AdvancedHealthcarePipeline
 
+# Check SHOW_VIDEO env - disable GUI for Docker/headless mode
+SHOW_VIDEO = os.getenv('SHOW_VIDEO', 'false').lower() in ('true', '1', 'yes')
+
 # Setup logging to see handler notifications
 logging.basicConfig(
     level=logging.INFO,
@@ -398,36 +401,39 @@ if __name__ == "__main__":
                         confidence = detection_result.get('fall_confidence', 0) if 'fall' in emergency_type else detection_result.get('seizure_confidence', 0)
                         print(f"⚠️ WARNING ALERT in {cam_data['name']}: {emergency_type.upper()} detected (confidence: {confidence:.2f})")
                     
-                    # Display windows for each camera (using unique window names)
-                    normal_window_name = f"Camera {cam_data['name']} - Normal View"
-                    analysis_window_name = f"Camera {cam_data['name']} - Analysis View"
-                    
-                    cv2.imshow(normal_window_name, result["normal_window"])
-                    
-                    # Analysis view with statistics overlay
-                    analysis_view = cam_data['pipeline'].visualize_dual_detection(frame, detection_result, person_detections)
-                    analysis_view = cam_data['pipeline'].draw_statistics_overlay(analysis_view, cam_data['pipeline'].stats)
-                    
-                    cv2.imshow(analysis_window_name, analysis_view)
+                    # Display windows for each camera (only if SHOW_VIDEO enabled)
+                    if SHOW_VIDEO:
+                        normal_window_name = f"Camera {cam_data['name']} - Normal View"
+                        analysis_window_name = f"Camera {cam_data['name']} - Analysis View"
+                        
+                        cv2.imshow(normal_window_name, result["normal_window"])
+                        
+                        # Analysis view with statistics overlay
+                        analysis_view = cam_data['pipeline'].visualize_dual_detection(frame, detection_result, person_detections)
+                        analysis_view = cam_data['pipeline'].draw_statistics_overlay(analysis_view, cam_data['pipeline'].stats)
+                        
+                        cv2.imshow(analysis_window_name, analysis_view)
                     
                 except Exception as e:
                     print(f"❌ Error processing {cam_data['name']}: {e}")
                     continue
             
-            # Check keyboard input (same as single mode)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                print("\n🛑 Shutting down Multi-Camera Healthcare Monitoring System...")
-                break
-            elif key == ord('s'):
-                # Show statistics for all cameras
-                for cam_data in cameras_data:
-                    print(f"\n📊 Statistics for {cam_data['name']}:")
-                    cam_data['pipeline'].print_final_statistics()
+            # Check keyboard input (only if SHOW_VIDEO enabled)
+            if SHOW_VIDEO:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    print("\n🛑 Shutting down Multi-Camera Healthcare Monitoring System...")
+                    break
+                elif key == ord('s'):
+                    # Show statistics for all cameras
+                    for cam_data in cameras_data:
+                        print(f"\n📊 Statistics for {cam_data['name']}:")
+                        cam_data['pipeline'].print_final_statistics()
         
         print("📱 Notifications stopped")
         print("🏥 Multi-camera healthcare monitoring stopped")
-        cv2.destroyAllWindows()
+        if SHOW_VIDEO:
+            cv2.destroyAllWindows()
         exit(0)
         
     else:
@@ -743,268 +749,270 @@ if __name__ == "__main__":
                 import traceback
                 traceback.print_exc()
         
-        # Hiển thị Normal View
-        cv2.imshow("Healthcare Monitor - Normal View", result["normal_window"])
-        
-        # Hiển thị Analysis View với statistics overlay
-        analysis_view = pipeline.visualize_dual_detection(frame, detection_result, person_detections)
-        analysis_view = pipeline.draw_statistics_overlay(analysis_view, pipeline.stats)
-        
-        # Add intelligent action status to analysis view
-        if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
-            status_text = f"🤖 Intelligent Actions: {'BLIP' if caption_pipeline.blip_loaded else 'Rule-based'} + {'AI Translation' if caption_pipeline.translator_loaded else 'Rule-based Translation'}"
-        else:
-            status_text = "📝 Static Actions Only"
-        
-        cv2.putText(analysis_view, status_text, (10, analysis_view.shape[0] - 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-        
-        cv2.imshow("Healthcare Monitor - Analysis View", analysis_view)
-        
-        # Check keyboard input
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            print("\n🛑 Shutting down Healthcare Monitoring System...")
-            emergency_alarm_handler.stop()  # Stop alarm handler
-            break
-        elif key == ord('s'):
-            # Show detailed statistics
-            pipeline.print_final_statistics()
-            if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
-                print(f"\n🤖 INTELLIGENT ACTION STATUS:")
-                print(f"   BLIP Model: {'✅ Loaded' if caption_pipeline.blip_loaded else '❌ Not loaded'}")
-                print(f"   Translation: {'✅ AI Model' if caption_pipeline.translator_loaded else '📝 Rule-based'}")
-        elif key == ord('a'):
-            # Show emergency alarm status
-            print("\n🔊 EMERGENCY ALARM SYSTEM STATUS:")
-            print(f"   Handler Running: {'✅ Yes' if emergency_alarm_handler.is_running else '❌ No'}")
-            print(f"   Trigger Channel: system_alarm_trigger_channel")
-            print(f"   Stop Channel: system_alarm_stop_channel")
-            print(f"   Processed Events: {len(emergency_alarm_handler.processed_events)}")
+        # Hiển thị GUI (only if SHOW_VIDEO enabled - disabled in Docker)
+        if SHOW_VIDEO:
+            cv2.imshow("Healthcare Monitor - Normal View", result["normal_window"])
             
-            # Show audio status
-            audio_status = audio_alert_service.get_status()
-            print(f"   Audio Enabled: {'✅ Yes' if audio_status['enabled'] else '❌ No'}")
-            print(f"   Audio Backend: {audio_status.get('audio_backend', 'unknown')}")
-            print(f"   Audio Devices: {audio_status.get('available_devices', 0)}")
-        elif key == ord('t'):
-            # Test emergency alarm manually
-            print("\n🔊 TESTING EMERGENCY ALARM...")
-            print("   This will play a 5-second test alarm")
-            try:
-                test_user_id = os.getenv('DEFAULT_USER_ID', 'test_user')
-                test_result = asyncio.run(audio_alert_service.play_emergency_alarm(
-                    user_id=test_user_id,
-                    triggered_by='manual_test',
-                    duration=5  # Short 5-second test
-                ))
-                if test_result['success']:
-                    print(f"   ✅ Test alarm played successfully!")
-                    print(f"      Volume: {test_result.get('volume', 1.0) * 100:.0f}%")
-                    print(f"      Duration: {test_result.get('duration', 5)}s")
-                else:
-                    print(f"   ❌ Test alarm failed: {test_result['message']}")
-            except Exception as e:
-                print(f"   ❌ Test alarm error: {e}")
-        elif key == ord('i'):
-            # Show intelligent action info
+            # Hiển thị Analysis View với statistics overlay
+            analysis_view = pipeline.visualize_dual_detection(frame, detection_result, person_detections)
+            analysis_view = pipeline.draw_statistics_overlay(analysis_view, pipeline.stats)
+            
+            # Add intelligent action status to analysis view
             if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
-                print(f"\n🤖 INTELLIGENT ACTION INFO:")
-                print(f"   BLIP Model: {'✅ Active' if caption_pipeline.blip_loaded else '❌ Inactive'}")
-                print(f"   Translation: {'✅ AI Model' if caption_pipeline.translator_loaded else '📝 Rule-based fallback'}")
-                print(f"   Last Alert Image: {last_alert_image_path.name if last_alert_image_path else 'None'}")
-                print(f"   Frame Count: {frame_count}")
+                status_text = f"🤖 Intelligent Actions: {'BLIP' if caption_pipeline.blip_loaded else 'Rule-based'} + {'AI Translation' if caption_pipeline.translator_loaded else 'Rule-based Translation'}"
             else:
-                print(f"\n📝 Static action messages only - Install 'transformers torch pillow' for intelligent actions")
-        elif key == ord('e'):
-            # Create random event and save directly to database
-            print("\n🎲 Creating random test event...")
-            try:
-                import random
-                import uuid
-                import json
-                from datetime import datetime, timezone
+                status_text = "📝 Static Actions Only"
+            
+            cv2.putText(analysis_view, status_text, (10, analysis_view.shape[0] - 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            
+            cv2.imshow("Healthcare Monitor - Analysis View", analysis_view)
+            
+            # Check keyboard input
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print("\n🛑 Shutting down Healthcare Monitoring System...")
+                emergency_alarm_handler.stop()  # Stop alarm handler
+                break
+            elif key == ord('s'):
+                # Show detailed statistics
+                pipeline.print_final_statistics()
+                if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
+                    print(f"\n🤖 INTELLIGENT ACTION STATUS:")
+                    print(f"   BLIP Model: {'✅ Loaded' if caption_pipeline.blip_loaded else '❌ Not loaded'}")
+                    print(f"   Translation: {'✅ AI Model' if caption_pipeline.translator_loaded else '📝 Rule-based'}")
+            elif key == ord('a'):
+                # Show emergency alarm status
+                print("\n🔊 EMERGENCY ALARM SYSTEM STATUS:")
+                print(f"   Handler Running: {'✅ Yes' if emergency_alarm_handler.is_running else '❌ No'}")
+                print(f"   Trigger Channel: system_alarm_trigger_channel")
+                print(f"   Stop Channel: system_alarm_stop_channel")
+                print(f"   Processed Events: {len(emergency_alarm_handler.processed_events)}")
                 
-                # Random event types and data
-                event_types = ['fall', 'abnormal_behavior']
-                event_type = random.choice(event_types)
-                confidence = random.uniform(0.3, 0.95)
-                
-                # Random Vietnamese descriptions for testing
-                test_descriptions = [
-                    "Một người đàn ông trong glasses đang đứng trong phòng",
-                    "Một phụ nữ đang ngồi trên ghế",
-                    "Hai người đang nói chuyện trong phòng khách",
-                    "Một người già đang đi bộ",
-                    "Một em bé đang chơi trên sàn nhà",
-                    "Một người đàn ông trong áo đen đang cầm điện thoại",
-                    "Một phụ nữ đang đọc sách trên giường",
-                    "Một người đàn ông đang xem TV"
-                ]
-                
-                random_description = random.choice(test_descriptions)
-                
-                # Generate intelligent action for console
-                if event_type == 'abnormal_behavior':
-                    if confidence >= 0.50:
-                        intelligent_action = f"KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
-                        status = 'danger'
-                    elif confidence >= 0.30:
-                        intelligent_action = f"CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ"
-                        status = 'warning'
-                    else:
-                        intelligent_action = f"QUAN SÁT: {random_description} - Tiếp tục theo dõi"
-                        status = 'normal'
-                elif event_type == 'fall':
-                    if confidence >= 0.60:
-                        intelligent_action = f"KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
-                        status = 'danger'
-                    elif confidence >= 0.40:
-                        intelligent_action = f"CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi"
-                        status = 'warning'
-                    else:
-                        intelligent_action = f"THEO DÕI: {random_description} - Quan sát"
-                        status = 'normal'
-                
-                print(f"🎯 Test Event Details:")
-                print(f"   Type: {event_type.upper()}")
-                print(f"   Confidence: {confidence:.1%}")
-                print(f"   Description: {random_description}")
-                print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
-                
-                # Save directly to database
+                # Show audio status
+                audio_status = audio_alert_service.get_status()
+                print(f"   Audio Enabled: {'✅ Yes' if audio_status['enabled'] else '❌ No'}")
+                print(f"   Audio Backend: {audio_status.get('audio_backend', 'unknown')}")
+                print(f"   Audio Devices: {audio_status.get('available_devices', 0)}")
+            elif key == ord('t'):
+                # Test emergency alarm manually
+                print("\n🔊 TESTING EMERGENCY ALARM...")
+                print("   This will play a 5-second test alarm")
                 try:
-                    # Get database service from pipeline
-                    db_service = pipeline.event_publisher.postgresql_service
-                    
-                    # Generate new event ID
-                    event_id = str(uuid.uuid4())
-                    
-                    # Get database connection
-                    conn = db_service.get_connection()
-                    if conn:
-                        cursor = conn.cursor()
-                        
-                        # Get required IDs for database constraints
-                        user_id = os.getenv('DEFAULT_USER_ID')
-                        camera_id = db_service._get_user_camera_id(user_id)
-                        if not camera_id:
-                            camera_id = db_service._get_any_camera_id()
-                        
-                        # Create snapshot_id
-                        snapshot_id = db_service._create_minimal_snapshot(camera_id, user_id)
-                        if not snapshot_id:
-                            snapshot_id = str(uuid.uuid4())
-                            print("⚠️ Using dummy snapshot_id")
-                        
-                        # Insert directly into event_detections table
-                        insert_query = """
-                            INSERT INTO event_detections (
-                                event_id, user_id, camera_id, snapshot_id, event_type, 
-                                event_description, confidence_score, status, detected_at, 
-                                created_at, detection_data
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """
-                        
-                        current_time = datetime.now(timezone.utc)
-                        detection_data = {
-                            'test_event': True,
-                            'manual_trigger': True,
-                            'original_description': random_description,
-                            'bounding_boxes': [{
-                                'x': random.randint(100, 400),
-                                'y': random.randint(100, 300),
-                                'width': random.randint(50, 200),
-                                'height': random.randint(50, 200),
-                                'confidence': confidence,
-                                'class': 'person'
-                            }]
-                        }
-                        
-                        # Validate intelligent_action before inserting
-                        if not intelligent_action or intelligent_action.strip() == '' or intelligent_action.lower() == 'null':
-                            print(f"❌ Skipping event insert - empty intelligent_action for {event_type}")
-                            continue
-                        
-                        cursor.execute(insert_query, (
-                            event_id,
-                            user_id,
-                            camera_id,
-                            snapshot_id,
-                            event_type,
-                            intelligent_action,  # Use full intelligent action as description
-                            confidence,
-                            status,
-                            current_time,
-                            current_time,
-                            json.dumps(detection_data)  # Use json.dumps instead
-                        ))
-                        
-                        conn.commit()
-                        db_service.return_connection(conn)
-                        
-                        print(f"✅ Event saved successfully to database!")
-                        print(f"   🆔 Event ID: {event_id}")
-                        print(f"   📊 Status: {status}")
-                        print(f"   💾 Database: PostgreSQL")
-                        print(f"   ⏰ Time: {current_time.strftime('%H:%M:%S')}")
-                        
+                    test_user_id = os.getenv('DEFAULT_USER_ID', 'test_user')
+                    test_result = asyncio.run(audio_alert_service.play_emergency_alarm(
+                        user_id=test_user_id,
+                        triggered_by='manual_test',
+                        duration=5  # Short 5-second test
+                    ))
+                    if test_result['success']:
+                        print(f"   ✅ Test alarm played successfully!")
+                        print(f"      Volume: {test_result.get('volume', 1.0) * 100:.0f}%")
+                        print(f"      Duration: {test_result.get('duration', 5)}s")
                     else:
-                        print(f"❌ Failed to get database connection!")
+                        print(f"   ❌ Test alarm failed: {test_result['message']}")
+                except Exception as e:
+                    print(f"   ❌ Test alarm error: {e}")
+            elif key == ord('i'):
+                # Show intelligent action info
+                if INTELLIGENT_ACTIONS_AVAILABLE and caption_pipeline:
+                    print(f"\n🤖 INTELLIGENT ACTION INFO:")
+                    print(f"   BLIP Model: {'✅ Active' if caption_pipeline.blip_loaded else '❌ Inactive'}")
+                    print(f"   Translation: {'✅ AI Model' if caption_pipeline.translator_loaded else '📝 Rule-based fallback'}")
+                    print(f"   Last Alert Image: {last_alert_image_path.name if last_alert_image_path else 'None'}")
+                    print(f"   Frame Count: {frame_count}")
+                else:
+                    print(f"\n📝 Static action messages only - Install 'transformers torch pillow' for intelligent actions")
+            elif key == ord('e'):
+                # Create random event and save directly to database
+                print("\n🎲 Creating random test event...")
+                try:
+                    import random
+                    import uuid
+                    import json
+                    from datetime import datetime, timezone
+                    
+                    # Random event types and data
+                    event_types = ['fall', 'abnormal_behavior']
+                    event_type = random.choice(event_types)
+                    confidence = random.uniform(0.3, 0.95)
+                    
+                    # Random Vietnamese descriptions for testing
+                    test_descriptions = [
+                        "Một người đàn ông trong glasses đang đứng trong phòng",
+                        "Một phụ nữ đang ngồi trên ghế",
+                        "Hai người đang nói chuyện trong phòng khách",
+                        "Một người già đang đi bộ",
+                        "Một em bé đang chơi trên sàn nhà",
+                        "Một người đàn ông trong áo đen đang cầm điện thoại",
+                        "Một phụ nữ đang đọc sách trên giường",
+                        "Một người đàn ông đang xem TV"
+                    ]
+                    
+                    random_description = random.choice(test_descriptions)
+                    
+                    # Generate intelligent action for console
+                    if event_type == 'abnormal_behavior':
+                        if confidence >= 0.50:
+                            intelligent_action = f"KHẨN CẤP - CO GIẬT: {random_description} - CẦN ĐIỀU TRỊ Y TẾ NGAY!"
+                            status = 'danger'
+                        elif confidence >= 0.30:
+                            intelligent_action = f"CẢNH BÁO BẤT THƯỜNG: {random_description} - Cần theo dõi chặt chẽ"
+                            status = 'warning'
+                        else:
+                            intelligent_action = f"QUAN SÁT: {random_description} - Tiếp tục theo dõi"
+                            status = 'normal'
+                    elif event_type == 'fall':
+                        if confidence >= 0.60:
+                            intelligent_action = f"KHẨN CẤP - TÉ NGÃ: {random_description} - YÊU CẦU HỖ TRỢ NGAY LẬP TỨC!"
+                            status = 'danger'
+                        elif confidence >= 0.40:
+                            intelligent_action = f"CẢNH BÁO TÉ NGÃ: {random_description} - Cần theo dõi"
+                            status = 'warning'
+                        else:
+                            intelligent_action = f"THEO DÕI: {random_description} - Quan sát"
+                            status = 'normal'
+                    
+                    print(f"🎯 Test Event Details:")
+                    print(f"   Type: {event_type.upper()}")
+                    print(f"   Confidence: {confidence:.1%}")
+                    print(f"   Description: {random_description}")
+                    print(f"🤖 INTELLIGENT ACTION: {intelligent_action}")
+                    
+                    # Save directly to database
+                    try:
+                        # Get database service from pipeline
+                        db_service = pipeline.event_publisher.postgresql_service
                         
-                except Exception as db_error:
-                    print(f"❌ Database error: {db_error}")
-                    # Try alternative method
-                    print("🔄 Trying alternative saving method...")
-                    
-                    # Fallback: use the existing event publisher
-                    if event_type == 'fall':
-                        alert_result = pipeline.event_publisher.publish_fall_detection(
-                            confidence=confidence,
-                            bounding_boxes=[{
-                                'x': random.randint(100, 400),
-                                'y': random.randint(100, 300),
-                                'width': random.randint(50, 200),
-                                'height': random.randint(50, 200),
-                                'confidence': confidence,
-                                'class': 'person'
-                            }],
-                            context={
-                                'description': random_description,
+                        # Generate new event ID
+                        event_id = str(uuid.uuid4())
+                        
+                        # Get database connection
+                        conn = db_service.get_connection()
+                        if conn:
+                            cursor = conn.cursor()
+                            
+                            # Get required IDs for database constraints
+                            user_id = os.getenv('DEFAULT_USER_ID')
+                            camera_id = db_service._get_user_camera_id(user_id)
+                            if not camera_id:
+                                camera_id = db_service._get_any_camera_id()
+                            
+                            # Create snapshot_id
+                            snapshot_id = db_service._create_minimal_snapshot(camera_id, user_id)
+                            if not snapshot_id:
+                                snapshot_id = str(uuid.uuid4())
+                                print("⚠️ Using dummy snapshot_id")
+                            
+                            # Insert directly into event_detections table
+                            insert_query = """
+                                INSERT INTO event_detections (
+                                    event_id, user_id, camera_id, snapshot_id, event_type, 
+                                    event_description, confidence_score, status, detected_at, 
+                                    created_at, detection_data
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """
+                            
+                            current_time = datetime.now(timezone.utc)
+                            detection_data = {
+                                'test_event': True,
                                 'manual_trigger': True,
-                                'test_event': True
+                                'original_description': random_description,
+                                'bounding_boxes': [{
+                                    'x': random.randint(100, 400),
+                                    'y': random.randint(100, 300),
+                                    'width': random.randint(50, 200),
+                                    'height': random.randint(50, 200),
+                                    'confidence': confidence,
+                                    'class': 'person'
+                                }]
                             }
-                        )
-                    else:
-                        alert_result = pipeline.event_publisher.publish_seizure_detection(
-                            confidence=confidence,
-                            bounding_boxes=[{
-                                'x': random.randint(100, 400),
-                                'y': random.randint(100, 300),
-                                'width': random.randint(50, 200),
-                                'height': random.randint(50, 200),
-                                'confidence': confidence,
-                                'class': 'person'
-                            }],
-                            context={
-                                'description': random_description,
-                                'manual_trigger': True,
-                                'test_event': True
-                            }
-                        )
+                            
+                            # Validate intelligent_action before inserting
+                            if not intelligent_action or intelligent_action.strip() == '' or intelligent_action.lower() == 'null':
+                                print(f"❌ Skipping event insert - empty intelligent_action for {event_type}")
+                                continue
+                            
+                            cursor.execute(insert_query, (
+                                event_id,
+                                user_id,
+                                camera_id,
+                                snapshot_id,
+                                event_type,
+                                intelligent_action,  # Use full intelligent action as description
+                                confidence,
+                                status,
+                                current_time,
+                                current_time,
+                                json.dumps(detection_data)  # Use json.dumps instead
+                            ))
+                            
+                            conn.commit()
+                            db_service.return_connection(conn)
+                            
+                            print(f"✅ Event saved successfully to database!")
+                            print(f"   🆔 Event ID: {event_id}")
+                            print(f"   📊 Status: {status}")
+                            print(f"   💾 Database: PostgreSQL")
+                            print(f"   ⏰ Time: {current_time.strftime('%H:%M:%S')}")
+                            
+                        else:
+                            print(f"❌ Failed to get database connection!")
+                            
+                    except Exception as db_error:
+                        print(f"❌ Database error: {db_error}")
+                        # Try alternative method
+                        print("🔄 Trying alternative saving method...")
+                        
+                        # Fallback: use the existing event publisher
+                        if event_type == 'fall':
+                            alert_result = pipeline.event_publisher.publish_fall_detection(
+                                confidence=confidence,
+                                bounding_boxes=[{
+                                    'x': random.randint(100, 400),
+                                    'y': random.randint(100, 300),
+                                    'width': random.randint(50, 200),
+                                    'height': random.randint(50, 200),
+                                    'confidence': confidence,
+                                    'class': 'person'
+                                }],
+                                context={
+                                    'description': random_description,
+                                    'manual_trigger': True,
+                                    'test_event': True
+                                }
+                            )
+                        else:
+                            alert_result = pipeline.event_publisher.publish_seizure_detection(
+                                confidence=confidence,
+                                bounding_boxes=[{
+                                    'x': random.randint(100, 400),
+                                    'y': random.randint(100, 300),
+                                    'width': random.randint(50, 200),
+                                    'height': random.randint(50, 200),
+                                    'confidence': confidence,
+                                    'class': 'person'
+                                }],
+                                context={
+                                    'description': random_description,
+                                    'manual_trigger': True,
+                                    'test_event': True
+                                }
+                            )
+                        
+                        if alert_result and isinstance(alert_result, dict):
+                            event_id = alert_result.get('event_id', 'unknown')
+                            print(f"✅ Event saved via fallback method!")
+                            print(f"   🆔 Event ID: {event_id}")
+                            print(f"   📎 Result: {alert_result}")
                     
-                    if alert_result and isinstance(alert_result, dict):
-                        event_id = alert_result.get('event_id', 'unknown')
-                        print(f"✅ Event saved via fallback method!")
-                        print(f"   🆔 Event ID: {event_id}")
-                        print(f"   � Result: {alert_result}")
-                
-            except Exception as e:
-                print(f"❌ Error creating random event: {e}")
-                import traceback
-                print(f"   🔍 Traceback: {traceback.format_exc()}")
+                except Exception as e:
+                    print(f"❌ Error creating random event: {e}")
+                    import traceback
+                    print(f"   🔍 Traceback: {traceback.format_exc()}")
         # ...các xử lý khác như lưu ảnh, cập nhật thống kê...
 
     print("📱 Notifications stopped")
     print("🏥 Healthcare monitoring stopped") 
-    cv2.destroyAllWindows()
+    if SHOW_VIDEO:
+        cv2.destroyAllWindows()

@@ -256,13 +256,13 @@ class VSViGSeizureDetector:
                         is_lying, reason, conf = self._is_person_lying(fd['keypoints'])
                         lying_checks.append(is_lying)
                 
-                # 🔥 FIX 1: TĂNG lying_ratio requirement để chắc chắn người đang NẰM ỔN ĐỊNH
+                # 🔥 ADJUSTED: Giảm lying_ratio để detect seizure khi nằm sấp dễ hơn
                 lying_ratio = sum(lying_checks) / len(lying_checks) if lying_checks else 0
-                mostly_lying = lying_ratio >= 0.95  # 🔥 CỨNG: 85%→95% frames phải là lying
+                mostly_lying = lying_ratio >= 0.70  # 🔧 GIẢM: 95%→70% - cho phép dao động keypoints khi co giật
                 
                 if not mostly_lying:
                     if self.stats['total_frames_processed'] % 30 == 0:  # Log mỗi 1 giây
-                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 85% - skipping seizure")
+                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 70% - skipping seizure")
                     result['temporal_ready'] = False
                     result['skipped_reason'] = 'not_mostly_lying'
                     result['lying_ratio'] = lying_ratio
@@ -550,26 +550,26 @@ class VSViGSeizureDetector:
                 self.logger.debug(f"🏋️ EXERCISE PATTERN detected: amplitude={total_amplitude:.1f}, rhythm_reg={rhythm_regularity:.2f}, mean_vel={mean_velocity:.1f}")
                 return 0.0  # Tập thể dục, không phải co giật
             
-            # 🔥 FIX 2: SMOOTH MOTION FILTER - Tăng threshold
+            # 🔥 ADJUSTED: Giảm jerkiness threshold để detect co giật nhẹ
             vel_diff = np.diff(vel_magnitudes, axis=0)
             jerkiness = np.mean(np.abs(vel_diff))
             
-            # TĂNG threshold: 20 → 30
-            # Tập thể dục có jerkiness ~10-25, co giật > 35
-            is_smooth_motion = jerkiness < 30
+            # 🔧 GIẢM: 30 → 12 để detect co giật khi nằm sấp
+            # Tập thể dục có jerkiness ~10-25, co giật thực sự > 15
+            is_smooth_motion = jerkiness < 12
             if is_smooth_motion:
-                self.logger.debug(f"🚫 SMOOTH MOTION detected: jerkiness={jerkiness:.1f} < 30")
+                self.logger.debug(f"🚫 SMOOTH MOTION detected: jerkiness={jerkiness:.1f} < 12")
                 return 0.0
             
-            # 🔥 FIX 3: TĂNG THRESHOLDS mạnh hơn
+            # 🔥 ADJUSTED: Giảm thresholds để detect seizure dễ hơn khi nằm sấp
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 100.0) if velocity_variance > 80 else 0.0  # TĂNG: 60→80
+            velocity_score = np.tanh(velocity_variance / 100.0) if velocity_variance > 40 else 0.0  # 🔧 GIẢM: 80→40
             
             # Acceleration peaks
             accelerations = np.diff(velocities, axis=0)
             acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 120.0) if acceleration_peaks > 90 else 0.0  # TĂNG: 70→90
+            acceleration_score = np.tanh(acceleration_peaks / 120.0) if acceleration_peaks > 50 else 0.0  # 🔧 GIẢM: 90→50
             
             # Frequency analysis - direction changes
             direction_changes = 0
@@ -578,20 +578,20 @@ class VSViGSeizureDetector:
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 60.0) if direction_changes > 35 else 0.0  # TĂNG: 25→35
+                frequency_score = np.tanh(direction_changes / 60.0) if direction_changes > 15 else 0.0  # 🔧 GIẢM: 35→15
             else:
                 frequency_score = 0.0
             
             # Overall movement intensity
             total_movement = np.mean(vel_magnitudes)
-            intensity_score = np.tanh(total_movement / 30.0) if total_movement > 20 else 0.0  # TĂNG: 15→20
+            intensity_score = np.tanh(total_movement / 30.0) if total_movement > 8 else 0.0  # 🔧 GIẢM: 20→8
             
             # Movement spikes
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 60.0) if movement_spikes > 40 else 0.0  # TĂNG: 30→40
+            spike_score = np.tanh(movement_spikes / 60.0) if movement_spikes > 20 else 0.0  # 🔧 GIẢM: 40→20
             
-            # 🔥 FIX 4: Yêu cầu NHIỀU indicators hơn
-            sensitive_threshold = 0.40  # TĂNG: 0.35→0.40
+            # 🔥 ADJUSTED: Giảm yêu cầu indicators để dễ detect seizure hơn
+            sensitive_threshold = 0.25  # 🔧 GIẢM: 0.40→0.25
             indicators = [
                 velocity_score > sensitive_threshold,
                 acceleration_score > sensitive_threshold, 
@@ -601,7 +601,7 @@ class VSViGSeizureDetector:
             ]
             
             active_indicators = sum(indicators)
-            if active_indicators < 4:  # TĂNG: 3→4 indicators cần thiết
+            if active_indicators < 2:  # 🔧 GIẢM: 4→2 indicators cần thiết
                 return 0.0
             
             # Weighted combination
@@ -619,8 +619,8 @@ class VSViGSeizureDetector:
             if frame_count % 30 == 0:
                 self.logger.info(f"Seizure Scores - Jerk:{jerkiness:.1f}, RhythmReg:{rhythm_regularity:.2f}, Vel:{velocity_score:.3f}, Acc:{acceleration_score:.3f}, Freq:{frequency_score:.3f}, Active:{active_indicators}")
             
-            # 🔥 FIX 5: TĂNG threshold cuối cùng
-            if seizure_confidence < 0.60:  # TĂNG: 0.55→0.60
+            # 🔥 ADJUSTED: Giảm threshold để dễ detect seizure khi nằm sấp
+            if seizure_confidence < 0.35:  # 🔧 GIẢM: 0.60→0.35
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)

@@ -106,6 +106,11 @@ class AdvancedHealthcarePipeline:
         self._GLOBAL_EVENT_COOLDOWN = 45.0  # 45 giây giữa các event (bất kỳ loại nào)
         self._active_event_id = None  # Event ID đang active (chưa resolved)
         self._active_event_type = None  # Loại event đang active
+        
+        # 👥 MULTI-PERSON DETECTION: Auto stop alarm when helper/caregiver arrives
+        self._multi_person_detected = False
+        self._multi_person_start_time = None
+        self._MULTI_PERSON_CONFIRM_SECONDS = 2.0  # Cần detect >= 2 người trong 2 giây liên tục
 
     def _check_and_clear_global_cooldown(self):
         """
@@ -241,9 +246,52 @@ class AdvancedHealthcarePipeline:
             # Reset confirmation frames when no person detected
             self.detection_history['fall_confirmation_frames'] = 0
             self.detection_history['seizure_confirmation_frames'] = 0
+            self._multi_person_detected = False
+            self._multi_person_start_time = None
             if self.stats['total_frames'] % 60 == 0:
                 print(f"⚠️ No person detected - skipping fall/seizure detection")
             return result
+        
+        # 👥 MULTI-PERSON CHECK: >= 2 người = có người đến giúp đỡ
+        current_time = time.time()
+        num_persons = len(person_detections)
+        
+        if num_persons >= 2:
+            # Có >= 2 người trong khung hình
+            if self._multi_person_start_time is None:
+                self._multi_person_start_time = current_time
+                print(f"👥 MULTI-PERSON DETECTED: {num_persons} người - bắt đầu đếm xác nhận...")
+            
+            # Check if multi-person confirmed (>= 2 giây liên tục)
+            multi_person_duration = current_time - self._multi_person_start_time
+            if multi_person_duration >= self._MULTI_PERSON_CONFIRM_SECONDS:
+                if not self._multi_person_detected:
+                    self._multi_person_detected = True
+                    print(f"👥✅ MULTI-PERSON CONFIRMED: {num_persons} người trong {multi_person_duration:.1f}s")
+                    print(f"   → Có người đến giúp đỡ - TỰ ĐỘNG DỪNG ALARM & SKIP DETECTION")
+                    
+                    # 🔔 AUTO STOP ALARM nếu có event đang active
+                    if self._active_event_id:
+                        print(f"🔔 AUTO-STOPPING ALARM for event {self._active_event_id[:8]}... (helper arrived)")
+                        try:
+                            # Trigger stop alarm qua event publisher
+                            self.event_publisher.stop_alarm_by_helper(
+                                event_id=self._active_event_id,
+                                reason=f"Có {num_persons} người trong khung hình - người giúp đỡ đã đến"
+                            )
+                        except Exception as e:
+                            print(f"⚠️ Failed to auto-stop alarm: {e}")
+                
+                # Skip detection khi có người giúp đỡ
+                if self.stats['total_frames'] % 30 == 0:
+                    print(f"👥 SKIP DETECTION: {num_persons} người trong khung hình - có người chăm sóc")
+                return result
+        else:
+            # Chỉ có 1 người - reset multi-person tracking
+            if self._multi_person_detected:
+                print(f"👤 Single person detected - resuming detection")
+            self._multi_person_detected = False
+            self._multi_person_start_time = None
             
         # Calculate motion level for enhanced detection
         motion_level = self.calculate_motion_level_person(person_detections)

@@ -641,6 +641,39 @@ class HealthcareEventPublisher:
         except Exception as e:
             logger.error(f"Error publishing system status: {e}")
 
+    def stop_alarm_by_helper(self, event_id: str, reason: str = "Helper arrived"):
+        """
+        🔔 Auto-stop alarm when helper/caregiver detected in frame
+        
+        Args:
+            event_id: Event ID to stop alarm for
+            reason: Reason for stopping alarm
+        """
+        try:
+            logger.info(f"👥 AUTO-STOP ALARM: {event_id[:8]}... - {reason}")
+            
+            # Call PostgreSQL service to update event lifecycle
+            if hasattr(self.postgresql_service, 'update_event_lifecycle'):
+                self.postgresql_service.update_event_lifecycle(
+                    event_id=event_id,
+                    new_status='resolved',
+                    resolution_reason=f"AUTO_RESOLVED: {reason}"
+                )
+                logger.info(f"✅ Alarm stopped for event {event_id[:8]}... (helper detected)")
+            else:
+                # Fallback: Try direct database update
+                logger.warning(f"⚠️ update_event_lifecycle not available, trying direct update")
+                # This will trigger the database trigger to stop alarm
+                if hasattr(self.postgresql_service, 'resolve_event'):
+                    self.postgresql_service.resolve_event(
+                        event_id=event_id,
+                        resolution_type='auto_resolved',
+                        notes=reason
+                    )
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to stop alarm by helper: {e}")
+
     def close(self):
         """Close the event publisher"""
         try:
