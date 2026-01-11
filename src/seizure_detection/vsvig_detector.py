@@ -39,7 +39,7 @@ class VSViGSeizureDetector:
                  pose_model_path: Optional[str] = None,
                  dynamic_order_path: Optional[str] = None,
                  device: str = 'auto',
-                 confidence_threshold: float = 0.50):  # 🔥 
+                 confidence_threshold: float = 0.25):  # 🔥 SIÊU NHẠY: 0.35→0.25
         """
         Initialize VSViG seizure detector
         
@@ -73,13 +73,16 @@ class VSViGSeizureDetector:
         
         # Configuration
         self.confidence_threshold = confidence_threshold
-        self.temporal_window = 10  # Giảm xuống 10 frames (0.33 giây) để nhanh hơn
+        self.temporal_window = 6  # 🔥 GIẢM MẠNH: 10→6 frames (~0.2 giây) để detect nhanh hơn
         self.frame_buffer = []  # Buffer for temporal analysis
         
         # Seizure detection state management
         self.last_seizure_detection_time = 0  # Timestamp of last seizure
-        self.seizure_cooldown = 45.0  # Tăng lên 45 seconds cooldown - tránh spam
+        self.seizure_cooldown = 20.0  # 🔥 GIẢM: 25→20s để detect nhanh hơn
         self.current_seizure_state = False  # Track if currently in seizure
+        
+        # 🆕 DISABLE STANDING FILTER - cho phép detect seizure khi đứng/ngồi
+        self.allow_standing_seizure = True  # Bật để detect seizure mọi tư thế
         
         # 🆕 EXERCISE COOLDOWN - TẮT ĐỂ DETECT SEIZURE TỐT HƠN
         self.last_exercise_detection_time = 0
@@ -233,15 +236,16 @@ class VSViGSeizureDetector:
             if len(self.frame_buffer) > self.temporal_window:
                 self.frame_buffer.pop(0)
             
-            # Check if person is standing - don't detect seizure if standing
+            # 🔥 DISABLED: Check if person is standing - cho phép detect seizure mọi tư thế
             is_standing = self._check_if_standing(keypoints)
-            if is_standing:
+            if is_standing and not getattr(self, 'allow_standing_seizure', True):
                 # Person is standing/push-up, skip seizure detection but keep buffer updated
                 result['status'] = 'standing'
                 result['seizure_detected'] = False
                 result['alert_level'] = 'normal'
                 self.stats['total_frames_processed'] += 1
                 return result
+            # 🆕 Nếu đứng nhưng allow_standing_seizure=True → tiếp tục detect
             
             # Debug: Show buffer filling progress every 5 frames - only debug level
             if len(self.frame_buffer) % 5 == 0 and len(self.frame_buffer) < self.temporal_window:
@@ -256,13 +260,14 @@ class VSViGSeizureDetector:
                         is_lying, reason, conf = self._is_person_lying(fd['keypoints'])
                         lying_checks.append(is_lying)
                 
-                # 🔥 BALANCED: lying_ratio requirement - cân bằng để detect seizure tốt hơn
+                # 🔥 SUPER EASY MODE: lying_ratio requirement - BỎ HOÀN TOÀN
                 lying_ratio = sum(lying_checks) / len(lying_checks) if lying_checks else 0
-                mostly_lying = lying_ratio >= 0.80  # 🔥 GIẢM: 95%→80% để detect seizure dễ hơn
+                # 🆕 BỎ check lying_ratio - detect seizure MỌI TƯ THẾ
+                mostly_lying = True  # 🔥 ALWAYS TRUE - không cần nằm
                 
-                if not mostly_lying:
+                if not mostly_lying and not getattr(self, 'allow_standing_seizure', True):
                     if self.stats['total_frames_processed'] % 30 == 0:  # Log mỗi 1 giây
-                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 80% - skipping seizure")
+                        self.logger.info(f"⚠️ Temporal ready but lying_ratio={lying_ratio:.1%} < 60% - skipping seizure")
                     result['temporal_ready'] = False
                     result['skipped_reason'] = 'not_mostly_lying'
                     result['lying_ratio'] = lying_ratio
@@ -273,16 +278,12 @@ class VSViGSeizureDetector:
                 first_half_lying = sum(lying_checks[:len(lying_checks)//2]) / (len(lying_checks)//2) if lying_checks else 0
                 second_half_lying = sum(lying_checks[len(lying_checks)//2:]) / (len(lying_checks) - len(lying_checks)//2) if lying_checks else 0
                 
-                # Nếu tỷ lệ lying thay đổi >40% giữa 2 nửa → đang thay đổi tư thế (TĂNG: 30%→40%)
+                # 🔥 DISABLED: Posture transition check - không block nữa
                 lying_change = abs(first_half_lying - second_half_lying)
-                if lying_change > 0.4:
-                    if self.stats['total_frames_processed'] % 30 == 0:
-                        self.logger.info(f"🚫 POSTURE TRANSITION detected: first_half={first_half_lying:.1%}, second_half={second_half_lying:.1%}, change={lying_change:.1%}")
-                        self.logger.info(f"   Person is getting up or lying down - NOT seizure")
-                    result['temporal_ready'] = False
-                    result['skipped_reason'] = 'posture_transition'
-                    result['lying_change'] = lying_change
-                    return result
+                # if lying_change > 0.5:  # DISABLED - không block seizure
+                #     result['temporal_ready'] = False
+                #     return result
+                # 🆕 ALWAYS CONTINUE - không chặn bởi posture transition
                 
                 result['temporal_ready'] = True
                 result['lying_ratio'] = lying_ratio
@@ -325,13 +326,14 @@ class VSViGSeizureDetector:
                     return result
                 
                 # Normal activity detection - reset seizure state
-                if seizure_confidence < 0.65:  # Giảm: 0.8→0.65 - tăng độ nhạy
+                # 🔥 SIÊU NHẠY: chỉ reset state khi confidence THỰC SỰ thấp
+                if seizure_confidence < 0.25:  # 🔥 GIẢM MẠNH: 0.50→0.25 - chỉ reset khi RẤT thấp
                     self.current_seizure_state = False
                     result['status'] = 'normal_activity'
                     result['seizure_detected'] = False
                     result['alert_level'] = 'normal'
                 elif seizure_confidence >= self.confidence_threshold:
-                    # Only detect if not in recent seizure state
+                    # 🔥 DỄ DETECT: trigger seizure ngay khi đạt threshold
                     if not self.current_seizure_state or time_since_last_seizure >= self.seizure_cooldown:
                         result['seizure_detected'] = True
                         result['alert_level'] = 'critical'
@@ -339,9 +341,11 @@ class VSViGSeizureDetector:
                         self.stats['last_seizure_time'] = len(self.frame_buffer)
                         self.last_seizure_detection_time = current_time
                         self.current_seizure_state = True
-                elif seizure_confidence >= self.confidence_threshold * 0.85:
+                        self.logger.info(f"🚨 SEIZURE DETECTED! Confidence: {seizure_confidence:.2f}")
+                elif seizure_confidence >= self.confidence_threshold * 0.70:  # 🔥 GIẢM: 0.85→0.70
                     if not self.current_seizure_state:
                         result['alert_level'] = 'warning'
+                        self.logger.info(f"⚠️ SEIZURE WARNING! Confidence: {seizure_confidence:.2f}")
                 
                 # Update statistics
                 self.stats['average_confidence'] = (
@@ -524,11 +528,11 @@ class VSViGSeizureDetector:
             velocities = np.diff(coords, axis=0)
             vel_magnitudes = np.sqrt(np.sum(velocities**2, axis=2))
             
-            # === FILTER 1: Người ngồi/đứng yên hoàn toàn ===
+            # === FILTER 1: Người ngồi/đứng yên HOÀN TOÀN ===
             if vel_magnitudes.shape[1] >= 7:
                 upper_body_motion = np.mean(vel_magnitudes[:, :7])
-                if upper_body_motion < 3:  # GIẢM: 5→3 - chỉ filter khi HOÀN TOÀN yên
-                    self.logger.debug(f"🪑 NO MOTION: upper_body={upper_body_motion:.1f} < 3")
+                if upper_body_motion < 1:  # 🔥 GIẢM MẠNH: 2→1 - chỉ filter khi CỰC KỲ yên
+                    self.logger.debug(f"🪑 NO MOTION: upper_body={upper_body_motion:.1f} < 1")
                     return 0.0
             
             # === Tính các metrics cơ bản ===
@@ -539,8 +543,9 @@ class VSViGSeizureDetector:
             rhythm_regularity = 1.0 / (1.0 + rhythm_variance / 100.0)
             
             # === FILTER 2: Exercise RÕ RÀNG (amplitude LỚN + rhythm RẤT đều) ===
-            is_obvious_exercise = (mean_velocity > 40 and rhythm_regularity > 0.60) or \
-                                  (total_amplitude > 150 and rhythm_regularity > 0.55)
+            # 🔥 TĂNG ngưỡng để không block seizure quá nhiều
+            is_obvious_exercise = (mean_velocity > 80 and rhythm_regularity > 0.80) or \
+                                  (total_amplitude > 250 and rhythm_regularity > 0.75)
             if is_obvious_exercise:
                 self.logger.debug(f"🏋️ OBVIOUS EXERCISE: amp={total_amplitude:.1f}, rhythm={rhythm_regularity:.2f}")
                 return 0.0
@@ -550,112 +555,127 @@ class VSViGSeizureDetector:
             jerkiness = np.mean(np.abs(vel_diff))
             
             # === FILTER 3: Motion RẤT mượt + RẤT đều ===
-            if jerkiness < 12 and rhythm_regularity > 0.55:
+            # 🔥 TĂNG: chỉ filter khi CỰC KỲ mượt và đều
+            if jerkiness < 5 and rhythm_regularity > 0.75:
                 self.logger.debug(f"🚫 VERY SMOOTH: jerk={jerkiness:.1f}, rhythm={rhythm_regularity:.2f}")
                 return 0.0
             
             # === Active joints (seizure ảnh hưởng nhiều joints) ===
-            joint_threshold = 8  # GIẢM: 10→8
+            joint_threshold = 3  # 🔥 GIẢM MẠNH: 5→3 để detect dễ hơn
             active_joints = sum(1 for j in range(vel_magnitudes.shape[1]) 
                               if np.mean(vel_magnitudes[:, j]) > joint_threshold)
             active_ratio = active_joints / vel_magnitudes.shape[1] if vel_magnitudes.shape[1] > 0 else 0
             
             # FILTER: Chỉ 1-2 joints di chuyển
-            if active_ratio < 0.30:  # GIẢM: 40%→30%
+            if active_ratio < 0.15:  # 🔥 GIẢM MẠNH: 20%→15% - chỉ cần 15% joints active
                 self.logger.debug(f"🚫 TOO FEW JOINTS: {active_joints}/{vel_magnitudes.shape[1]} ({active_ratio:.0%})")
                 return 0.0
             
             # ============ SEIZURE SCORING ============
             
-            # 1. Velocity variance
+            # 1. Velocity variance - 🔥 GIẢM ngưỡng
             velocity_variance = np.var(vel_magnitudes, axis=0).mean()
-            velocity_score = np.tanh(velocity_variance / 60.0) if velocity_variance > 30 else 0.0
+            velocity_score = np.tanh(velocity_variance / 25.0) if velocity_variance > 8 else 0.0  # 40→25, 15→8
             
-            # 2. Acceleration peaks
+            # 2. Acceleration peaks - 🔥 GIẢM ngưỡng
             accelerations = np.diff(velocities, axis=0)
             acc_magnitudes = np.sqrt(np.sum(accelerations**2, axis=2))
             acceleration_peaks = np.max(acc_magnitudes, axis=0).mean()
-            acceleration_score = np.tanh(acceleration_peaks / 80.0) if acceleration_peaks > 40 else 0.0
+            acceleration_score = np.tanh(acceleration_peaks / 30.0) if acceleration_peaks > 12 else 0.0  # 50→30, 20→12
             
-            # 3. Frequency (direction changes)
+            # 3. Frequency (direction changes) - 🔥 GIẢM ngưỡng
             direction_changes = 0
             if vel_magnitudes.shape[0] > 5:
                 for joint in range(min(8, vel_magnitudes.shape[1])):
                     joint_vel = vel_magnitudes[:, joint]
                     changes = np.sum(np.diff(np.sign(joint_vel)) != 0)
                     direction_changes += changes
-                frequency_score = np.tanh(direction_changes / 40.0) if direction_changes > 15 else 0.0
+                frequency_score = np.tanh(direction_changes / 15.0) if direction_changes > 4 else 0.0  # 25→15, 8→4
             else:
                 frequency_score = 0.0
             
-            # 4. Intensity
-            intensity_score = np.tanh(mean_velocity / 20.0) if mean_velocity > 10 else 0.0
+            # 4. Intensity - 🔥 GIẢM ngưỡng
+            intensity_score = np.tanh(mean_velocity / 8.0) if mean_velocity > 3 else 0.0  # 12→8, 5→3
             
-            # 5. Spike score
+            # 5. Spike score - 🔥 GIẢM ngưỡng
             movement_spikes = np.max(vel_magnitudes, axis=0).mean()
-            spike_score = np.tanh(movement_spikes / 40.0) if movement_spikes > 20 else 0.0
+            spike_score = np.tanh(movement_spikes / 15.0) if movement_spikes > 6 else 0.0  # 25→15, 10→6
             
-            # 6. ERRATIC score (variance cao = unpredictable)
+            # 6. ERRATIC score (variance cao = unpredictable) - 🔥 GIẢM ngưỡng
             frame_variance = np.var(velocity_over_time)
-            erratic_score = np.tanh(frame_variance / 150.0) if frame_variance > 60 else 0.0
+            erratic_score = np.tanh(frame_variance / 50.0) if frame_variance > 15 else 0.0  # 80→50, 30→15
             
-            # 7. JERKINESS score
-            jerkiness_score = np.tanh(jerkiness / 30.0) if jerkiness > 10 else 0.0
+            # 7. JERKINESS score - 🔥 GIẢM ngưỡng
+            jerkiness_score = np.tanh(jerkiness / 10.0) if jerkiness > 3 else 0.0  # 18→10, 5→3
             
-            # 8. IRREGULARITY score (rhythm không đều)
-            irregularity_score = (1.0 - rhythm_regularity) if rhythm_regularity < 0.55 else 0.0
+            # 8. IRREGULARITY score (rhythm không đều) - 🔥 TĂNG ngưỡng để dễ đạt
+            irregularity_score = (1.0 - rhythm_regularity) if rhythm_regularity < 0.75 else 0.0  # 0.65→0.75
             
-            # 9. 🆕 TREMOR score (motion nhỏ nhưng liên tục)
+            # 9. 🆕 TREMOR score (motion nhỏ nhưng liên tục) - 🔥 MỞ RỘNG range
             tremor_score = 0.0
-            if mean_velocity > 5 and mean_velocity < 25:  # Motion nhỏ-vừa
-                if direction_changes > 20:  # Nhiều đổi hướng
-                    tremor_score = 0.4
+            if mean_velocity > 2 and mean_velocity < 50:  # Mở rộng: 3-35 → 2-50
+                if direction_changes > 8:  # Giảm: 12→8
+                    tremor_score = 0.6  # Tăng: 0.5→0.6
             
-            # === INDICATOR CHECK (cần 2/5 indicators chính) ===
-            threshold = 0.30
+            # === INDICATOR CHECK (cần 1/5 indicators chính) ===
+            threshold = 0.12  # 🔥 GIẢM MẠNH: 0.20→0.12
             main_indicators = [
                 velocity_score > threshold,
                 acceleration_score > threshold,
                 jerkiness_score > threshold,
-                erratic_score > 0.15,
+                erratic_score > 0.05,  # 🔥 GIẢM MẠNH: 0.10→0.05
                 frequency_score > threshold
             ]
             active_indicators = sum(main_indicators)
             
-            if active_indicators < 2:  # GIẢM: 3→2
+            if active_indicators < 1:  # 🔥 GIẢM MẠNH: 2→1 - chỉ cần 1 indicator
                 return 0.0
             
-            # === FINAL SCORE ===
+            # === FINAL SCORE - TĂNG weights ===
             seizure_confidence = (
-                0.15 * velocity_score +
-                0.15 * acceleration_score +
-                0.12 * frequency_score +
-                0.10 * intensity_score +
+                0.18 * velocity_score +      # TĂNG: 0.15→0.18
+                0.18 * acceleration_score +  # TĂNG: 0.15→0.18
+                0.14 * frequency_score +     # TĂNG: 0.12→0.14
+                0.12 * intensity_score +     # TĂNG: 0.10→0.12
                 0.10 * spike_score +
-                0.12 * erratic_score +
-                0.12 * jerkiness_score +
-                0.07 * irregularity_score +
-                0.07 * tremor_score
+                0.10 * erratic_score +
+                0.10 * jerkiness_score +
+                0.05 * irregularity_score +
+                0.08 * tremor_score          # TĂNG: 0.07→0.08
             )
             
-            # BONUS for strong seizure indicators
-            if active_indicators >= 4:
-                seizure_confidence *= 1.20
-            if jerkiness > 25 and rhythm_regularity < 0.45:
-                seizure_confidence *= 1.15
+            # 🔥 MEGA BONUS for seizure indicators
+            if active_indicators >= 3:
+                seizure_confidence *= 1.40  # TĂNG: 1.30→1.40
+            if active_indicators >= 2:
+                seizure_confidence *= 1.25  # TĂNG: 1.15→1.25
+            if jerkiness > 10 and rhythm_regularity < 0.60:  # GIẢM ngưỡng: 15→10, 0.55→0.60
+                seizure_confidence *= 1.30  # TĂNG: 1.20→1.30
             if tremor_score > 0:
-                seizure_confidence *= 1.10
+                seizure_confidence *= 1.20  # TĂNG: 1.15→1.20
+            if erratic_score > 0.10:  # GIẢM: 0.15→0.10
+                seizure_confidence *= 1.15  # TĂNG: 1.10→1.15
+            
+            # 🆕 SUPER BONUS - nếu có nhiều dấu hiệu cùng lúc
+            if jerkiness_score > 0.2 and erratic_score > 0.1 and frequency_score > 0.1:  # GIẢM: 0.3/0.2/0.2
+                seizure_confidence *= 1.35  # TĂNG: 1.25→1.35
+            
+            # 🆕 ANY MOTION BONUS - bất kỳ motion nào cũng tăng confidence
+            if mean_velocity > 5:
+                seizure_confidence += 0.05
+            if jerkiness > 5:
+                seizure_confidence += 0.05
             
             # Debug
             frame_count = getattr(self, '_debug_frame_count', 0)
             self._debug_frame_count = frame_count + 1
             if frame_count % 30 == 0:
-                self.logger.info(f"Seizure - Jerk:{jerkiness:.1f}({jerkiness_score:.2f}), Erratic:{erratic_score:.2f}, "
+                self.logger.info(f"🧠 Seizure - Jerk:{jerkiness:.1f}({jerkiness_score:.2f}), Erratic:{erratic_score:.2f}, "
                                f"Vel:{velocity_score:.2f}, Freq:{frequency_score:.2f}, Tremor:{tremor_score:.2f}, "
                                f"Indicators:{active_indicators}/5, Joints:{active_ratio:.0%}, Final:{seizure_confidence:.2f}")
             
-            # THRESHOLD cuối (GIẢM: 0.55→0.45)
-            if seizure_confidence < 0.45:
+            # THRESHOLD cuối 🔥 GIẢM MEGA: 0.30→0.18 để dễ detect
+            if seizure_confidence < 0.18:
                 return 0.0
             
             return np.clip(seizure_confidence, 0.0, 1.0)
