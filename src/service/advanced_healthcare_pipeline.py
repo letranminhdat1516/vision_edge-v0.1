@@ -472,11 +472,23 @@ class AdvancedHealthcarePipeline:
                         # Publish event to get event_id (without snapshot yet)
                         event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
                         
+                        # � Check if event was BLOCKED by MUTEX (another event is active)
+                        if isinstance(event_result, dict) and event_result.get('blocked'):
+                            print(f"🔒 Fall event BLOCKED by MUTEX: {event_result.get('reason')}")
+                            print(f"   Active event: {event_result.get('active_event_id', 'unknown')[:8] if event_result.get('active_event_id') else 'N/A'}...")
+                            print(f"   Message: {event_result.get('message', '')}")
+                            return result  # Skip - don't create duplicate event
+                        
                         # 🚫 Check if event was filtered (no fall/stroke keywords)
                         if isinstance(event_result, dict) and event_result.get('filtered'):
                             print(f"🚫 Fall event FILTERED: {event_result.get('reason')}")
                             print(f"   Description: {event_result.get('description', '')[:100]}...")
                             return result  # Skip snapshot capture
+                        
+                        # 🔥 Check if event creation failed (event_id is None)
+                        if event_result is None or (isinstance(event_result, dict) and event_result.get('event_id') is None):
+                            print(f"❌ Fall event creation failed - event_result: {event_result}")
+                            return result  # Skip - don't proceed without valid event
                         
                         event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                         print(f"✅ Fall event created: {event_id}")
@@ -759,11 +771,23 @@ class AdvancedHealthcarePipeline:
                                 # Publish event to get event_id
                                 event_result = self.event_publisher.postgresql_service.publish_event_detection(event_data)
                                 
+                                # � Check if event was BLOCKED by MUTEX (another event is active)
+                                if isinstance(event_result, dict) and event_result.get('blocked'):
+                                    print(f"🔒 Seizure event BLOCKED by MUTEX: {event_result.get('reason')}")
+                                    print(f"   Active event: {event_result.get('active_event_id', 'unknown')[:8] if event_result.get('active_event_id') else 'N/A'}...")
+                                    print(f"   Message: {event_result.get('message', '')}")
+                                    return result  # Skip - don't create duplicate event
+                                
                                 # 🚫 Check if event was filtered (no seizure keywords - should not happen for seizure)
                                 if isinstance(event_result, dict) and event_result.get('filtered'):
                                     print(f"🚫 Seizure event FILTERED: {event_result.get('reason')}")
                                     print(f"   Description: {event_result.get('description', '')[:100]}...")
                                     return result  # Skip snapshot capture
+                                
+                                # 🔥 Check if event creation failed (event_id is None)
+                                if event_result is None or (isinstance(event_result, dict) and event_result.get('event_id') is None):
+                                    print(f"❌ Seizure event creation failed - event_result: {event_result}")
+                                    return result  # Skip - don't proceed without valid event
                                 
                                 event_id = event_result.get('event_id') if isinstance(event_result, dict) else str(event_result)
                                 print(f"✅ Seizure event created: {event_id}")

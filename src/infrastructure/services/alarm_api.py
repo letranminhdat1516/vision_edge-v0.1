@@ -424,20 +424,23 @@ class AlarmAPI:
             
             alarms = []
             for row in rows:
+                # RealDictCursor returns dict, so access by column name
                 alarms.append({
-                    'event_id': row[0],
-                    'user_id': row[1],
-                    'camera_id': row[2],
-                    'event_type': row[3],
-                    'status': row[4],
-                    'created_at': row[5].isoformat() if row[5] else None,
-                    'escalated_at': row[6].isoformat() if row[6] else None
+                    'event_id': row['event_id'],
+                    'user_id': row['user_id'],
+                    'camera_id': row['camera_id'],
+                    'event_type': row['event_type'],
+                    'status': row['status'],
+                    'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                    'escalated_at': row['escalated_at'].isoformat() if row['escalated_at'] else None
                 })
             
             return alarms
         
         except Exception as e:
-            logger.error(f"❌ Failed to get active alarms: {e}")
+            import traceback
+            logger.error(f"❌ Failed to get active alarms: {type(e).__name__}: {e}")
+            logger.error(f"   Traceback: {traceback.format_exc()}")
             return []
         
         finally:
@@ -447,7 +450,10 @@ class AlarmAPI:
                 except:
                     pass
             if conn:
-                self.postgresql_service.return_connection(conn)
+                try:
+                    self.postgresql_service.return_connection(conn)
+                except Exception as return_err:
+                    logger.warning(f"⚠️ Failed to return connection: {return_err}")
 
 
 # Singleton

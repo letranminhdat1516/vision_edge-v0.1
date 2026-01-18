@@ -186,13 +186,54 @@ class PostgreSQLHealthcareService:
     def get_connection(self):
         """Get connection from pool"""
         if self.connection_pool:
-            return self.connection_pool.getconn()
+            try:
+                conn = self.connection_pool.getconn()
+                # Test if connection is still valid
+                if conn and not conn.closed:
+                    try:
+                        with conn.cursor() as test_cursor:
+                            test_cursor.execute("SELECT 1")
+                        return conn
+                    except Exception as test_err:
+                        logger.warning(f"⚠️ Connection test failed, creating new: {test_err}")
+                        # Connection is stale, close and try again
+                        try:
+                            conn.close()
+                        except:
+                            pass
+                        self.connection_pool.putconn(conn, close=True)
+                        # Try to get another connection
+                        return self.connection_pool.getconn()
+                elif conn and conn.closed:
+                    logger.warning("⚠️ Got closed connection from pool, putting back with close=True")
+                    self.connection_pool.putconn(conn, close=True)
+                    return self.connection_pool.getconn()
+                return conn
+            except psycopg2.pool.PoolError as e:
+                logger.error(f"❌ Pool error getting connection: {e}")
+                return None
+            except Exception as e:
+                logger.error(f"❌ Error getting connection: {type(e).__name__}: {e}")
+                return None
         return None
     
     def return_connection(self, conn):
         """Return connection to pool"""
         if self.connection_pool and conn:
-            self.connection_pool.putconn(conn)
+            try:
+                # If connection is bad, close it instead of putting back
+                if conn.closed:
+                    logger.warning("⚠️ Returning closed connection, will be discarded")
+                    self.connection_pool.putconn(conn, close=True)
+                else:
+                    self.connection_pool.putconn(conn)
+            except Exception as e:
+                logger.warning(f"⚠️ Error returning connection: {e}")
+                # Try to close the connection if putconn fails
+                try:
+                    conn.close()
+                except:
+                    pass
     
     def subscribe_to_events(self, table: str, event_type: str, handler):
         """Subscribe to table changes using polling"""
@@ -1060,7 +1101,21 @@ class PostgreSQLHealthcareService:
         # 🔒 EVENT MUTEX: Chặn tạo DANGER/WARNING event mới nếu đã có event đang active
         # Chỉ cho phép NORMAL event để tắt alarm
         event_type = event_data.get('event_type', '')
-        event_status = 'danger' if 'danger' in event_type else ('warning' if 'warning' in event_type else 'normal')
+        
+        # 🔥 FIX BUG: Lấy status từ event_data['status'], KHÔNG phải check 'danger' in event_type
+        # event_type = 'fall' hoặc 'abnormal_behavior', KHÔNG PHẢI 'danger'/'warning'
+        # Status được set rõ ràng trong event_data: 'status': 'danger' hoặc 'warning'
+        event_status = event_data.get('status', 'normal')
+        
+        # Fallback: Nếu status không được set, infer từ event_type
+        if event_status == 'normal' and event_type in ['fall', 'abnormal_behavior', 'seizure']:
+            confidence = event_data.get('confidence', 0.0)
+            if confidence >= 0.6:
+                event_status = 'danger'
+            elif confidence >= 0.4:
+                event_status = 'warning'
+        
+        logger.info(f"🔒 MUTEX CHECK: event_type={event_type}, event_status={event_status}")
         
         if event_status in ['danger', 'warning']:
             # Kiểm tra xem có event DANGER/WARNING nào đang active không
